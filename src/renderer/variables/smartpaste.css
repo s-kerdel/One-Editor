@@ -1,0 +1,15 @@
+/* Smart paste chip (lazy). */
+.se-paste-chip {
+  position: fixed; z-index: 350; display: flex; align-items: center; gap: 4px; padding: 3px;
+  background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-pill);
+  box-shadow: var(--shadow); font: 12px/1 var(--font-ui); color: var(--text-muted);
+  animation: se-pop 0.1s ease-out both;
+}
+.se-paste-chip-label { padding: 0 6px 0 8px; }
+.se-paste-chip-btn, .se-paste-chip-close {
+  height: 22px; padding: 0 9px; border: 1px solid var(--border); border-radius: var(--radius-pill);
+  background: var(--bg); color: var(--text); font: inherit; cursor: pointer; white-space: nowrap;
+}
+.se-paste-chip-btn:hover, .se-paste-chip-close:hover { background: var(--accent-soft); border-color: var(--accent); }
+.se-paste-chip-btn.is-warn { color: var(--warning); background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
+.se-paste-chip-close { width: 22px; padding: 0; color: var(--text-muted); }
