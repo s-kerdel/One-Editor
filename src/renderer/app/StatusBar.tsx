@@ -10,7 +10,7 @@ import { runCommand } from './commands';
 import { holdKeys } from './lazy';
 import { absolutePath, copyText, expandTo, revealInOs, revealInTree, revealLabel } from './fileops';
 import { openWorkspaceMenu } from './Shelf';
-import { isMarkdown } from '@shared/paths';
+import { extname, isMarkdown } from '@shared/paths';
 import type * as WordCount from './wordcount';
 import { gitUi } from '../git/install';
 import { varsStatus } from '../variables/slot';
@@ -55,6 +55,11 @@ function Breadcrumb({ path }: { path: string }) {
 // The language table is only needed to label the active file, so it stays out of the startup
 // chunk: it arrives with the first open file (the editor chunk needs it anyway).
 const languages = signal<typeof import('@shared/languages') | null>(null);
+const fileTypeLabel = (path: string) => {
+  const ext = extname(path).slice(1);
+  return ext === 'pdf' ? 'PDF' : ext ? ext.toUpperCase() : 'Binary';
+};
+
 let languagesRequested = false;
 function languageName(path: string): string | null {
   // The editor knows best (overrides, detection); before it has the doc, go by override / extension.
@@ -151,7 +156,8 @@ export function StatusBar() {
   const md = ui.isMarkdownView(active);
   const words = useWordCount(active, md);
   const cur = ui.cursorInfo.value;
-  const lang = active ? languageName(active) : null;
+  // Viewer tabs (PDF…) have no language mode: name the file type instead of "Plain text".
+  const lang = !active ? null : doc?.binary ? fileTypeLabel(active) : languageName(active);
   const saving = active ? ui.saving.value.has(active) : false;
   const conflict = active ? ui.conflicts.value.has(active) : false;
   const gone = active ? ui.deletedOnDisk.value.has(active) : false;
@@ -244,7 +250,7 @@ export function StatusBar() {
         <button
           class="se-status-item se-status-btn"
           data-testid="language"
-          title="Language mode — click to change"
+          title={doc?.binary ? "File type" : "Language mode — click to change"}
           aria-haspopup="listbox"
           aria-expanded={ui.picker.value?.anchor ? 'true' : undefined}
           disabled={!doc || !!doc.binary}

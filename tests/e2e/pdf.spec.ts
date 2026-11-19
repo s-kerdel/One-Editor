@@ -34,6 +34,8 @@ test('opens from the tree: page count, text layer, later pages render on scroll'
   await openSample(page);
   await expect(page.locator('.se-tab', { hasText: 'sample.pdf' })).toBeVisible();
   await expect(pageInput(page)).toHaveValue('1');
+  // The status bar names the file type, not a language ("Plain text").
+  await expect(page.getByTestId('language')).toHaveText('PDF');
   // Virtualised: the last page has no canvas until it is scrolled to.
   await expect(pageBox(page, 12)).toHaveCount(1);
   expect(await pageBox(page, 12).getAttribute('data-loaded')).toBeNull();
