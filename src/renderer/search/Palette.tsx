@@ -33,13 +33,22 @@ const MAX_FILES = 60;
 /** The previous file query's full match set: typing on (the query only grows) searches just these. */
 let narrow: { q: string; files: readonly string[]; matched: string[] } | null = null;
 
+/** Membership in the current file list, built once per list (`includes` per recent file cost ~5 ms per key at 50k). */
+let known: { files: readonly string[]; set: Set<string> } | null = null;
+const isFile = (files: readonly string[], p: string) => {
+  if (known?.files !== files) known = { files, set: new Set(files) };
+  return known.set.has(p);
+};
+
 function fileItems(q: string): Item[] {
   const files = app.files.value;
-  const recent = getRecentFiles().filter((p) => files.includes(p));
+  const recent = getRecentFiles().filter((p) => isFile(files, p));
   const rank = new Map(recent.map((p, i) => [p, i]));
   if (!q) {
-    const rest = files.filter((p) => !rank.has(p));
-    return [...recent.map((path) => ({ kind: 'file' as const, path, positions: [], recent: true })), ...rest.map((path) => ({ kind: 'file' as const, path, positions: [] }))].slice(0, MAX_FILES);
+    // Only the first MAX_FILES are shown: stop there instead of mapping every file (~14 ms at 50k).
+    const out: Item[] = recent.slice(0, MAX_FILES).map((path) => ({ kind: 'file' as const, path, positions: [], recent: true }));
+    for (let i = 0; i < files.length && out.length < MAX_FILES; i++) if (!rank.has(files[i])) out.push({ kind: 'file' as const, path: files[i], positions: [] });
+    return out;
   }
   // A query that extends the previous one matches a subset of its matches (same order → same ranking).
   const pool = narrow && narrow.files === files && q.startsWith(narrow.q) ? narrow.matched : files;
