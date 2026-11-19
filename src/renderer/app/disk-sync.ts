@@ -6,7 +6,8 @@ import * as ui from './ui';
 import { basename } from '@shared/paths';
 import { filesUnder, findNode, insertNode, removeNode } from './tree-model';
 import { isImagePath } from './icons';
-import { clearConflict, replaceFromDisk, setConflict } from './documents';
+import { clearConflict, setConflict } from './documents';
+import { replaceFromDisk } from './doc-save';
 
 /** Applies backend watcher events. Returns the same object if nothing changed. */
 export function applyFsEvents(tree: TreeNode, events: FsEvent[]): TreeNode {

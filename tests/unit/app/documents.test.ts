@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest';
-import { minimalChange } from '../../../src/renderer/app/documents';
+import { minimalChange } from '../../../src/renderer/app/doc-save';
 
 const apply = (a: string, c: { from: number; to: number; insert: string }) => a.slice(0, c.from) + c.insert + a.slice(c.to);
 

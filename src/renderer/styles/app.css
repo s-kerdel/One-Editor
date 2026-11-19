@@ -112,8 +112,7 @@ html[data-theme='light'] {
   --shadow: 0 18px 50px rgba(20, 24, 32, 0.16), 0 2px 8px rgba(20, 24, 32, 0.08);
   --shadow-sm: 0 4px 14px rgba(20, 24, 32, 0.1);
   color-scheme: light;
-}
-@media (prefers-color-scheme: light) {
+}@media (prefers-color-scheme: light) {
   html[data-theme='system'] {
     --bg: #ffffff; --bg-elev: #ffffff; --bg-sunken: #f6f6f5; --bg-activity: #eeeeec; --bg-hover: #e6e6e2; --bg-active: #e1e5ee;
     --bg-shelf: #f0f0ed; --bg-shelf-raised: #ffffff; --bg-shelf-inset: #e5e5e1; --card-shadow: 0 1px 2px rgba(20, 24, 32, 0.05), 0 8px 24px rgba(20, 24, 32, 0.06);
@@ -198,8 +197,7 @@ body.se-resizing-x, body.se-resizing-x * { cursor: col-resize !important; user-s
    the folder colours in the tree). No gradients or glow. */
 .se-ws-avatar { width: 28px; height: 28px; flex: none; display: grid; place-items: center; border-radius: var(--radius-md); font-weight: 800; font-size: 14px;
   background: var(--bg-shelf-raised); box-shadow: inset 0 0 0 1px var(--border); color: hsl(var(--ws-hue) 62% 64%); }
-html[data-theme='light'] .se-ws-avatar { color: hsl(var(--ws-hue) 55% 42%); }
-@media (prefers-color-scheme: light) { html[data-theme='system'] .se-ws-avatar { color: hsl(var(--ws-hue) 55% 42%); } }
+html[data-theme='light'] .se-ws-avatar { color: hsl(var(--ws-hue) 55% 42%); }@media (prefers-color-scheme: light) { html[data-theme='system'] .se-ws-avatar { color: hsl(var(--ws-hue) 55% 42%); } }
 .se-ws-name { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .se-ws-caret { color: var(--text-faint); }
 
@@ -297,8 +295,7 @@ html[data-theme='light'] .se-ws-avatar { color: hsl(var(--ws-hue) 55% 42%); }
 /* Folder = notebook (shelf style): each top-level folder (and everything in it) gets a stable hue. */
 .se-ficon-folder { color: var(--ft-folder); }
 .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220) 52% 64%); }
-html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220) 48% 46%); }
-@media (prefers-color-scheme: light) { html[data-theme='system'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220) 48% 46%); } }
+html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220) 48% 46%); }@media (prefers-color-scheme: light) { html[data-theme='system'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220) 48% 46%); } }
 .se-ficon-badge { border-radius: var(--radius-xs); font: 700 8px/1 var(--font-ui); letter-spacing: -0.02em; box-shadow: inset 0 0 0 1.4px currentColor; }
 .se-ficon-badge span { transform: translateY(0.2px); }
 
@@ -475,28 +472,6 @@ html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220)
 .se-dialog-msg { margin: 0; color: var(--text-muted); line-height: 1.5; }
 .se-dialog-details { margin: 0; padding: 8px 12px 8px 28px; max-height: 160px; overflow: auto; background: var(--bg-sunken); border-radius: var(--radius); color: var(--text-muted); font: 12px/1.6 var(--font-mono); }
 .se-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
-
-.se-settings { width: min(660px, 94vw); max-height: 78vh; display: flex; flex-direction: column; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-xl); box-shadow: var(--shadow); overflow: hidden; animation: se-pop 0.15s ease-out both; }
-.se-settings-head { display: flex; align-items: center; gap: 10px; padding: 14px 14px 14px 20px; border-bottom: 1px solid var(--border); color: var(--text-muted); }
-.se-settings-head h2 { margin: 0; font-size: 16px; font-weight: 650; color: var(--text); }
-.se-settings-note { flex: 1; font-size: 12px; color: var(--text-faint); }
-.se-settings-body { overflow: auto; padding: 6px 20px 20px; }
-.se-settings-body section { padding: 12px 0 4px; }
-.se-settings-body section + section { border-top: 1px solid var(--border); }
-.se-settings-body h3 { margin: 4px 0 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
-.se-set-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 9px 0; }
-.se-set-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-weight: 500; }
-.se-set-hint { font-size: 12px; font-weight: 400; color: var(--text-faint); }
-.se-set-control { display: flex; flex-direction: column; align-items: flex-end; flex: none; width: 260px; }
-.se-set-control > .se-switch, .se-set-control > .se-seg, .se-set-control > .se-stepper, .se-set-control > .se-select, .se-set-control > .se-input.narrow { align-self: flex-end; }
-.se-switch { position: relative; width: 36px; height: 20px; border-radius: var(--radius-pill); border: 0; padding: 0; background: var(--border-strong); transition: background 0.15s; }
-.se-switch-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: var(--radius-pill); background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); transition: transform 0.15s; }
-.se-switch.on { background: var(--accent); }
-.se-switch.on .se-switch-knob { transform: translateX(16px); }
-.se-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-md); background: var(--bg-hover); }
-.se-seg-btn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-muted); font-size: 12.5px; }
-.se-seg-btn:hover { color: var(--text); }
-.se-seg-btn.active { background: var(--bg-elev); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18); }
 .se-stepper { display: inline-flex; align-items: center; gap: 4px; }
 .se-stepper .se-icon-btn { font-size: 16px; color: var(--text); border: 1px solid var(--border-strong); width: 30px; height: 30px; }
 .se-stepper .se-input.narrow { width: 60px; padding: 0 4px; appearance: textfield; }
@@ -527,25 +502,8 @@ html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220)
 .se-picker-detail { color: var(--text-faint); font-size: 11.5px; }
 .se-picker-sep { height: 1px; margin: 5px 6px; background: var(--border); }
 .se-picker-empty { padding: 14px 12px; color: var(--text-faint); font-size: 12.5px; }
-.se-switcher-backdrop { background: transparent; padding-top: 14vh; pointer-events: none; animation: none; }
-.se-switcher { width: min(460px, 90vw); padding: 6px; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-xl); box-shadow: var(--shadow); }
-.se-switcher-item { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 10px; border-radius: var(--radius); color: var(--text-muted); }
-.se-switcher-item.selected { background: var(--accent-soft); color: var(--text); }
-.se-switcher-name { font-weight: 500; }
-.se-switcher-dir { color: var(--text-faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.se-drop-overlay { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; background: var(--overlay-bg); backdrop-filter: blur(2px); }
-.se-drop-card { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 32px 48px; border-radius: var(--radius-xl); border: 2px dashed var(--accent); background: var(--bg-elev); color: var(--text); font-size: 15px; font-weight: 500; box-shadow: var(--shadow); pointer-events: none; }
-.se-drop-card .se-icon { color: var(--accent); }
 
 .se-toasts { position: fixed; right: 16px; bottom: 36px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 200; pointer-events: none; }
-.se-toast { pointer-events: auto; display: flex; align-items: center; gap: 10px; min-width: 240px; max-width: 460px; padding: 9px 8px 9px 12px; border-radius: var(--radius-lg); background: var(--bg-elev); border: 1px solid var(--border-strong); box-shadow: var(--shadow); animation: se-toast-in 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2) both; }
-.se-toast-icon { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; flex: none; color: var(--accent); background: var(--accent-soft); }
-.se-toast.error .se-toast-icon { color: var(--danger); background: var(--danger-soft); }
-.se-toast.success .se-toast-icon { color: var(--success); background: color-mix(in srgb, var(--success) 15%, transparent); }
-.se-toast-msg { flex: 1; min-width: 0; line-height: 1.4; }
-.se-toast-close { opacity: 0.6; }
-.se-toast:hover .se-toast-close { opacity: 1; }
 
 /* ---------- integrated window frame (desktop; Settings → Appearance → Window frame) ----------
    No OS title bar: the tab strip is the title bar. Its empty space drags the window (the OS handles
@@ -599,8 +557,7 @@ html.se-dragging .frame-integrated .se-topline { -webkit-app-region: no-drag; ap
 @keyframes se-fade { from { opacity: 0; } }
 @keyframes se-pop { from { opacity: 0; transform: translateY(-4px) scale(0.985); } }
 @keyframes se-fade-up { from { opacity: 0; transform: translateY(6px); } }
-@keyframes se-toast-in { from { opacity: 0; transform: translateY(8px) scale(0.97); } }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; } }
+@keyframes se-toast-in { from { opacity: 0; transform: translateY(8px) scale(0.97); } }@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; } }
 
 /* Preview (baseline — preview agent extends in preview/preview.css) */
 .se-preview { padding: 24px 40px 40vh; max-width: var(--content-width); margin: 0 auto; font: var(--editor-font-size) / var(--editor-line-height) var(--font-text); }

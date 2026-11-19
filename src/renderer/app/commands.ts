@@ -46,7 +46,23 @@ export function onCommandsChanged(cb: () => void) {
   return () => listeners.delete(cb);
 }
 
+// Commands without keys are reachable only from the palette, menus and runCommand(), so their code
+// may register from a lazy chunk: addCommandSource(() => import('./x').then((m) => m.register())).
+// The palette and runCommand() load every source first; afterBootIdle loads them anyway.
+const sources: Array<() => Promise<unknown>> = [];
+let sourcesLoaded: Promise<void> | null = null;
+
+export function addCommandSource(load: () => Promise<unknown>): void {
+  sources.push(load);
+  sourcesLoaded = null;
+}
+
+export function loadCommandSources(): Promise<void> {
+  return (sourcesLoaded ??= Promise.all(sources.map((load) => load().catch((err) => console.warn('[commands] failed to load', err)))).then(() => {}));
+}
+
 export async function runCommand(id: string): Promise<boolean> {
+  if (!registry.has(id) && sources.length) await loadCommandSources();
   const c = registry.get(id);
   if (!c || (c.when && !c.when())) return false;
   await c.run();

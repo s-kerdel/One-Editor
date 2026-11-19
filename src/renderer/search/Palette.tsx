@@ -5,7 +5,7 @@
 //   :       go to line in the current file
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { app } from '../app/app';
-import { listCommands, prettyKey, type Command } from '../app/commands';
+import { listCommands, loadCommandSources, prettyKey, type Command } from '../app/commands';
 import { basename, dirname } from '@shared/paths';
 import { fuzzyFilter, fuzzyMatch } from '../../search/fuzzy';
 import { outline, type OutlineItem } from '../../search/symbols';
@@ -169,6 +169,9 @@ export function Palette({ initial = '' }: { initial?: string }) {
   const fileHash = mode === 'files' ? /^(.+?)#(.*)$/.exec(q) : null;
   const fileLine = mode === 'files' && !fileHash ? /^(.+?):(\d+)(?::(\d+))?$/.exec(q.trim()) : null;
 
+  // Commands without keys register lazily (addCommandSource): list them once they are in.
+  const [cmdsLoaded, setCmdsLoaded] = useState(0);
+  useEffect(() => void loadCommandSources().then(() => setCmdsLoaded((n) => n + 1)), []);
   const syncSections: Section[] = useMemo(() => {
     switch (mode) {
       case 'commands':
@@ -194,7 +197,7 @@ export function Palette({ initial = '' }: { initial?: string }) {
         return [{ label: !q.trim() && items.some((i) => (i as { recent?: boolean }).recent) ? 'Recently opened' : q.trim() ? 'Files' : undefined, items }];
       }
     }
-  }, [q, mode]);
+  }, [q, mode, cmdsLoaded]);
 
   // async: workspace headings, `file#heading`, and content hits from the full-text index
   const asyncKey = `${mode}|${q}`;

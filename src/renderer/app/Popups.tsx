@@ -7,6 +7,7 @@ import { app } from './app';
 import * as ui from './ui';
 import type { TreeNode } from '@shared/api';
 import { addIcons, FileIcon, Icon } from './icons';
+import './popups.css'; // tab switcher, drop overlay, toasts: not needed before this chunk
 import { prettyKey } from './commands';
 import { closeTabs, openWorkspace, persistSession, refreshTree } from './documents';
 import { runCommand } from './commands';
@@ -19,7 +20,8 @@ import { absolutePath, copyText, deletePaths, duplicate, errText, exists, expand
 import { RpcError } from '../platform';
 import { extname, join, stem } from '@shared/paths';
 import { filesUnder, findNode, insertNode, moveNode, removeNode } from './tree-model';
-import { discardDoc, renameDocs } from './documents';
+import { discardDoc } from './documents';
+import { renameDocs } from './doc-save';
 import { batch } from '@preact/signals';
 import { collapseAll } from './FileTree';
 import { closeAll } from './Tabs';
