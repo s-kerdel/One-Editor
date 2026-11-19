@@ -193,7 +193,8 @@ export class BackendService {
     const resolved = path.resolve(absPath);
     const st = await fsp.stat(resolved).catch(() => null);
     if (!st?.isDirectory()) throw new BackendFailure('ENOENT', `Not a folder: ${absPath}`);
-    if (this.workspace && samePath(this.workspace.root, resolved)) return this.workspace.info();
+    // A WSL root on Windows tells "Notes" from "notes": only fold where the open folder does.
+    if (this.workspace && (this.workspace.foldsCase ? samePath(this.workspace.root, resolved) : this.workspace.root === resolved)) return this.workspace.info();
     this.unwatch?.();
     this.workspace?.dispose();
     this.disposeGit();
@@ -208,7 +209,9 @@ export class BackendService {
     const recent = (await this.recentWorkspaces()).filter((p) => !samePath(p, resolved));
     this.recent = [resolved, ...recent].slice(0, 20);
     void writeJson(this.recentFile, this.recent).catch(() => {});
-    return this.workspace.info();
+    const ws = this.workspace;
+    await ws.detectCase(); // the renderer's create / rename checks need it (lookups only, no writes)
+    return ws.info();
   }
 
   async pickFolder() {
@@ -437,7 +440,8 @@ export class BackendService {
     if (this.monitor?.root === ws.root) return this.monitor;
     this.disposeGit();
     const routing = this.settings?.['git.wslRouting'] === 'off' ? 'off' : (this.gitOptions.wsl?.mode ?? 'auto');
-    const opts: GitServiceOptions = { ...this.gitOptions, wsl: { ...this.gitOptions.wsl, mode: routing } };
+    // foldCase per folder: on a WSL root "note.md" (new) must not show the change bars of "Note.md".
+    const opts: GitServiceOptions = { foldCase: ws.foldsCase, ...this.gitOptions, wsl: { ...this.gitOptions.wsl, mode: routing } };
     this.monitor = new GitMonitor(ws.root, (root) => new GitService(root, opts), { refreshIndex: this.settings?.['git.refreshIndex'] !== false });
     this.gitUnsub = this.monitor.onEvent((e) => this.gitListeners.forEach((l) => l(e)));
     return this.monitor;

@@ -51,6 +51,8 @@ export async function deletePathsNow(paths: string[]) {
           continue;
         }
       } else {
+        // Not there (any more): a stale row must not linger, but an open tab keeps its unsaved text.
+        if (err instanceof RpcError && err.code === 'ENOENT') setTree((t) => removeNode(t, p));
         app.toast(`Delete failed: ${errText(err)}`, 'error');
         continue;
       }
@@ -82,6 +84,20 @@ export async function duplicateNow(path: string) {
 
 // ---- create / rename / move (committed from the tree's inline input or a drag) ----
 
+/** "Note.md" and "note.md" are one file in this folder: the backend probes each folder (a WSL root on
+ *  Windows tells them apart, NTFS does not), never the OS. */
+export const foldsCase = () => app.workspace.value?.caseSensitive === false;
+
+/** On a case-insensitive folder: the tree's sibling that `path` would silently hit ("Note.md" for "note.md"). */
+export function caseTwin(path: string): string | null {
+  if (!foldsCase()) return null;
+  const name = basename(path);
+  const l = name.toLowerCase();
+  return findNode(app.tree.value, dirname(path))?.children?.find((c) => c.name !== name && c.name.toLowerCase() === l)?.path ?? null;
+}
+
+const caseTwinText = (twin: string) => `“${basename(twin)}” already exists — names that differ only in case are the same file in this folder`;
+
 export async function commitCreateNow(parent: string, kind: 'file' | 'dir', rawName: string): Promise<string | null> {
   let name = rawName.trim();
   const invalid = validateName(name);
@@ -89,6 +105,8 @@ export async function commitCreateNow(parent: string, kind: 'file' | 'dir', rawN
   if (kind === 'file' && !extname(name)) name += '.md'; // notes app: bare names are notes
   const path = join(parent, name);
   if (exists(path)) return 'A file or folder with that name already exists';
+  const twin = caseTwin(path);
+  if (twin) return caseTwinText(twin);
   try {
     if (kind === 'dir') await app.backend.createDir(path);
     else await app.backend.createFile(path, '');
@@ -120,8 +138,11 @@ export async function renameToNow(from: string, rawName: string): Promise<string
 async function movePath(from: string, to: string): Promise<string | null> {
   if (from === to) return null;
   if (to.startsWith(from + '/')) return 'Cannot move a folder into itself';
-  const caseOnly = from.toLowerCase() === to.toLowerCase();
+  // Case-only renames only exist where the folder folds case; elsewhere "A.md" is another file.
+  const caseOnly = foldsCase() && from.toLowerCase() === to.toLowerCase();
   if (!caseOnly && exists(to)) return 'A file or folder with that name already exists';
+  const twin = caseTwin(to);
+  if (twin && twin !== from) return caseTwinText(twin);
   const node = findNode(app.tree.value, from);
   const files = node?.kind === 'dir' ? filesUnder(node) : [from];
   try {

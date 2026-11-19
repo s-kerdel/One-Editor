@@ -460,6 +460,8 @@ export interface GitServiceOptions {
   /** Environment for git (default process.env; tests isolate the user's global config). */
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  /** The folder's file system folds case (probed per folder; default: the platform's usual answer). */
+  foldCase?: boolean;
   /** Debounce for `.git` change notifications. */
   watchDebounceMs?: number;
   /** Timeout for background lists (branches / history / commit files). */
@@ -779,7 +781,7 @@ export class GitService {
     let repoPath = repo.prefix + clean;
     // One spawn: line 1 resolves the commit, line 2 reads the blob.
     let r = await this.catFile(repo, rev, repoPath);
-    if (r.blob === 'missing' && r.oid && (this.platform === 'win32' || this.platform === 'darwin')) {
+    if (r.blob === 'missing' && r.oid && (this.opts.foldCase ?? (this.platform === 'win32' || this.platform === 'darwin'))) {
       // Case-insensitive file system: the tree may spell the name differently from the repository.
       const real = await this.indexCase(repo, repoPath);
       if (real && real !== repoPath) {

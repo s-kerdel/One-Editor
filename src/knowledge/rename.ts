@@ -74,10 +74,11 @@ export function createRenameRewriter(renames: ReadonlyMap<string, string>, allFi
     const decoded = angle ? rawPath : decodeTarget(rawPath);
     const absolute = decoded.startsWith('/');
     const p = absolute ? normalize(decoded) : normalize(`${dirname(oldFile)}/${decoded}`);
-    let oldTarget = beforeLower.get(p.toLowerCase());
+    // Exact spelling first: "Note.md" and "note.md" can both exist (Linux, WSL roots).
+    let oldTarget = before.has(p) ? p : beforeLower.get(p.toLowerCase());
     let extless = false;
     if (!oldTarget) {
-      oldTarget = beforeLower.get(`${p.toLowerCase()}.md`);
+      oldTarget = before.has(`${p}.md`) ? `${p}.md` : beforeLower.get(`${p.toLowerCase()}.md`);
       extless = !!oldTarget;
     }
     if (!oldTarget) return null;

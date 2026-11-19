@@ -79,6 +79,7 @@ there only if it must beat the shell.
 ## Rules
 1. **Paths**: everything crossing the backend boundary is workspace-relative POSIX (`notes/a.md`). Never build paths with `\`.
    Windows matters: CRLF files (content is LF-normalised, EOL restored on save), case-insensitive FS, drive letters, `\\` in absolute paths.
+   **Case sensitivity is per folder, never per OS**: read `WorkspaceInfo.caseSensitive` (renderer) / `Workspace.foldsCase` (backend). A `\\wsl.localhost` root on Windows is case-sensitive; never fold case because of `process.platform` or `backend.os`.
 2. **Launch speed is a feature.** Nothing heavy at startup: Shiki, Prettier, KaTeX, Mermaid, language grammars → `import()` lazily on first use.
    Workers for CPU work (search index, formatting). Don't block first paint.
 3. **Styling**: use CSS variables from `src/renderer/styles/app.css` (`--bg`, `--text`, `--accent`, `--code-bg`, …) so dark/light themes work.

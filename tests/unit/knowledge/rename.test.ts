@@ -5,6 +5,14 @@ import { createLinkResolver } from '@shared/wikilinks';
 const files = ['README.md', 'notes/Old.md', 'notes/Other.md', 'notes/sub/Deep.md', 'projects/Plan.md', 'projects/x/Plan.md', 'img/pic one.png', 'docs/guide.md'];
 const rw = (text: string, from: string, to: string, file = 'README.md', all = files) => rewriteLinksForRename(text, from, to, file, all);
 
+describe('names that differ only in case', () => {
+  it('renaming note.md leaves links to its twin Note.md alone (markdown links resolve exactly)', () => {
+    const all = ['cases/Note.md', 'cases/note.md', 'README.md'];
+    expect(rw('[a](cases/Note.md) [b](cases/note.md)', 'cases/note.md', 'cases/lower.md', 'README.md', all)).toBe('[a](cases/Note.md) [b](cases/lower.md)');
+    expect(rw('[[cases/Note]] [[cases/note]]', 'cases/note.md', 'cases/lower.md', 'README.md', all)).toBe('[[cases/Note]] [[cases/lower]]');
+  });
+});
+
 describe('wikilinks', () => {
   it('rewrites plain, aliased, heading, block and embed links', () => {
     const text = '[[Old]] [[Old|shown]] [[Old#Head]] [[Old#^blk|x]] ![[Old]] ![[Old#Head]]';

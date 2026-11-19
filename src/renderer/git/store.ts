@@ -15,8 +15,8 @@ export interface GitBackend {
 
 export interface GitStoreOptions {
   debounceMs?: number;
-  /** Case-insensitive path lookups (Windows / macOS). */
-  foldCase?: boolean;
+  /** Case-insensitive path lookups: the folder's file system folds case (read per status: folders differ). */
+  foldCase?: boolean | (() => boolean);
   /** Once per store: git is missing although the folder looks like a repository. */
   onHint?: (r: GitUnavailable) => void;
 }
@@ -34,7 +34,8 @@ export class GitStore {
   readonly changesOnly = signal(false);
   readonly marks = computed<GitMarks>(() => {
     const s = this.status.value;
-    return s?.ok ? buildMarks(s.entries, { foldCase: this.opts.foldCase }) : EMPTY_MARKS;
+    const fold = this.opts.foldCase;
+    return s?.ok ? buildMarks(s.entries, { foldCase: typeof fold === 'function' ? fold() : fold }) : EMPTY_MARKS;
   });
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running: Promise<void> | null = null;

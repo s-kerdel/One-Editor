@@ -70,9 +70,52 @@ export interface WorkspaceOptions {
   cacheDir?: string;
   /** Reader threads for indexing (0 = read in-thread). */
   readThreads?: number;
+  /** Skip the probe (tests). true = names differ by case. */
+  caseSensitive?: boolean;
 }
 
-const foldCaseFs = isWin || process.platform === 'darwin';
+/** Only a guess, used when a folder gives nothing to probe with (no letters in any name). */
+const foldCaseByDefault = isWin || process.platform === 'darwin';
+const swapAsciiCase = (s: string) => s.replace(/[a-z]/gi, (c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()));
+const hasCase = (s: string) => s.toLowerCase() !== s.toUpperCase();
+const sameEntry = (a: fs.BigIntStats, b: fs.BigIntStats) => a.dev === b.dev && a.ino === b.ino && (a.ino !== 0n || (a.birthtimeNs === b.birthtimeNs && a.size === b.size));
+const caseClashText = (name: string) => `“${name}” already exists (the name differs only in case, which this folder treats as the same file)`;
+
+/**
+ * Does `root` tell names apart by case? Decided per folder, never per OS: Windows opening
+ * \\wsl.localhost\… talks to a case-sensitive ext4, Linux may mount a case-insensitive share. Never
+ * writes: looks a child (or the root itself) up with its letters' case swapped. null = no letters to try.
+ */
+export async function probeCaseSensitive(root: string): Promise<boolean | null> {
+  const seen: string[] = [];
+  try {
+    const d = await fsp.opendir(root, { bufferSize: 64 });
+    try {
+      for (let e = await d.read(); e && seen.length < 64; e = await d.read()) seen.push(e.name);
+    } finally {
+      await d.close().catch(() => {});
+    }
+  } catch {}
+  const lower = new Set<string>();
+  for (const n of seen) {
+    if (lower.has(n.toLowerCase())) return true; // two names differing only in case: settled
+    lower.add(n.toLowerCase());
+  }
+  const listed = new Set(seen);
+  // A child says how lookups *inside* the root behave (NTFS can flag single folders case-sensitive).
+  const child = seen.find((n) => swapAsciiCase(n) !== n && !listed.has(swapAsciiCase(n)));
+  if (child) {
+    const st = await fsp.lstat(path.join(root, swapAsciiCase(child))).catch((err) => (err?.code === 'ENOENT' || err?.code === 'ENOTDIR' ? false : null));
+    if (st !== null) return st === false; // the swapped name is not listed, so finding it means folding
+  }
+  const base = path.basename(root);
+  if (base && swapAsciiCase(base) !== base) {
+    const [a, b] = await Promise.all([fsp.lstat(root, { bigint: true }).catch(() => null), fsp.lstat(path.join(path.dirname(root), swapAsciiCase(base)), { bigint: true }).catch((err) => (err?.code === 'ENOENT' ? false : null))]);
+    if (a && b === false) return true;
+    if (a && b) return !sameEntry(a, b);
+  }
+  return null;
+}
 
 export class Workspace {
   readonly root: string;
@@ -140,6 +183,10 @@ export class Workspace {
   /** Watcher hints dropped because they were inside ignored folders (tests, diagnostics). */
   droppedHints = 0;
 
+  /** null until probed (see detectCase). */
+  private caseSensitive: boolean | null = null;
+  private caseProbe: Promise<boolean> | null = null;
+
   constructor(root: string, opts: WorkspaceOptions = {}) {
     this.root = path.resolve(root);
     this.matcher = createExcludeMatcher(opts.exclude ?? ['node_modules', '.git'], !!opts.showHidden);
@@ -149,10 +196,59 @@ export class Workspace {
     this.indexOpts = { ...DEFAULT_INDEX, ...definedOnly(opts.index ?? {}) };
     this.cacheFile = opts.cacheDir ? cacheFileFor(opts.cacheDir, this.root) : null;
     this.readThreads = opts.readThreads ?? defaultReadThreads(this.root);
+    if (opts.caseSensitive !== undefined) {
+      this.caseSensitive = opts.caseSensitive;
+      this.caseProbe = Promise.resolve(opts.caseSensitive);
+    }
   }
 
   info(): WorkspaceInfo {
-    return { root: this.root, name: path.basename(this.root) || this.root };
+    return { root: this.root, name: path.basename(this.root) || this.root, caseSensitive: !this.foldsCase };
+  }
+
+  /** Probes (once) whether this folder tells names apart by case. */
+  detectCase(): Promise<boolean> {
+    return (this.caseProbe ??= probeCaseSensitive(this.root).then(
+      (r) => (this.caseSensitive = r ?? !foldCaseByDefault),
+      () => (this.caseSensitive = !foldCaseByDefault),
+    ));
+  }
+
+  /** "Note.md" and "note.md" are the same entry here (before the probe: the platform's usual answer). */
+  get foldsCase(): boolean {
+    return !(this.caseSensitive ?? !foldCaseByDefault);
+  }
+
+  /**
+   * Case-insensitive folders only: the existing entry `key` would silently reach under another spelling
+   * ("notes/Todo.md" → "Notes/todo.md"), or null if every existing segment is spelled exactly so.
+   * Names the index knows count as exact, except the last one when `listings` is given (stale spellings:
+   * watcher hints, deletes); a watcher batch shares those folder reads.
+   */
+  private async caseClash(key: string, listings?: Map<string, Promise<Set<string> | null>>): Promise<string | null> {
+    await this.detectCase();
+    if (!this.foldsCase || !key) return null;
+    const segs = key.split('/');
+    let dir = '';
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i];
+      const rel = dir ? `${dir}/${seg}` : seg;
+      if (hasCase(seg) && ((listings && i === segs.length - 1) || !this.index.has(rel))) {
+        let names = listings?.get(dir);
+        if (!names) {
+          names = fsp.readdir(this.abs(dir)).then((l) => new Set(l), () => null);
+          listings?.set(dir, names);
+        }
+        const list = await names;
+        if (!list?.has(seg)) {
+          const l = seg.toLowerCase();
+          const other = list && [...list].find((n) => n.toLowerCase() === l);
+          return other ? (dir ? `${dir}/${other}` : other) : null; // absent: the rest is new
+        }
+      }
+      dir = rel;
+    }
+    return null;
   }
 
   setOptions(opts: { exclude?: string[]; showHidden?: boolean }) {
@@ -192,6 +288,8 @@ export class Workspace {
   async listTree(sub = ''): Promise<TreeNode> {
     const base = normalize(sub);
     const absBase = this.abs(base);
+    await this.detectCase();
+    const fold = this.foldsCase;
     if (base) {
       const st = await fsp.stat(absBase).catch(() => null);
       if (!st?.isDirectory()) throw new BackendFailure('ENOENT', `Not a folder: ${sub}`);
@@ -259,7 +357,7 @@ export class Workspace {
                 // Symlink loops: never follow a link whose target contains the current dir or was already followed.
                 const real = await fsp.realpath(abs).catch(() => null);
                 const here = await fsp.realpath(absDir).catch(() => absDir);
-                const cmp = (p: string) => (isWin || process.platform === 'darwin' ? p.toLowerCase() : p);
+                const cmp = (p: string) => (fold ? p.toLowerCase() : p);
                 if (!real || followed.includes(cmp(real)) || cmp(here + path.sep).startsWith(cmp(real + path.sep)) || cmp(here) === cmp(real)) return;
                 if (depth < MAX_DEPTH) node.children = await walk(abs, rel, depth + 1, [...followed, cmp(real)]);
               }
@@ -307,6 +405,9 @@ export class Workspace {
     await fsDelayAsync(); // tests: latency injection (slow bridge / antivirus)
     try {
       const st = await fsp.stat(abs);
+      // Never open "Note.md" as a twin "note.md" document (a later save would rename it on disk).
+      const clash = await this.caseClash(key);
+      if (clash) throw new BackendFailure('ENOENT', `File not found: ${rel} (“${clash}” differs only in case)`);
       if (st.isDirectory()) throw new BackendFailure('EISDIR', `Is a folder: ${rel}`);
       // FIFOs / sockets / devices: reading would block a libuv thread forever (and stall indexing).
       if (!st.isFile()) throw new BackendFailure('EINVAL', `Not a regular file: ${rel}`);
@@ -332,6 +433,7 @@ export class Workspace {
     if (!key) throw new BackendFailure('EINVAL', 'Empty path');
     const abs = this.abs(key);
     return this.withInflight(key, async () => {
+      await this.refuseCaseClash(key);
       const st = await this.statForWrite(abs, rel);
       if (st && opts.expectedMtime !== undefined && Math.abs(st.mtimeMs - opts.expectedMtime) > 1) {
         throw new BackendFailure('EXTERNAL_CHANGE', `File changed on disk: ${rel}`);
@@ -358,10 +460,18 @@ export class Workspace {
     const abs = this.abs(key);
     if (data.byteLength > MAX_BINARY_BYTES) throw tooBigBinary(data.byteLength);
     return this.withInflight(key, async () => {
+      await this.refuseCaseClash(key);
       const st = await this.statForWrite(abs, rel);
       if (st && !(st.mode & 0o200)) throw new BackendFailure('EACCES', `File is read-only: ${rel}`);
       return this.commit(key, abs, st, Buffer.from(data.buffer, data.byteOffset, data.byteLength));
     });
+  }
+
+  /** Case-insensitive folders: writing "note.md" would overwrite (and rename) an existing "Note.md".
+   *  Its own code: callers treating EEXIST as "fine, it is there" must not take the other file for it. */
+  private async refuseCaseClash(key: string, except?: string) {
+    const clash = await this.caseClash(key);
+    if (clash && clash !== except) throw new BackendFailure('ECASE', caseClashText(clash));
   }
 
   /** Existing regular file's stats, null if absent; folders / devices are refused. */
@@ -395,6 +505,7 @@ export class Workspace {
     if (!key) throw new BackendFailure('EINVAL', 'Empty path');
     const abs = this.abs(key);
     return this.withInflight(key, async () => {
+      await this.refuseCaseClash(key);
       await fsp.mkdir(path.dirname(abs), { recursive: true });
       this.noteParents(key);
       try {
@@ -414,6 +525,7 @@ export class Workspace {
     if (!key) throw new BackendFailure('EINVAL', 'Empty path');
     const abs = this.abs(key);
     await this.withInflight(key, async () => {
+      await this.refuseCaseClash(key);
       const st = await fsp.stat(abs).catch(() => null);
       if (st) throw new BackendFailure('EEXIST', `Already exists: ${rel}`);
       await fsp.mkdir(abs, { recursive: true });
@@ -429,16 +541,18 @@ export class Workspace {
     const a = this.abs(src);
     const b = this.abs(dst);
     if (a === b) return;
-    const fold = (p: string) => (isWin || process.platform === 'darwin' ? p.toLowerCase() : p);
+    await this.detectCase();
+    const fold = (p: string) => (this.foldsCase ? p.toLowerCase() : p);
     if (fold(b).startsWith(fold(a) + path.sep)) throw new BackendFailure('EINVAL', 'Cannot move a folder into itself');
     await this.withInflight([src, dst], async () => {
-      const sa = await fsp.lstat(a).catch(() => null);
-      if (!sa) throw new BackendFailure('ENOENT', `Not found: ${from}`);
-      const sb = await fsp.lstat(b).catch(() => null);
+      // bigint: NTFS file ids exceed 2^53, as numbers two neighbours can compare equal.
+      const sa = await fsp.lstat(a, { bigint: true }).catch(() => null);
+      if (!sa || (await this.caseClash(src, new Map()))) throw new BackendFailure('ENOENT', `Not found: ${from}`);
+      await this.refuseCaseClash(dst, src); // the source itself is fine: a case-only rename
+      const sb = await fsp.lstat(b, { bigint: true }).catch(() => null);
       if (sb) {
         // Same inode → case-only rename on a case-insensitive FS (Windows/macOS). Anything else is a real clash.
-        const same = sa.dev === sb.dev && sa.ino === sb.ino && (sa.ino !== 0 || (sa.birthtimeMs === sb.birthtimeMs && sa.size === sb.size));
-        if (!same) throw new BackendFailure('EEXIST', `Already exists: ${to}`);
+        if (!sameEntry(sa, sb)) throw new BackendFailure('EEXIST', `Already exists: ${to}`);
         // Short temp name: `${a}.suffix` would overflow NAME_MAX (255) for long file names.
         const tmp = path.join(path.dirname(a), `.~${crypto.randomBytes(4).toString('hex')}.sec-edit-rename-${Date.now()}`);
         await retryWin(() => fsp.rename(a, tmp));
@@ -464,7 +578,8 @@ export class Workspace {
     const abs = this.abs(key);
     await this.withInflight(key, async () => {
       const st = await fsp.lstat(abs).catch(() => null);
-      if (!st) throw new BackendFailure('ENOENT', `Not found: ${rel}`);
+      // A stale spelling must not delete the twin it resolves to on a case-insensitive folder.
+      if (!st || (await this.caseClash(key, new Map()))) throw new BackendFailure('ENOENT', `Not found: ${rel}`);
       if (trash) await trash(abs);
       else await retryWin(() => fsp.rm(abs, { recursive: true, force: true }));
       this.dropEntries(key);
@@ -537,7 +652,8 @@ export class Workspace {
   private async indexer(): Promise<IndexerHost> {
     if (!this.indexed) await this.listTree();
     if (!this.host) {
-      const cfg = { root: this.root, cacheFile: this.cacheFile, readThreads: this.readThreads, index: this.indexOpts, foldCase: foldCaseFs };
+      await this.detectCase();
+      const cfg = { root: this.root, cacheFile: this.cacheFile, readThreads: this.readThreads, index: this.indexOpts, foldCase: this.foldsCase };
       const src = indexerSource();
       let host: IndexerHost | null = null;
       if (src) {
@@ -562,7 +678,7 @@ export class Workspace {
     this.host.setPaths({ version, files: this.filePaths(), ignoreDirs: [...this.ignoreDirs], repoDirs: [...this.repoDirs] });
     const apply = (sets: Parameters<typeof IgnoreStack.fromJSON>[0]) => {
       if (this.sentVersion !== version) return;
-      this.hintIgnore = sets.length ? IgnoreStack.fromJSON(sets, foldCaseFs) : null;
+      this.hintIgnore = sets.length ? IgnoreStack.fromJSON(sets, this.foldsCase) : null;
       // Git-ignored folders (build output) need no watch at all: their events are dropped anyway.
       if (this.hintIgnore && this.watch?.wantsDirs) for (const [k, v] of this.index) if (v.kind === 'dir' && this.hintIgnore.ignored(k, true) && !this.hintIgnore.ignored(parentOf(k), true)) this.watch.removeDir(k);
     };
@@ -642,7 +758,7 @@ export class Workspace {
    * Ctrl+S (silently reverting it), or a pending write could recreate a file that was just renamed.
    */
   private async exclusive<T>(keys: string[], fn: () => Promise<T>): Promise<T> {
-    const fold = (k: string) => (isWin || process.platform === 'darwin' ? k.toLowerCase() : k);
+    const fold = (k: string) => (this.foldsCase ? k.toLowerCase() : k);
     const mine = keys.map(fold);
     const overlaps = (a: string, b: string) => isUnder(a, b) || isUnder(b, a);
     // Registered synchronously, so later callers always queue behind earlier ones (no cycles possible).
@@ -759,13 +875,14 @@ export class Workspace {
         const hints = [...this.pending].sort((x, y) => depthOf(x) - depthOf(y));
         this.pending.clear();
         const deferred: string[] = [];
+        const listings = new Map<string, Promise<Set<string> | null>>(); // one readdir per folder per batch
         for (const rel of hints) {
           if (this.isBusy(rel)) deferred.push(rel);
           else {
             // One bad hint (vanished mid-stat, name Win32 cannot open…) must not drop the rest of the batch
             // or surface as an unhandled rejection (Electron shows those as an error dialog).
             try {
-              events.push(...(await this.reconcile(rel)));
+              events.push(...(await this.reconcile(rel, listings)));
             } catch {}
           }
         }
@@ -792,16 +909,19 @@ export class Workspace {
   }
 
   /** Stat one hinted path and diff it against the index. */
-  private async reconcile(rel: string): Promise<FsEvent[]> {
+  private async reconcile(rel: string, listings?: Map<string, Promise<Set<string> | null>>): Promise<FsEvent[]> {
     if (this.matcher.path(rel)) return [];
     const parent = parentOf(rel);
     if (parent && this.index.get(parent)?.kind !== 'dir') {
       // Parent unknown: it probably just appeared (mkdir -p, folder moved in). Reconcile it instead; that walks it.
       const pst = await fsp.stat(this.abs(parent)).catch(() => null);
-      return pst?.isDirectory() ? this.reconcile(parent) : [];
+      return pst?.isDirectory() ? this.reconcile(parent, listings) : [];
     }
     const abs = this.abs(rel);
-    const st = await fsp.stat(abs).catch(() => null);
+    let st = await fsp.stat(abs).catch(() => null);
+    // Case-insensitive folder: after "Note.md" → "note.md" the old name still stats fine (it finds the
+    // new one). Only the listing tells: else the old spelling comes back as a phantom twin.
+    if (st && (await this.caseClash(rel, listings ?? new Map()))) st = null;
     const prev = this.index.get(rel);
     const events: FsEvent[] = [];
     const kind = st ? (st.isDirectory() ? 'dir' : st.isFile() ? 'file' : null) : null;

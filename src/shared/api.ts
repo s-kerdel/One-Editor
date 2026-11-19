@@ -26,6 +26,8 @@ export interface TreeNode {
 export interface WorkspaceInfo {
   root: string; // absolute, native (for display only)
   name: string;
+  /** The folder tells "Note.md" from "note.md": probed per folder (a WSL root on Windows does, NTFS does not). */
+  caseSensitive?: boolean;
 }
 
 export interface FileData {

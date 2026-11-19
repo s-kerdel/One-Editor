@@ -79,13 +79,30 @@ export function createLinkResolver(files: readonly string[], aliases?: ReadonlyM
     if (l) l.push(f);
     else byName.set(key, [f]);
   };
+  // "Note.md" and "note.md" can both exist (Linux, WSL): spellings byPath does not return, so the exact
+  // one can still win over the case-folded hit.
+  const twins = new Set<string>();
   for (const f of files) {
     const fl = f.toLowerCase();
-    if (!byPath.has(fl)) byPath.set(fl, f);
+    const had = byPath.get(fl);
+    if (had === undefined) byPath.set(fl, f);
+    else if (had !== f) twins.add(f);
     const b = basename(fl);
     add(b, f);
     if (isMarkdown(f)) add(stem(fl), f);
   }
+  const anyCase = (p: string, l: string, md: boolean): string | undefined => {
+    const hit = byPath.get(l);
+    if (hit !== undefined) return hit === p || !twins.has(p) ? hit : p;
+    const hitMd = md ? byPath.get(`${l}.md`) : undefined;
+    if (hitMd === undefined) return undefined;
+    return hitMd === `${p}.md` || !twins.has(`${p}.md`) ? hitMd : `${p}.md`;
+  };
+  const sameCase = (cands: readonly string[], t: string, bare: boolean) => {
+    if (cands.length < 2) return cands;
+    const hits = cands.filter((f) => (bare ? basename(f) === t || (isMarkdown(f) && stem(f) === t) : f.endsWith(`/${t}`) || f.endsWith(`/${t}.md`)));
+    return hits.length ? hits : cands;
+  };
   const pick = (cands: readonly string[], fromPath?: string): string | null => {
     if (!cands.length) return null;
     if (cands.length === 1) return cands[0];
@@ -111,11 +128,11 @@ export function createLinkResolver(files: readonly string[], aliases?: ReadonlyM
     const dotRelative = /^\s*\.\.?[\\/]/.test(target);
     if (dotRelative && fromPath !== undefined) {
       // Explicit ./ or ../ means "relative to this note" — must win over a same-named root path.
-      const rel = normalize(`${dirname(fromPath)}/${target.trim()}`).toLowerCase();
-      const hit = byPath.get(rel) ?? (withMd ? byPath.get(`${rel}.md`) : undefined);
+      const rel = normalize(`${dirname(fromPath)}/${target.trim()}`);
+      const hit = anyCase(rel, rel.toLowerCase(), !!withMd);
       if (hit) return hit;
     }
-    const exact = byPath.get(lower) ?? (withMd ? byPath.get(withMd) : undefined);
+    const exact = anyCase(t, lower, !!withMd);
     if (exact) {
       if (dotRelative) return exact;
       memo.set(target, exact);
@@ -125,8 +142,8 @@ export function createLinkResolver(files: readonly string[], aliases?: ReadonlyM
     if (slash !== -1 || dotRelative) {
       // Path-like: try relative to the linking note, then any file whose path ends with it.
       if (fromPath !== undefined) {
-        const rel = normalize(`${dirname(fromPath)}/${target}`).toLowerCase();
-        const hit = byPath.get(rel) ?? (withMd ? byPath.get(`${rel}.md`) : undefined);
+        const rel = normalize(`${dirname(fromPath)}/${target}`);
+        const hit = anyCase(rel, rel.toLowerCase(), !!withMd);
         if (hit) return hit;
       }
       const last = lower.slice(slash + 1);
@@ -136,12 +153,12 @@ export function createLinkResolver(files: readonly string[], aliases?: ReadonlyM
         const fl = f.toLowerCase();
         return fl.endsWith(`/${lower}`) || (!!withMd && fl.endsWith(`/${withMd}`));
       });
-      const hit = pick(cands, fromPath);
+      const hit = pick(sameCase(cands, t, false), fromPath);
       if (hit) return hit;
     } else {
       const cands = byName.get(lower);
       if (cands?.length === 1) memo.set(target, cands[0]);
-      const hit = pick(cands ?? [], fromPath);
+      const hit = pick(sameCase(cands ?? [], t, true), fromPath);
       if (hit) return hit;
     }
     const al = aliases?.get(target.trim().toLowerCase());

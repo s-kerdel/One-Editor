@@ -97,6 +97,24 @@ describe('resolveWikiTarget', () => {
   });
 });
 
+describe('names that differ only in case (Linux, WSL roots: both files exist)', () => {
+  const twins = ['cases/Note.md', 'cases/note.md', 'Docs/a.md', 'docs/a.md', 'other/x.md'];
+  it('the exact spelling wins; folding is only the fallback', () => {
+    const r = createLinkResolver(twins);
+    expect(r('cases/Note')).toBe('cases/Note.md');
+    expect(r('cases/note')).toBe('cases/note.md');
+    expect(r('cases/note.md')).toBe('cases/note.md');
+    expect(r('Note', 'other/x.md')).toBe('cases/Note.md');
+    expect(r('note', 'other/x.md')).toBe('cases/note.md');
+    expect(r('docs/a')).toBe('docs/a.md');
+    expect(r('Docs/a')).toBe('Docs/a.md');
+    expect(r('./note', 'cases/x.md')).toBe('cases/note.md');
+    expect(r('../docs/a', 'cases/x.md')).toBe('docs/a.md');
+    expect(r('NOTE', 'other/x.md')).toMatch(/^cases\/(Note|note)\.md$/); // no exact match: still found
+    expect(r('cases/NOTE')).toMatch(/^cases\/(Note|note)\.md$/);
+  });
+});
+
 describe('createLinkResolver aliases', () => {
   it('falls back to aliases after file names', () => {
     const r = createLinkResolver(files, new Map([['k8s', ['notes/kubernetes.md']], ['readme', ['notes/kubernetes.md']]]));

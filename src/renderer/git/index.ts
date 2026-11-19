@@ -85,7 +85,8 @@ export function installGit(): GitStore | null {
   const call = gitCall();
   if (!call) return null; // backend without git: everything stays hidden
   const backend: GitBackend = { gitStatus: (o) => call('status', o), gitHeadFile: (p, rev) => call('headFile', p, rev) };
-  const s = new GitStore(backend, { foldCase: app.backend.os === 'win32' || app.backend.os === 'darwin', onHint: hintOnce });
+  // Per folder (the backend's probe), not per OS: a WSL root on Windows has both "Note.md" and "note.md".
+  const s = new GitStore(backend, { foldCase: () => app.workspace.value?.caseSensitive === false, onHint: hintOnce });
   store = s;
   const enabled = () => app.settings.value['git.enabled'] !== false;
   s.setEnabled(enabled());
