@@ -1,0 +1,12 @@
+# Normalise text to LF in the repo…
+* text=auto eol=lf
+# …except files whose exact bytes matter: CRLF fixtures (tests) and Windows batch scripts.
+tests/fixtures/workspace/notes/windows-crlf.md -text
+*.cmd text eol=crlf
+*.bat text eol=crlf
+# Binary assets
+*.png binary
+*.ico binary
+*.jpg binary
+*.pdf binary
+*.woff2 binary

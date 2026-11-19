@@ -1,0 +1,33 @@
+# Dependencies & build output
+node_modules/
+dist/
+release/
+.e2e-dist*/
+out/
+coverage/
+
+# Test & scratch output (screenshots, generated workspaces, private build dirs)
+.tmp/
+test-results/
+playwright-report/
+*.tmp
+*.log
+
+# Secrets & local machine config — never commit
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+id_rsa*
+.npmrc
+.claude/settings.local.json
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

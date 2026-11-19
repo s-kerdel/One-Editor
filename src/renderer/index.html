@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark light" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: file: https: http:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; media-src 'self' file: data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
+  <title>sec-edit</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="alternate icon" type="image/png" href="./icon.png" />
+  <script src="./theme-boot.js"></script>
+  <style>
+    /* First paint, before any JS: a static skeleton of the layout in the right theme, so the window
+       never flashes white and the UI "snaps in" instead of popping. Colors mirror styles/app.css. */
+    /* Exact colours of styles/app.css (dark / light): the skeleton is swapped for the UI in one frame,
+       so every shape here sits where the real control will appear — nothing moves, it only fills in. */
+    :root { --sk-bg: #1b1d22; --sk-shelf: #131519; --sk-raised: #20232a; --sk-inset: #0e1013; --sk-sunken: #16181c; --sk-act: #121417; --sk-input: #15171b; --sk-line: #2b2f37; --sk-bar: #262a31;
+      --sk-shadow: 0 1px 0 rgba(255, 255, 255, 0.02), 0 8px 24px rgba(0, 0, 0, 0.28); }
+    @media (prefers-color-scheme: light) { :root:not([data-theme='dark']) { --sk-bg: #ffffff; --sk-shelf: #f0f0ed; --sk-raised: #ffffff; --sk-inset: #e5e5e1; --sk-sunken: #f6f6f5; --sk-act: #eeeeec; --sk-input: #ffffff; --sk-line: #e4e4e1; --sk-bar: #e4e4e0;
+      --sk-shadow: 0 1px 2px rgba(20, 24, 32, 0.05), 0 8px 24px rgba(20, 24, 32, 0.06); } }
+    :root[data-theme='light'] { --sk-bg: #ffffff; --sk-shelf: #f0f0ed; --sk-raised: #ffffff; --sk-inset: #e5e5e1; --sk-sunken: #f6f6f5; --sk-act: #eeeeec; --sk-input: #ffffff; --sk-line: #e4e4e1; --sk-bar: #e4e4e0;
+      --sk-shadow: 0 1px 2px rgba(20, 24, 32, 0.05), 0 8px 24px rgba(20, 24, 32, 0.06); }
+    /* density (Settings → Appearance): tab strip / status bar heights, as in styles/app.css */
+    :root { --sk-tab: 38px; --sk-st: 24px; }
+    :root[data-density='compact'] { --sk-tab: 34px; --sk-st: 22px; }
+    :root[data-density='spacious'] { --sk-tab: 42px; --sk-st: 26px; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--sk-shelf); }
+    .sk { position: fixed; inset: 0; display: grid; grid-template-columns: var(--skel-sidebar, 260px) 1fr; }
+    .sk-act { display: none; }
+    .sk-side { position: relative; }
+    .sk-side > * { position: absolute; left: 10px; right: 4px; }
+    /* shelf: avatar + name, jump pill, panel pills, a few rows, footer rule — at the real coordinates */
+    .sk-ws { top: 16px; left: 14px; width: 28px; height: 28px; border-radius: 8px; background: var(--sk-raised); box-shadow: inset 0 0 0 1px var(--sk-line); }
+    .sk-name { top: 25px; left: 52px; width: 38%; height: 10px; border-radius: 5px; background: var(--sk-bar); }
+    .sk-jump { top: 58px; height: 32px; box-sizing: border-box; border: 1px solid var(--sk-line); border-radius: 8px; background: var(--sk-raised); }
+    .sk-nav { top: 98px; height: 34px; border-radius: 10px; background: var(--sk-inset); }
+    .sk-rows { top: 156px; left: 22px; right: 40px; height: 140px; opacity: .55;
+      background: repeating-linear-gradient(to bottom, var(--sk-bar) 0 9px, transparent 9px 28px); border-radius: 5px; }
+    .sk-foot { top: auto; bottom: 47px; height: 1px; background: var(--sk-line); }
+    .sk-main { margin: 8px 8px 8px 0; border: 1px solid var(--sk-line); border-radius: 12px; box-shadow: var(--sk-shadow);
+      /* tab strip (38px incl. rule) and status bar (24px incl. rule) like the real card */
+      background: linear-gradient(to bottom, var(--sk-sunken) 0 calc(var(--sk-tab) - 1px), var(--sk-line) calc(var(--sk-tab) - 1px) var(--sk-tab), var(--sk-bg) var(--sk-tab) calc(100% - var(--sk-st)), var(--sk-line) calc(100% - var(--sk-st)) calc(100% - var(--sk-st) + 1px), var(--sk-sunken) calc(100% - var(--sk-st) + 1px)); }
+    /* square corners (Settings → Appearance → Corners) */
+    :root[data-corners='square'] .sk b, :root[data-corners='square'] .sk-main { border-radius: 2px; }
+    /* sidebar hidden (Ctrl+Shift+B): the card takes the whole window, with its left margin */
+    :root[data-sb='0'] .sk { grid-template-columns: 1fr; }
+    :root[data-sb='0'] .sk-side { display: none; }
+    :root[data-sb='0'] .sk-main { margin-left: 8px; }
+    /* integrated window frame (desktop, data-frame set by theme-boot.js): no OS title bar, the shelf card
+       meets the window's top-right corner and the OS draws the window controls over the strip's end */
+    :root[data-frame='integrated']:not([data-ui='classic']) .sk-main { margin-top: 0; margin-right: 0; border-top-width: 0; border-right-width: 0; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+    /* file overview open (data-ov, Ctrl+Alt+B): a right column; shelf: on the backdrop, card in the middle */
+    .sk-ov { display: none; }
+    :root[data-ov='1'] .sk { grid-template-columns: var(--skel-sidebar, 260px) 1fr var(--skel-ov, 280px); }
+    :root[data-ov='1'][data-sb='0'] .sk { grid-template-columns: 1fr var(--skel-ov, 280px); }
+    :root[data-ov='1'] .sk-ov { display: block; }
+    :root[data-ov='1']:not([data-ui='classic']) .sk-main { margin-right: 0; }
+    :root[data-ov='1'][data-frame='integrated']:not([data-ui='classic']) .sk-main { border-right-width: 1px; border-bottom-right-radius: 12px; }
+    :root[data-ov='1'][data-frame='integrated'][data-corners='square']:not([data-ui='classic']) .sk-main { border-bottom-right-radius: 2px; }
+    /* classic: icon bar + flat sidebar + editor flush to the window + full-width status bar */
+    :root[data-ui='classic'], :root[data-ui='classic'] body { background: var(--sk-bg); }
+    :root[data-ui='classic'] .sk { grid-template-columns: 48px var(--skel-sidebar, 260px) 1fr; grid-template-rows: 1fr var(--sk-st); }
+    :root[data-ui='classic'][data-sb='0'] .sk { grid-template-columns: 48px 1fr; }
+    :root[data-ui='classic'][data-ov='1'] .sk { grid-template-columns: 48px var(--skel-sidebar, 260px) 1fr var(--skel-ov, 280px); }
+    :root[data-ui='classic'][data-ov='1'][data-sb='0'] .sk { grid-template-columns: 48px 1fr var(--skel-ov, 280px); }
+    :root[data-ui='classic'] .sk-ov { background: linear-gradient(to bottom, var(--sk-sunken) 0 calc(var(--sk-tab) - 1px), var(--sk-line) calc(var(--sk-tab) - 1px) var(--sk-tab), var(--sk-sunken) var(--sk-tab)); border-left: 1px solid var(--sk-line); }
+    :root[data-ui='classic'] .sk-act { display: block; background: var(--sk-act); border-right: 1px solid var(--sk-line); }
+    :root[data-ui='classic'] .sk-side { background: var(--sk-sunken); border-right: 1px solid var(--sk-line); }
+    :root[data-ui='classic'] .sk-side > * { display: none; }
+    /* classic Files panel: uppercase title (38px head), filter box at 38px, 24px rows from 72px */
+    .sk-ctitle, .sk-cfilter { display: none; }
+    :root[data-ui='classic'] .sk-side > .sk-ctitle { display: block; top: 15px; left: 16px; width: 32%; height: 9px; border-radius: 4px; background: var(--sk-bar); }
+    :root[data-ui='classic'] .sk-side > .sk-cfilter { display: block; top: 38px; left: 10px; right: 10px; height: 28px; box-sizing: border-box; border: 1px solid var(--sk-line); border-radius: 6px; background: var(--sk-input); }
+    :root[data-ui='classic'] .sk-side > .sk-rows { display: block; top: 80px; left: 30px; background: repeating-linear-gradient(to bottom, var(--sk-bar) 0 8px, transparent 8px 24px); }
+    :root[data-ui='classic'] .sk-main, :root[data-ui='classic'][data-sb='0'] .sk-main { margin: 0; border: 0; border-radius: 0; box-shadow: none; background: linear-gradient(to bottom, var(--sk-sunken) 0 calc(var(--sk-tab) - 1px), var(--sk-line) calc(var(--sk-tab) - 1px) var(--sk-tab), var(--sk-bg) var(--sk-tab)); }
+    :root[data-ui='classic'] .sk-status { display: block; grid-column: 1 / -1; background: var(--sk-sunken); border-top: 1px solid var(--sk-line); }
+    .sk-status { display: none; }
+  </style>
+</head>
+<body>
+  <div id="app"><div class="sk" aria-hidden="true">
+    <div class="sk-act"></div>
+    <div class="sk-side"><b class="sk-ws"></b><b class="sk-name"></b><b class="sk-jump"></b><b class="sk-nav"></b><b class="sk-rows"></b><b class="sk-foot"></b><b class="sk-ctitle"></b><b class="sk-cfilter"></b></div>
+    <div class="sk-main"></div>
+    <div class="sk-ov"></div>
+    <div class="sk-status"></div>
+  </div></div>
+  <script type="module" src="./main.tsx"></script>
+</body>
+</html>

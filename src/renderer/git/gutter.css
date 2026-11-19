@@ -1,0 +1,70 @@
+/* Editor change bars + the inline peek (loaded with the editor's gutter extension). */
+.se-git-gutter { min-width: 7px; }
+.se-git-gutter .cm-gutterElement { position: relative; padding: 0 !important; cursor: pointer; }
+.se-git-bar { position: absolute; left: 2px; top: 1px; bottom: 1px; width: 3px; border-radius: var(--radius-xs); }
+.se-git-bar.se-git-added { background: var(--git-bar-added, var(--ft-green)); }
+/* Modified: hatched lightly so it is distinguishable from "added" without colour vision. */
+.se-git-bar.se-git-modified {
+  background: repeating-linear-gradient(180deg, var(--git-bar-modified, var(--ft-blue)) 0 3px, color-mix(in srgb, var(--git-bar-modified, var(--ft-blue)) 55%, transparent) 3px 5px);
+}
+/* Deleted lines: a small wedge on the line boundary. */
+.se-git-bar.se-git-deleted,
+.se-git-bar.se-git-deleted-top { top: auto; bottom: -4px; height: 0; width: 0; border-radius: 0; border: 4px solid transparent; border-left: 5px solid var(--git-bar-deleted, var(--ft-red)); left: 1px; }
+.se-git-bar.se-git-deleted-top { top: -4px; bottom: auto; }
+.se-git-gutter .cm-gutterElement:hover .se-git-bar:not(.se-git-deleted):not(.se-git-deleted-top) { left: 1px; width: 5px; }
+
+/* ---- peek ---- */
+.se-git-peek {
+  margin: 4px 0 6px;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--git-bar-modified, var(--ft-blue));
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  overflow: hidden;
+}
+.se-git-peek.se-git-peek-added { border-left-color: var(--git-bar-added, var(--ft-green)); }
+.se-git-peek.se-git-peek-deleted { border-left-color: var(--git-bar-deleted, var(--ft-red)); }
+.se-git-peek-head { display: flex; align-items: center; gap: 4px; padding: 4px 6px 4px 10px; border-bottom: 1px solid var(--border); color: var(--text-muted); }
+.se-git-peek-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-git-peek-btn {
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.se-git-peek-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.se-git-peek-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.se-git-peek-btn:disabled { opacity: 0.5; cursor: default; }
+.se-git-peek-btn.revert { border-color: var(--border-strong); color: var(--text); }
+.se-git-peek-old {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 4px 0;
+  font: 12.5px/1.55 var(--font-mono);
+  background: color-mix(in srgb, var(--git-bar-deleted, var(--ft-red)) 9%, transparent);
+  color: var(--text);
+}
+.se-git-peek-line { padding: 0 12px; white-space: pre; }
+.se-git-peek-line::before { content: '−'; display: inline-block; width: 1.4em; color: var(--git-bar-deleted, var(--ft-red)); }
+.se-git-peek-more { padding: 2px 12px; color: var(--text-faint); font-style: italic; }
+
+/* Markdown live view: the change-bar column hugs the centred text column, like line numbers do. */
+.se-editor.se-md.se-git-on:not(.se-gutter-on) .cm-gutters { margin-left: auto; }
+.se-editor.se-md.se-git-on:not(.se-gutter-on) .cm-content { margin-left: 0; margin-right: auto; padding-left: 12px; }
+
+/* ---- merge-conflict blocks ---- */
+.cm-line.se-git-cf-ours { background: color-mix(in srgb, var(--git-bar-added, var(--ft-green)) 10%, transparent); }
+.cm-line.se-git-cf-theirs { background: color-mix(in srgb, var(--git-bar-modified, var(--ft-blue)) 11%, transparent); }
+.cm-line.se-git-cf-base { background: color-mix(in srgb, var(--text-faint) 10%, transparent); }
+.cm-line.se-git-cf-marker { background: color-mix(in srgb, var(--git-conflicted, var(--ft-orange)) 18%, transparent); color: var(--text-muted); font-weight: 600; }
+.se-git-cf-actions { display: inline-flex; gap: 2px; margin-left: 12px; vertical-align: middle; font-family: var(--font-ui); font-weight: 400; }
+.se-git-cf-btn { border: 0; padding: 0 6px; border-radius: var(--radius-sm); background: transparent; color: var(--accent); font: inherit; font-size: 11.5px; line-height: 1.5; cursor: pointer; }
+.se-git-cf-btn:hover:not(:disabled) { background: var(--accent-soft); }
+.se-git-cf-btn:disabled { display: none; }

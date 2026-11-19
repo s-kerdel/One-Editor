@@ -1,0 +1,75 @@
+/* Git decorations for the file tree and the status bar. Colours are tokens built on the theme's
+   file-type palette (--ft-*), so dark / light / system themes and accents just work. */
+:root {
+  --git-modified: var(--ft-yellow);
+  --git-added: var(--ft-green);
+  --git-untracked: var(--ft-green);
+  --git-deleted: var(--ft-red);
+  --git-renamed: var(--ft-teal);
+  --git-conflicted: var(--ft-orange);
+  --git-ignored: var(--text-faint);
+  /* Editor gutter: modified lines use blue (yellow bars read as warnings next to code). */
+  --git-bar-added: var(--ft-green);
+  --git-bar-modified: var(--ft-blue);
+  --git-bar-deleted: var(--ft-red);
+}
+
+/* ---- file tree ---- */
+.se-tree-row.se-git-modified .se-tree-name { color: var(--git-modified); }
+.se-tree-row.se-git-added .se-tree-name,
+.se-tree-row.se-git-untracked .se-tree-name { color: var(--git-added); }
+.se-tree-row.se-git-renamed .se-tree-name { color: var(--git-renamed); }
+.se-tree-row.se-git-conflicted .se-tree-name { color: var(--git-conflicted); }
+.se-tree-row.se-git-deleted .se-tree-name { color: var(--git-deleted); text-decoration: line-through; }
+.se-tree-row.se-git-ignored .se-tree-name,
+.se-tree-row.se-git-ignored .se-tree-ext { color: var(--git-ignored); }
+.se-tree-row.se-git-ignored .se-tree-lead { opacity: 0.55; }
+/* The active row keeps its strong text colour; the letter still says what changed. */
+.se-tree-row.active[class*='se-git-'] .se-tree-name { color: var(--text); }
+
+.se-git-letter {
+  flex: none;
+  min-width: 12px;
+  font: 600 11px/1 var(--font-mono);
+  text-align: center;
+}
+.se-git-letter.se-git-modified { color: var(--git-modified); }
+.se-git-letter.se-git-added,
+.se-git-letter.se-git-untracked { color: var(--git-added); }
+.se-git-letter.se-git-deleted { color: var(--git-deleted); }
+.se-git-letter.se-git-renamed { color: var(--git-renamed); }
+.se-git-letter.se-git-conflicted { color: var(--git-conflicted); }
+
+/* Folder that contains changes: a subtle dot in the colour of its most important change. */
+.se-git-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--git-modified);
+  opacity: 0.85;
+}
+.se-git-dot.se-git-added,
+.se-git-dot.se-git-untracked { background: var(--git-added); }
+.se-git-dot.se-git-deleted { background: var(--git-deleted); }
+.se-git-dot.se-git-renamed { background: var(--git-renamed); }
+.se-git-dot.se-git-conflicted { background: var(--git-conflicted); }
+
+/* ---- status bar ---- */
+.se-git-branch { display: inline-flex; align-items: center; gap: 4px; max-width: 260px; }
+.se-git-branch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-git-branch-dirty {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--git-modified);
+  flex: none;
+}
+.se-git-ab { font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.se-git-branch.se-git-filtering { color: var(--accent); }
+
+/* "changes only" banner above the tree */
+.se-git-banner { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px 8px 4px; padding: 4px 6px 4px 10px; border-radius: var(--radius); background: var(--accent-soft); color: var(--text); font-size: 12px; flex: none; }
+.se-git-banner-dim { color: var(--text-muted); }
+.se-git-banner-btn { border: 0; background: transparent; color: var(--accent); font: inherit; padding: 2px 6px; border-radius: var(--radius-sm); cursor: pointer; }
+.se-git-banner-btn:hover { background: var(--bg-hover); }

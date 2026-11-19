@@ -1,0 +1,633 @@
+// Source control pane (left sidebar, lazy chunk): changes grouped conflicts / staged / changes /
+// untracked, the commit box, sync (fetch / pull / push), branches and history. Every action goes
+// through ./actions (saves first, refreshes after, explains failures, hands prompts to a terminal).
+import './scm.css';
+import { signal } from '@preact/signals';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { GitBranchInfo, GitCommit, GitCommitFile, GitCommitFiles, GitEntry, GitJobError, GitStatus } from '@shared/git';
+import { basename, dirname } from '@shared/paths';
+import { app } from '../app/app';
+import * as ui from '../app/ui';
+import { FileIcon, FolderIcon, Icon } from '../app/icons';
+import { prettyKey } from '../app/commands';
+import { revealInTree } from '../app/fileops';
+import { installGit } from './index';
+import type { GitStore } from './store';
+import { markOf } from './marks';
+import { openChange, openCommitDiff } from './diff-open';
+import { busy, discard, handOff, handOffLabel, lastError, markResolved, runGit, stage, unstage } from './actions';
+import { branchLabel } from './ui';
+import { git, gitCall } from './rpc';
+
+/** Stop a background list (fire and forget: the backend kills the running git). */
+const cancelJob = (tag: 'branches' | 'history' | 'files') => void gitCall()?.('cancel', tag).catch(() => {});
+
+/** Survive panel switches (the pane unmounts when another panel is shown). */
+const draft = signal('');
+const amend = signal(false);
+const open = signal<Record<string, boolean>>({ conflicts: true, staged: true, changes: true, untracked: true, branches: false, history: false });
+const ROW_CAP = 400;
+
+const toggle = (k: string) => (open.value = { ...open.value, [k]: !open.value[k] });
+
+function ago(sec: number): string {
+  const d = Date.now() / 1000 - sec;
+  if (d < 60) return 'just now';
+  if (d < 3600) return `${Math.floor(d / 60)} min ago`;
+  if (d < 86400) return `${Math.floor(d / 3600)} h ago`;
+  if (d < 86400 * 30) return `${Math.floor(d / 86400)} d ago`;
+  return new Date(sec * 1000).toLocaleDateString();
+}
+
+// ---- rows / groups ---------------------------------------------------------------------------
+
+type Group = 'conflicts' | 'staged' | 'changes' | 'untracked';
+
+function groups(st: GitStatus): Record<Group, GitEntry[]> {
+  const g: Record<Group, GitEntry[]> = { conflicts: [], staged: [], changes: [], untracked: [] };
+  for (const e of st.entries) {
+    if (e.state === 'ignored') continue;
+    if (e.state === 'conflicted') g.conflicts.push(e);
+    else if (e.state === 'untracked') g.untracked.push(e);
+    else {
+      if (e.staged) g.staged.push(e);
+      if (e.unstaged) g.changes.push(e);
+    }
+  }
+  return g;
+}
+
+function Row({ s, e, group }: { s: GitStore; e: GitEntry; group: Group }) {
+  const m = markOf(e);
+  const name = e.path ? basename(e.path) : '(this folder)';
+  const dir = dirname(e.path);
+  const btn = (icon: string, title: string, run: () => unknown, cls = '') => (
+    <button
+      class={`se-icon-btn tiny se-scm-act ${cls}`}
+      title={title}
+      aria-label={`${title}: ${e.path || 'this folder'}`}
+      onClick={(ev) => {
+        ev.stopPropagation();
+        void run();
+      }}
+    >
+      <Icon name={icon} size={13} />
+    </button>
+  );
+  const openFile = () => (e.state !== 'deleted' && !e.dir ? void app.openFile(e.path) : e.dir ? revealInTree(e.path) : undefined);
+  return (
+    <div
+      class={`se-scm-row se-git-${e.state}`}
+      role="listitem"
+      tabIndex={0}
+      title={`${e.path || 'this folder'}\n${m.title}${group === 'conflicts' ? '' : ' — click to compare with the last commit'}`}
+      data-path={e.path}
+      data-group={group}
+      onClick={() => (group === 'conflicts' || e.dir || e.submodule ? openFile() : void openChange(s, e.path))}
+      onDblClick={openFile}
+      onKeyDown={(ev) => ev.key === 'Enter' && (ev.currentTarget as HTMLElement).click()}
+    >
+      <span class="se-scm-ficon">{e.dir || e.submodule ? <FolderIcon open={false} /> : <FileIcon path={e.path} />}</span>
+      <span class="se-scm-name">
+        {name}
+        {e.dir ? '/' : ''}
+      </span>
+      {dir ? <span class="se-scm-dir">{dir}</span> : <span class="se-scm-dir" />}
+      <span class={`se-git-letter se-git-${e.state}`}>{m.letter}</span>
+      <span class="se-scm-acts">
+        {!e.dir && e.state !== 'deleted' && btn('file', 'Open file', openFile)}
+        {group === 'conflicts' && btn('check', 'Mark resolved', () => markResolved(s, e.path), 'resolve')}
+        {group === 'staged' && btn('minus', 'Unstage', () => unstage(s, [e.path]), 'unstage')}
+        {(group === 'changes' || group === 'untracked') && btn('undo', group === 'untracked' ? 'Discard (move to trash)' : 'Discard changes', () => discard(s, [e.path], group === 'untracked' ? 1 : 0), 'discard')}
+        {(group === 'changes' || group === 'untracked') && btn('plus', 'Stage', () => stage(s, [e.path]), 'stage')}
+      </span>
+    </div>
+  );
+}
+
+const TITLES: Record<Group, string> = { conflicts: 'Merge conflicts', staged: 'Staged changes', changes: 'Changes', untracked: 'Untracked' };
+
+function GroupView({ s, group, list }: { s: GitStore; group: Group; list: GitEntry[] }) {
+  if (!list.length) return null;
+  const isOpen = open.value[group];
+  const paths = list.map((e) => e.path);
+  const head = (icon: string, title: string, run: () => unknown, cls: string) => (
+    <button
+      class={`se-icon-btn tiny se-scm-act ${cls}`}
+      title={title}
+      aria-label={title}
+      onClick={(ev) => {
+        ev.stopPropagation();
+        void run();
+      }}
+    >
+      <Icon name={icon} size={13} />
+    </button>
+  );
+  return (
+    <section class="se-scm-group" data-group={group}>
+      <div class="se-section-head se-scm-ghead">
+        <button class="se-scm-toggle se-section-toggle" aria-expanded={isOpen} onClick={() => toggle(group)}>
+          <Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={12} class="se-section-chev" />
+          <span class="se-section-title">{TITLES[group]}</span>
+          <span class="se-scm-count">{list.length}</span>
+        </button>
+        <span class="se-scm-acts">
+          {group === 'staged' && head('minus', 'Unstage all', () => unstage(s, null), 'unstage-all')}
+          {group === 'changes' && head('undo', 'Discard all changes', () => discard(s, paths, 0), 'discard-all')}
+          {group === 'untracked' && head('undo', 'Discard all untracked (move to trash)', () => discard(s, paths, paths.length), 'discard-all')}
+          {(group === 'changes' || group === 'untracked') && head('plus', group === 'changes' ? 'Stage all changes' : 'Stage all untracked', () => stage(s, paths), 'stage-all')}
+        </span>
+      </div>
+      {isOpen && (
+        <div role="list" class="se-scm-list">
+          {list.slice(0, ROW_CAP).map((e) => (
+            <Row key={`${group}:${e.path}`} s={s} e={e} group={group} />
+          ))}
+          {list.length > ROW_CAP && <div class="se-scm-more">… and {list.length - ROW_CAP} more</div>}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---- commit box ------------------------------------------------------------------------------
+
+async function doCommit(s: GitStore, st: GitStatus, g: Record<Group, GitEntry[]>, push: boolean) {
+  if (busy.value) return;
+  const merging = st.state === 'merge';
+  if (g.conflicts.length) return void app.toast('Resolve the merge conflicts first (mark them resolved)', 'info');
+  if (!g.staged.length && !amend.value && !merging) {
+    const n = g.changes.length + g.untracked.length;
+    if (!n) return void app.toast('Nothing to commit', 'info');
+    if (!(await ui.confirmDialog('Nothing is staged', `Stage all ${n} ${n === 1 ? 'change' : 'changes'} and commit them?`, 'Stage all & commit'))) return;
+    if (!(await stage(s, null)).ok) return;
+  }
+  const r = await runGit(s, 'Committing', () => git('commit', { message: draft.value, amend: amend.value }));
+  if (!r.ok) return;
+  draft.value = '';
+  amend.value = false;
+  if (push) await runGit(s, 'Pushing', () => git('push'));
+}
+
+/** Pre-fill (never send) a Claude Code prompt that writes the message for the staged changes. */
+async function claudeMessage() {
+  const t = await import('../terminal/entry');
+  const m = await t.showTerminal({ focus: false, autoStart: false });
+  await m.askClaude(
+    'Write a git commit message for the currently staged changes (run `git diff --cached` to see them). Use an imperative subject line of at most 72 characters, then a blank line and a short body only if it helps. Reply with the message only. ',
+  );
+}
+
+function CommitBox({ s, st, g }: { s: GitStore; st: GitStatus; g: Record<Group, GitEntry[]> }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const merging = st.state === 'merge';
+  const where = st.branch.head ? `“${st.branch.head}”` : 'detached HEAD';
+  const working = !!busy.value;
+  const placeholder = amend.value ? 'Leave empty to keep the last message' : merging ? 'Leave empty for the merge message' : `Message (${prettyKey('Mod-Enter')} to commit on ${where})`;
+  useEffect(() => {
+    const el = ref.current;
+    if (el) el.style.height = `${Math.min(160, Math.max(56, el.scrollHeight))}px`;
+  }, [draft.value]);
+  const label = amend.value ? 'Amend' : merging ? 'Commit merge' : 'Commit';
+  return (
+    <div class="se-scm-commit">
+      <textarea
+        ref={ref}
+        class="se-scm-msg"
+        aria-label="Commit message"
+        placeholder={placeholder}
+        value={draft.value}
+        spellcheck={!!app.settings.value.spellcheck}
+        onInput={(e) => (draft.value = (e.currentTarget as HTMLTextAreaElement).value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            void doCommit(s, st, g, false);
+          }
+        }}
+      />
+      <div class="se-scm-commit-row">
+        <button class="se-btn primary small se-scm-commit-btn" disabled={working} onClick={() => doCommit(s, st, g, false)} title={`${label} (${prettyKey('Mod-Enter')})`}>
+          <Icon name="check" size={13} /> {label}
+        </button>
+        <button class="se-btn small" disabled={working || !st.branch.head} onClick={() => doCommit(s, st, g, true)} title={`${label}, then push`}>
+          {label} & push
+        </button>
+        <span class="se-scm-spacer" />
+        {app.runInTerminal && (
+          <button class="se-icon-btn small" title="Ask Claude to write the message (types a prompt into the Claude terminal; you press Enter)" aria-label="Write the message with Claude" onClick={() => void claudeMessage()}>
+            <Icon name="sparkle" size={14} />
+          </button>
+        )}
+      </div>
+      <label class="se-scm-amend">
+        <input
+          type="checkbox"
+          checked={amend.value}
+          disabled={!st.branch.oid}
+          onChange={async (e) => {
+            const on = (e.currentTarget as HTMLInputElement).checked;
+            amend.value = on;
+            if (on && !draft.value.trim()) draft.value = await git('lastMessage').catch(() => '');
+          }}
+        />
+        Amend the last commit
+      </label>
+    </div>
+  );
+}
+
+// ---- header: branch + sync -------------------------------------------------------------------
+
+function SyncBar({ s, st }: { s: GitStore; st: GitStatus }) {
+  const b = st.branch;
+  const working = busy.value;
+  return (
+    <div class="se-scm-sync">
+      <button
+        class="se-scm-branch"
+        title="Branches"
+        onClick={() => {
+          open.value = { ...open.value, branches: true };
+          requestAnimationFrame(() => document.querySelector('.se-scm [data-section="branches"]')?.scrollIntoView({ block: 'nearest' }));
+        }}
+      >
+        <Icon name="gitBranch" size={13} />
+        <span class="se-scm-branch-name">{branchLabel(b)}</span>
+      </button>
+      <span class="se-scm-spacer" />
+      {working && <span class="se-scm-busy" role="status">{working}</span>}
+      <button class="se-icon-btn small" title="Fetch" aria-label="Fetch" disabled={!!working} onClick={() => runGit(s, 'Fetching', () => git('fetch'), { save: false })}>
+        <Icon name="refresh" size={14} />
+      </button>
+      {b.upstream ? (
+        <>
+          <button class="se-btn small se-scm-pull" disabled={!!working} title={`Pull from ${b.upstream}`} onClick={() => runGit(s, 'Pulling', () => git('pull'))}>
+            <Icon name="arrowDown" size={12} /> {b.behind}
+          </button>
+          <button class="se-btn small se-scm-push" disabled={!!working} title={`Push to ${b.upstream}`} onClick={() => runGit(s, 'Pushing', () => git('push'), { save: false })}>
+            <Icon name="arrowUp" size={12} /> {b.ahead}
+          </button>
+        </>
+      ) : (
+        b.head && (
+          <button class="se-btn small se-scm-push" disabled={!!working} title="Push this branch and track it" onClick={() => runGit(s, 'Publishing', () => git('push'), { save: false })}>
+            <Icon name="arrowUp" size={12} /> Publish
+          </button>
+        )
+      )}
+    </div>
+  );
+}
+
+function ErrorBox() {
+  const e = lastError.value;
+  if (!e) return null;
+  return (
+    <div class="se-scm-error" role="alert">
+      <pre class="se-scm-error-msg">{e.message}</pre>
+      <div class="se-scm-error-row">
+        {e.auth && <span class="se-scm-error-hint">Sign in or unlock your key in a terminal — git there can ask you.</span>}
+        {e.terminal && (
+          <button class="se-btn small" onClick={() => handOff(e.terminal!)} title={e.terminal}>
+            <Icon name="terminal" size={13} /> {handOffLabel()}
+          </button>
+        )}
+        <button class="se-icon-btn tiny" aria-label="Dismiss" onClick={() => (lastError.value = null)}>
+          <Icon name="close" size={12} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const STATE_TEXT: Record<string, string> = {
+  merge: 'Merge in progress: resolve the conflicts, mark them resolved, then commit.',
+  rebase: 'Rebase in progress: continue or abort it in the terminal.',
+  'cherry-pick': 'Cherry-pick in progress: resolve, then commit.',
+  revert: 'Revert in progress: resolve, then commit.',
+};
+
+// ---- background lists: shared bits ----------------------------------------------------------
+
+const SKELETON = (
+  <div class="se-scm-skel" aria-busy="true" aria-label="Loading">
+    {[62, 48, 70].map((w) => (
+      <div class="se-skel-row" style={{ width: `${w}%` }} />
+    ))}
+  </div>
+);
+
+function JobError({ error, message, retry }: { error: GitJobError; message?: string; retry: () => void }) {
+  return (
+    <div class="se-scm-joberr" role="status">
+      <span>{error === 'timeout' ? 'Took too long.' : `Could not load${message ? `: ${message}` : '.'}`}</span>
+      <button class="se-btn small" onClick={retry}>
+        Retry
+      </button>
+    </div>
+  );
+}
+
+function rowHeight(): number {
+  return parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row-h')) || 28;
+}
+
+// ---- branches --------------------------------------------------------------------------------
+
+/** Branch rows rendered at most (the filter box narrows the rest). */
+const BRANCH_ROWS = 200;
+
+function Branches({ s, st }: { s: GitStore; st: GitStatus }) {
+  const [res, setRes] = useState<{ list: GitBranchInfo[]; truncated?: boolean; error?: GitJobError; message?: string } | null>(null);
+  const [filter, setFilter] = useState('');
+  const [nonce, setNonce] = useState(0);
+  const isOpen = open.value.branches;
+  const head = st.branch.head;
+  // Only while expanded; collapsing (or closing the pane) stops a running for-each-ref.
+  useEffect(() => {
+    if (!isOpen) return;
+    let alive = true;
+    void git('branches').then(
+      (r) => alive && r.error !== 'cancelled' && setRes({ list: r.branches, truncated: r.truncated, error: r.error, message: r.message }),
+      (err) => alive && setRes({ list: [], error: 'failed', message: String(err?.message ?? err) }),
+    );
+    return () => {
+      alive = false;
+      cancelJob('branches');
+    };
+  }, [isOpen, head, st.branch.oid, nonce]);
+  const dirty = s.marks.value.count;
+  // "Current" comes from the live status: the list refreshes a moment after a switch.
+  const isCurrent = (b: GitBranchInfo) => !b.remote && b.name === head;
+  const switchTo = async (b: GitBranchInfo) => {
+    if (isCurrent(b)) return;
+    if (dirty && !(await ui.confirmDialog(`Switch to ${b.name}?`, `You have ${dirty} uncommitted ${dirty === 1 ? 'change' : 'changes'}. Git carries them over to the other branch, or refuses when they would be overwritten.`, 'Switch'))) return;
+    await runGit(s, 'Switching', () => git('switchBranch', b.name));
+  };
+  const create = async () => {
+    const name = await ui.promptDialog('New branch', '', 'feature/my-change', 'Create & switch');
+    if (name) await runGit(s, 'Creating branch', () => git('createBranch', name));
+  };
+  const q = filter.trim().toLowerCase();
+  const matches = useMemo(() => (res ? (q ? res.list.filter((b) => b.name.toLowerCase().includes(q)) : res.list) : []), [res, q]);
+  return (
+    <section class="se-scm-group" data-section="branches">
+      <div class="se-section-head se-scm-ghead">
+        <button class="se-scm-toggle se-section-toggle" aria-expanded={isOpen} onClick={() => toggle('branches')}>
+          <Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={12} class="se-section-chev" />
+          <span class="se-section-title">Branches</span>
+          {isOpen && res && !res.error && <span class="se-scm-count">{res.truncated ? `${res.list.length}+` : res.list.length}</span>}
+        </button>
+        <span class="se-scm-acts">
+          <button
+            class="se-icon-btn tiny se-scm-act"
+            title="New branch"
+            aria-label="New branch"
+            onClick={(e) => {
+              e.stopPropagation();
+              void create();
+            }}
+          >
+            <Icon name="plus" size={13} />
+          </button>
+        </span>
+      </div>
+      {isOpen && (
+        <div role="list" class="se-scm-list se-scm-branches">
+          {!res && SKELETON}
+          {res?.error && <JobError error={res.error} message={res.message} retry={() => (setRes(null), setNonce((n) => n + 1))} />}
+          {res && !res.error && res.list.length > 15 && (
+            <input class="se-scm-filter" type="search" placeholder={`Filter ${res.list.length}${res.truncated ? '+' : ''} branches`} aria-label="Filter branches" value={filter} onInput={(e) => setFilter((e.currentTarget as HTMLInputElement).value)} />
+          )}
+          <div class="se-scm-blist">
+          {matches.slice(0, BRANCH_ROWS).map((b) => (
+            <div class={`se-scm-row se-scm-brow${isCurrent(b) ? ' current' : ''}${b.remote ? ' remote' : ''}`} role="listitem" tabIndex={0} data-branch={b.name} title={`${b.name}\n${b.subject}\n${ago(b.date)}${isCurrent(b) ? '' : '\nClick to switch'}`} onClick={() => switchTo(b)} onKeyDown={(e) => e.key === 'Enter' && switchTo(b)}>
+              <span class="se-scm-bicon">{isCurrent(b) ? <Icon name="check" size={12} /> : <Icon name="gitBranch" size={12} />}</span>
+              <span class="se-scm-name">{b.name}</span>
+              {isCurrent(b) && (st.branch.ahead > 0 || st.branch.behind > 0) && (
+                <span class="se-scm-dir">
+                  ↑{st.branch.ahead} ↓{st.branch.behind}
+                </span>
+              )}
+              <span class="se-scm-dir se-scm-when">{ago(b.date)}</span>
+            </div>
+          ))}
+          {res && !res.error && matches.length > BRANCH_ROWS && <div class="se-scm-more">{matches.length - BRANCH_ROWS} more — type to filter</div>}
+          </div>
+          {res && !res.error && !matches.length && <div class="se-scm-more">{q ? 'No branch matches' : 'No branches yet'}</div>}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ---- history ---------------------------------------------------------------------------------
+
+const PAGE = 50;
+/** Visible history rows before the list scrolls on its own. */
+const HISTORY_ROWS = 14;
+const FILE_LETTER: Record<string, string> = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R', copied: 'C', typechange: 'T' };
+const FILE_CLS: Record<string, string> = { added: 'added', modified: 'modified', deleted: 'deleted', renamed: 'renamed', copied: 'added', typechange: 'modified' };
+
+interface HistState {
+  commits: GitCommit[];
+  more: boolean;
+  loading: boolean;
+  error?: GitJobError;
+  message?: string;
+}
+
+function History({ st }: { st: GitStatus }) {
+  const [h, setH] = useState<HistState>({ commits: [], more: true, loading: false });
+  const [sel, setSel] = useState<GitCommit | null>(null);
+  const [files, setFiles] = useState<GitCommitFiles | 'loading' | null>(null);
+  const [top, setTop] = useState(0);
+  const isOpen = open.value.history;
+  const gen = useRef(0);
+  const state = useRef(h);
+  state.current = h;
+  /** A page request is in flight (synchronous: effects of one render must not double-load). */
+  const inFlight = useRef(false);
+  const ROW_H = rowHeight();
+
+  const loadPage = (reset: boolean) => {
+    const cur = state.current;
+    if (!reset && (inFlight.current || !cur.more || cur.error)) return;
+    inFlight.current = true;
+    const g = gen.current;
+    const skip = reset ? 0 : cur.commits.length;
+    setH((x) => ({ ...(reset ? { commits: [], more: true } : x), loading: true, error: undefined }));
+    void git('log', { skip, limit: PAGE }).then(
+      (p) => {
+        if (g !== gen.current || p.error === 'cancelled') return;
+        inFlight.current = false;
+        setH((x) => ({ commits: reset ? p.commits : [...x.commits, ...p.commits], more: p.more, loading: false, error: p.error, message: p.message }));
+      },
+      (err) => {
+        if (g !== gen.current) return;
+        inFlight.current = false;
+        setH((x) => ({ ...x, loading: false, error: 'failed', message: String(err?.message ?? err) }));
+      },
+    );
+  };
+
+  // Only while expanded; a new HEAD restarts from the top. Collapsing / closing the pane stops git log.
+  useEffect(() => {
+    if (!isOpen) return;
+    gen.current++;
+    setTop(0);
+    loadPage(true);
+    return () => {
+      gen.current++;
+      inFlight.current = false;
+      cancelJob('history');
+      cancelJob('files');
+    };
+  }, [isOpen, st.branch.oid]);
+
+  const pick = (c: GitCommit) => {
+    if (sel?.oid === c.oid) {
+      setSel(null);
+      setFiles(null);
+      return cancelJob('files');
+    }
+    cancelJob('files');
+    setSel(c);
+    setFiles('loading');
+    void git('commitFiles', c.oid, c.parents[0] ?? null).then(
+      (r) => r.error !== 'cancelled' && setFiles((f) => (f === 'loading' ? r : f)),
+      () => setFiles(null),
+    );
+  };
+
+  // Virtualised rows: the list scrolls on its own; the next page loads before you reach the end.
+  const list = h.commits;
+  const height = Math.max(1, Math.min(list.length || 3, HISTORY_ROWS)) * ROW_H;
+  const first = Math.max(0, Math.floor(top / ROW_H) - 6);
+  const last = Math.min(list.length, Math.ceil((top + height) / ROW_H) + 6);
+  useEffect(() => {
+    if (isOpen && last >= list.length - 10) loadPage(false);
+  }, [isOpen, last, list.length]);
+
+  return (
+    <section class="se-scm-group" data-section="history">
+      <div class="se-section-head se-scm-ghead">
+        <button class="se-scm-toggle se-section-toggle" aria-expanded={isOpen} onClick={() => toggle('history')}>
+          <Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={12} class="se-section-chev" />
+          <span class="se-section-title">History</span>
+        </button>
+      </div>
+      {isOpen && (
+        <>
+          {!list.length && h.loading && SKELETON}
+          {!list.length && !h.loading && !h.error && <div class="se-scm-more">No commits yet</div>}
+          {!!list.length && (
+            <div class="se-scm-hist" role="list" aria-label="Commits" style={{ height: `${height}px` }} onScroll={(e) => setTop((e.currentTarget as HTMLElement).scrollTop)}>
+              <div style={{ height: `${list.length * ROW_H}px`, position: 'relative' }}>
+                {list.slice(first, last).map((c, k) => (
+                  <div
+                    class={`se-scm-row se-scm-crow${sel?.oid === c.oid ? ' selected' : ''}`}
+                    role="listitem"
+                    tabIndex={0}
+                    data-oid={c.oid}
+                    aria-selected={sel?.oid === c.oid}
+                    style={{ position: 'absolute', top: `${(first + k) * ROW_H}px`, left: 0, right: 0 }}
+                    title={`${c.subject}\n${c.author} <${c.email}>\n${new Date(c.date * 1000).toLocaleString()}\n${c.oid}`}
+                    onClick={() => pick(c)}
+                    onKeyDown={(e) => e.key === 'Enter' && pick(c)}
+                  >
+                    <Icon name="gitCommit" size={12} class="se-scm-cicon" />
+                    <span class="se-scm-name">{c.subject || '(no message)'}</span>
+                    <span class="se-scm-dir se-scm-when">{ago(c.date)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {h.loading && !!list.length && <div class="se-scm-more">Loading more…</div>}
+          {h.error && <JobError error={h.error} message={h.message} retry={() => (list.length ? (setH((x) => ({ ...x, error: undefined })), setTimeout(() => loadPage(false))) : loadPage(true))} />}
+          {sel && (
+            <div class="se-scm-cfiles" data-oid={sel.oid}>
+              <div class="se-scm-cmeta">
+                {sel.short} · {sel.author} · {new Date(sel.date * 1000).toLocaleDateString()}
+              </div>
+              {files === 'loading' && SKELETON}
+              {files && files !== 'loading' && files.error && <JobError error={files.error} message={files.message} retry={() => (setSel(null), pick(sel))} />}
+              {files && files !== 'loading' && !files.error && !files.files.length && <div class="se-scm-more">No changes in this folder</div>}
+              {files &&
+                files !== 'loading' &&
+                files.files.slice(0, 500).map((x: GitCommitFile) => (
+                  <div class={`se-scm-row se-git-${FILE_CLS[x.status]}`} tabIndex={0} title={`${x.from ? `${x.from} → ` : ''}${x.path}\nClick to see the change`} onClick={() => openCommitDiff(x, files)} onKeyDown={(e) => e.key === 'Enter' && openCommitDiff(x, files)}>
+                    <span class="se-scm-ficon">
+                      <FileIcon path={x.path} />
+                    </span>
+                    <span class="se-scm-name">{basename(x.path)}</span>
+                    {dirname(x.path) ? <span class="se-scm-dir">{dirname(x.path)}</span> : <span class="se-scm-dir" />}
+                    <span class={`se-git-letter se-git-${FILE_CLS[x.status]}`}>{FILE_LETTER[x.status]}</span>
+                  </div>
+                ))}
+              {files && files !== 'loading' && files.files.length > 500 && <div class="se-scm-more">… and {files.files.length - 500} more</div>}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+// ---- pane ------------------------------------------------------------------------------------
+
+function Empty({ text, terminal }: { text: string; terminal?: string }) {
+  return (
+    <div class="se-scm se-scm-empty">
+      <Icon name="gitBranch" size={22} />
+      <p>{text}</p>
+      {terminal && app.runInTerminal && (
+        <button class="se-btn small" onClick={() => handOff(terminal)}>
+          <Icon name="terminal" size={13} /> Open in terminal
+        </button>
+      )}
+    </div>
+  );
+}
+
+const REASON: Record<string, string> = {
+  'no-repo': 'This folder is not a git repository.',
+  'no-git': 'git was not found. Install git to use source control.',
+  unsafe: 'git refuses this repository: it belongs to another user (safe.directory).',
+  timeout: 'git took too long to answer.',
+  error: 'git reported an error.',
+};
+
+export function SourceControl() {
+  const s = installGit(); // idempotent: the pane may open before the idle load
+
+  useEffect(() => {
+    s?.refresh(true);
+  }, []);
+  if (!s) return <Empty text={app.workspace.value ? 'Source control is not available here.' : 'Open a folder to use source control.'} />;
+  const st = s.status.value;
+  if (!st) return <div class="se-scm se-scm-loading" aria-busy="true" />;
+  if (!st.ok) return <Empty text={`${REASON[st.reason] ?? REASON.error}${st.message ? ` ${st.message}` : ''}`} terminal={st.reason === 'no-repo' ? 'git init' : undefined} />;
+  const g = groups(st);
+  const clean = !g.conflicts.length && !g.staged.length && !g.changes.length && !g.untracked.length;
+  return (
+    <div class="se-scm" data-testid="scm">
+      <SyncBar s={s} st={st} />
+      {st.state && <div class="se-scm-state">{STATE_TEXT[st.state]}</div>}
+      <CommitBox s={s} st={st} g={g} />
+      <ErrorBox />
+      <div class="se-scm-scroll">
+        <GroupView s={s} group="conflicts" list={g.conflicts} />
+        <GroupView s={s} group="staged" list={g.staged} />
+        <GroupView s={s} group="changes" list={g.changes} />
+        <GroupView s={s} group="untracked" list={g.untracked} />
+        {clean && <div class="se-scm-clean">No changes since the last commit.</div>}
+        <Branches s={s} st={st} />
+        <History st={st} />
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,140 @@
+/* File overview panel (right sidebar). Tokens only (app.css), so themes, accent, corner style and
+   density all apply. The host column paints the background; the panel itself is transparent. */
+.se-ov { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; font-size: 12.5px; color: var(--text-muted); user-select: none; }
+.se-ov-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-bottom: 16px; }
+.se-ov code { font-family: var(--font-mono); }
+
+/* header: the file this overview is about */
+/* As tall as the tab strip: in the window's top-right corner it hosts the integrated frame's controls. */
+.se-ov-head { display: flex; align-items: center; gap: 8px; height: var(--tab-h); padding: 0 6px 0 12px; flex: none; }
+.se-ov-file { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; overflow: hidden; white-space: nowrap; }
+.se-ov-file-name { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.se-ov-file-dir { font-size: 11.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; flex: 1 1 0; min-width: 0; }
+
+/* sections */
+.se-ov-sec { margin-top: 2px; }
+.se-ov-sec + .se-ov-sec { margin-top: 6px; }
+/* Like the shelf's own section heads: quiet title aligned with the rows, chevron only on hover / when closed. */
+.se-ov-sec-head { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px 0 6px; }
+.se-ov-sec-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-faint); text-align: left; }
+.se-ov-sec-toggle:hover { color: var(--text-muted); }
+.se-ov-sec-title { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-ov-chev { color: var(--text-faint); transition: transform 0.12s ease, opacity 0.12s; }
+.se-ov-sec-toggle .se-ov-chev { opacity: 0; }
+.se-ov-sec-toggle:hover .se-ov-chev, .se-ov-sec-toggle:focus-visible .se-ov-chev, .se-ov-sec-toggle[aria-expanded='false'] .se-ov-chev { opacity: 1; }
+.se-ov-sec.open > .se-ov-sec-head .se-ov-chev, .se-ov-chev.open { transform: rotate(90deg); }
+.se-ov-count { flex: none; min-width: 18px; padding: 0 5px; border-radius: var(--radius-pill); font-size: 10.5px; line-height: 16px; text-align: center; font-weight: 500; color: var(--text-faint); background: var(--bg-shelf-inset); font-variant-numeric: tabular-nums; }
+.se-ov-sec-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+.se-ov-hint { padding: 2px 14px 8px 12px; color: var(--text-faint); line-height: 1.5; font-size: 12px; }
+.se-ov-hint code { font-size: 11px; background: var(--code-bg); padding: 0 4px; border-radius: var(--radius-xs); color: var(--text-muted); }
+
+/* segmented mini control (outline depth, "Done") — echoes the shelf's panel switcher */
+.se-ov-levels { display: inline-flex; gap: 1px; padding: 2px; border-radius: var(--radius); background: var(--bg-shelf-inset); }
+.se-ov-lvl-btn { min-width: 20px; height: 18px; padding: 0 5px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.se-ov-sec-actions > .se-ov-lvl-btn { background: var(--bg-shelf-inset); height: 22px; padding: 0 8px; border-radius: var(--radius); }
+.se-ov-lvl-btn:hover { color: var(--text); }
+.se-ov-lvl-btn.on { background: var(--bg-shelf-raised); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14), inset 0 0 0 1px var(--border); }
+.se-ov-sec-actions > .se-ov-lvl-btn.on { color: var(--accent); }
+
+/* rows (shared by every list) */
+.se-ov-list { padding: 0 6px; outline: none; }
+.se-ov-row { position: relative; display: flex; align-items: center; gap: 6px; min-height: calc(var(--row-h) - 4px); padding: 0 6px 0 calc(6px + var(--d, 0) * 12px); border-radius: var(--radius-md); color: var(--text-muted); cursor: pointer; white-space: nowrap; transition: background 0.1s, color 0.1s; }
+.se-ov-row:hover { background: var(--bg-hover); color: var(--text); }
+/* The current section is a raised card, like the open note in the file tree. */
+.se-ov-row.is-active { background: var(--bg-shelf-raised); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14), inset 0 0 0 1px var(--border); }
+.se-ov-row.is-active::before { content: ''; position: absolute; left: 0; top: 5px; bottom: 5px; width: 2px; border-radius: var(--radius-xs); background: var(--accent); }
+.se-ov-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.se-ov-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.se-ov-text em, .se-ov-cmd em { color: var(--text-faint); font-style: italic; font-family: var(--font-ui); }
+.se-ov-meta { flex: none; font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.se-ov-ico { flex: none; display: inline-grid; place-items: center; width: 16px; color: var(--text-faint); }
+.se-ov-mini { flex: none; display: none; place-items: center; min-width: 20px; height: 20px; padding: 0 4px; margin-right: -2px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.se-ov-row:hover .se-ov-mini, .se-ov-row:focus-visible .se-ov-mini { display: inline-grid; }
+.se-ov-mini:hover { background: var(--bg-active); color: var(--text); }
+.se-ov-row:hover .se-ov-mini ~ .se-ov-meta { display: none; }
+
+/* outline */
+.se-ov-twisty { flex: none; display: inline-grid; place-items: center; width: 14px; height: 18px; margin-right: -2px; border-radius: var(--radius-xs); color: var(--text-faint); }
+.se-ov-twisty:hover { background: var(--bg-active); color: var(--text); }
+.se-ov-ol.h1 { color: var(--text); font-weight: 600; }
+.se-ov-ol.h2 { color: var(--text); }
+.se-ov-tag { flex: none; font-size: 9.5px; font-weight: 500; color: var(--text-faint); opacity: 0; }
+.se-ov-row:hover .se-ov-tag, .se-ov-row.is-active .se-ov-tag { opacity: 1; }
+.se-ov-kind { flex: none; display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: var(--radius-xs); font: 700 9.5px/1 var(--font-mono); color: var(--ft-gray); background: color-mix(in srgb, currentColor 14%, transparent); }
+.se-ov-kind.k-class { color: var(--ft-orange); }
+.se-ov-kind.k-type { color: var(--ft-teal); }
+.se-ov-kind.k-fn { color: var(--ft-purple); }
+.se-ov-kind.k-method { color: var(--ft-blue); }
+.se-ov-kind.k-const { color: var(--ft-yellow); }
+.se-ov-kind.k-sql { color: var(--ft-green); }
+
+/* code blocks: language badge + the command itself */
+.se-ov-lang { flex: none; max-width: 64px; overflow: hidden; text-overflow: ellipsis; padding: 0 5px; border-radius: var(--radius-xs); font: 600 10px/16px var(--font-mono); color: var(--ft-gray); background: color-mix(in srgb, currentColor 13%, transparent); }
+.se-ov-lang.t-shell { color: var(--ft-green); }
+.se-ov-lang.t-sql { color: var(--ft-teal); }
+.se-ov-lang.t-php { color: var(--ft-purple); }
+.se-ov-lang.t-ts { color: var(--ft-blue); }
+.se-ov-lang.t-js { color: var(--ft-yellow); }
+.se-ov-lang.t-conf { color: var(--ft-red); }
+.se-ov-lang.t-web { color: var(--ft-orange); }
+.se-ov-cmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--text); }
+.se-ov-code:not(:hover):not(.is-active) .se-ov-cmd { color: var(--text-muted); }
+
+/* tasks */
+.se-ov-progress { display: flex; align-items: center; gap: 8px; padding: 0 12px 6px; }
+.se-ov-bar { flex: 1; height: 4px; border-radius: var(--radius-pill); background: var(--bg-shelf-inset); overflow: hidden; }
+.se-ov-bar > span { display: block; height: 100%; border-radius: inherit; background: var(--success); transition: width 0.2s ease; }
+.se-ov-progress-text { flex: none; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.se-ov-check { flex: none; display: inline-grid; place-items: center; width: 14px; height: 14px; border: 1.5px solid var(--border-strong); border-radius: var(--radius-xs); color: transparent; background: var(--bg); transition: background 0.1s, border-color 0.1s; }
+.se-ov-check:hover { border-color: var(--accent); }
+.se-ov-task.done .se-ov-check { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.se-ov-task.done .se-ov-text { color: var(--text-faint); text-decoration: line-through; }
+
+/* links */
+.se-ov-sub { display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px 0 8px; margin-top: 2px; font-size: 11px; font-weight: 600; color: var(--text-faint); }
+.se-ov-sub-n { font-weight: 500; font-variant-numeric: tabular-nums; }
+.se-ov-sub .se-ov-busy { margin-left: 2px; }
+.se-ov-list > .se-ov-hint { padding-left: 28px; }
+.se-ov-link.unresolved .se-ov-text { color: var(--text-faint); text-decoration: underline dashed var(--border-strong); text-underline-offset: 3px; }
+.se-ov-link.unresolved:hover .se-ov-text { color: var(--accent); }
+.se-ov-name { flex: 0 1 auto; min-width: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 500; }
+.se-ov-ctx { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-faint); font-size: 11.5px; }
+.se-ov-ctx mark { background: transparent; color: var(--accent); }
+.se-ov-back.cont { min-height: calc(var(--row-h) - 8px); }
+.se-ov-busy { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); animation: se-ov-spin 0.8s linear infinite; flex: none; }
+@keyframes se-ov-spin { to { transform: rotate(360deg); } }
+
+/* info */
+.se-ov-facts, .se-ov-props { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 12px; margin: 0; padding: 0 12px 6px; font-size: 12px; }
+.se-ov-facts dt, .se-ov-props dt { color: var(--text-faint); white-space: nowrap; }
+.se-ov-facts dd, .se-ov-props dd { margin: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.se-ov-props { padding-top: 6px; border-top: 1px dashed var(--border); margin: 2px 12px 0; padding-left: 0; padding-right: 0; }
+.se-ov-props dt { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+.se-ov-props dd { color: var(--text-muted); }
+.se-ov-props .se-ov-more { grid-column: 1 / -1; color: var(--text-faint); }
+.se-ov-tags { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 12px 6px; }
+.se-ov-pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 1px 8px; border: 0; border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent); font-size: 11.5px; font-weight: 500; line-height: 18px; }
+button.se-ov-pill:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+
+/* nothing open */
+.se-ov-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 48px 20px; text-align: center; color: var(--text-faint); }
+.se-ov-empty p { margin: 6px 0 0; font-size: 13px; font-weight: 600; color: var(--text-muted); }
+.se-ov-empty span { max-width: 220px; line-height: 1.5; font-size: 12px; }
+
+/* classic sidebar style: flat, IDE-like rows and uppercase section titles */
+.ui-classic .se-ov-head { padding-left: 14px; border-bottom: 1px solid var(--border); } /* continues the strip's rule */
+.ui-classic .se-ov-body { padding-top: 4px; }
+/* VS Code-like: leading, always-visible chevron. */
+.ui-classic .se-ov-sec-toggle .se-ov-chev { order: -1; opacity: 1; }
+.ui-classic .se-ov-sec-head { padding-left: 2px; }
+.ui-classic .se-ov-sec-title { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.ui-classic .se-ov-sec + .se-ov-sec { margin-top: 2px; }
+.ui-classic .se-ov-count, .ui-classic .se-ov-levels, .ui-classic .se-ov-sec-actions > .se-ov-lvl-btn, .ui-classic .se-ov-bar { background: var(--bg-active); }
+.ui-classic .se-ov-lvl-btn.on { background: var(--bg); }
+.ui-classic .se-ov-list { padding: 0 4px; }
+.ui-classic .se-ov-row { min-height: var(--row-h-classic); border-radius: var(--radius-sm); }
+.ui-classic .se-ov-row.is-active { background: var(--accent-soft); box-shadow: none; }
+
+/* Narrow head (e.g. the window controls sit in it): the file name wins over its folder. */
+.se-ov-head { container-type: inline-size; }
+@container (max-width: 210px) { .se-ov-file-dir { display: none; } }
