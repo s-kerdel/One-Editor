@@ -183,3 +183,18 @@ test('screenshots (dark + light) for visual review', async ({ page, ws }) => {
     await expect(dlg).toHaveCount(0);
   }
 });
+
+test('the Settings nav shows the version and build details; Copy puts them on the clipboard', async ({ page, ws, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await openWithEditor(page, ws);
+  const dlg = await openSettings(page);
+  const version = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8')).version as string;
+  const build = dlg.getByTestId('settings-build');
+  await expect(build).toBeVisible();
+  await expect(build).toContainText(`sec-edit ${version}`);
+  await build.getByRole('button', { name: 'Copy build info' }).click();
+  const text = await page.evaluate(() => navigator.clipboard.readText());
+  expect(text).toContain(`sec-edit ${version} (browser)`);
+  expect(text).toMatch(/commit \S+/);
+  expect(text).toMatch(/Chromium \d+/);
+});

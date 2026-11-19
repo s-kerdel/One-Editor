@@ -19,7 +19,20 @@ const run = (cmd, cmdArgs, env = {}) => execFileSync(cmd, cmdArgs, { cwd: root, 
 fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(path.join(out, 'dist'), { recursive: true });
 const node = process.execPath;
-run(node, [path.join(root, 'node_modules/vite/bin/vite.js'), 'build', '--logLevel', 'warn'], { SEC_EDIT_RENDERER_OUT: path.join(out, 'dist/renderer') });
+// Build details for Settings (app/build-info.tsx): commit (+"-dirty" with uncommitted changes) and UTC build time.
+const git = (args) => {
+  try {
+    return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return '';
+  }
+};
+const commit = git(['rev-parse', '--short', 'HEAD']);
+const buildEnv = {
+  VITE_SEC_EDIT_COMMIT: commit ? commit + (git(['status', '--porcelain', '--untracked-files=no']) ? '-dirty' : '') : '',
+  VITE_SEC_EDIT_BUILD_DATE: new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC',
+};
+run(node, [path.join(root, 'node_modules/vite/bin/vite.js'), 'build', '--logLevel', 'warn'], { SEC_EDIT_RENDERER_OUT: path.join(out, 'dist/renderer'), ...buildEnv });
 // Electron main/preload + the browser-mode server (run by the packaged exe: "Start web server").
 run(node, [path.join(root, 'scripts/build-node.mjs'), '--outdir', path.join(out, 'dist')]);
 fs.writeFileSync(

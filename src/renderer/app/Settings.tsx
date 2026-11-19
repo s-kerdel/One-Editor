@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Settings } from '@shared/api';
 import { app } from './app';
 import { addIcons, Icon } from './icons';
+import { BuildFooter } from './build-info';
 import { listCommands, onCommandsChanged, prettyKey } from './commands';
 import { flushSettings, setViewMode, updateSettings, ZOOM_STEPS } from './settings';
 import { SECTIONS, SETTINGS, filterSettings, isChanged, parseList, parseNumber, resetPatch, shortcutRows, valueOf, type Choice, type SectionId, type SettingDef } from './settings-registry';
@@ -520,6 +521,7 @@ export function SettingsOverlay() {
                 <span class="se-set-dot" /> {changedCount} changed
               </div>
             )}
+            <BuildFooter />
           </nav>
           <div ref={body} class="se-settings-body" onScroll={onScroll}>
             {sections.filter((sec) => sec.id !== 'shortcuts').map((sec) => {
