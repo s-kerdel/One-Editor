@@ -332,7 +332,9 @@ export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
     return [...seen.values()];
   }, [path, version, sections.outgoing]);
   const outgoingCount = useMemo(() => (path ? new Set(index.outgoing(path).filter((o) => o.path !== path).map((o) => o.path ?? `?${o.link.target.toLowerCase()}`)).size : 0), [path, version]);
-  const unresolved = useMemo(() => index.unresolvedLinks(), [version]);
+  // Re-read after every edit: the header count is O(1); the list (top 300) only while the section is open.
+  const unresolvedCount = useMemo(() => index.unresolvedCount(), [version]);
+  const unresolved = useMemo(() => (sections.unresolved ? index.unresolvedLinks(300) : []), [version, sections.unresolved]);
   // O(notes) once per index change, cheap per note (adjacency is cached in the index).
   const unlinkedNotes = useMemo(() => {
     const notes = index.notes().map((n) => n.path);
@@ -364,8 +366,8 @@ export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
   );
 
   const unresolvedSection = (
-    <Section id="unresolved" title="Unresolved links in folder" count={unresolved.length}>
-      {unresolved.length === 0 ? (
+    <Section id="unresolved" title="Unresolved links in folder" count={unresolvedCount}>
+      {unresolvedCount === 0 ? (
         <Empty>Every link points to an existing file.</Empty>
       ) : (
         unresolved.slice(0, 300).map((u) => (

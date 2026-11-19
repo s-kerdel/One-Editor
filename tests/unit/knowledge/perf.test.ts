@@ -73,6 +73,32 @@ describe('performance', { retry: 2 }, () => {
     expect(tIncremental).toBeLessThan(100);
   });
 
+  it('knowledge panels re-read within a frame after every edit (unresolved count + top 300, tag tree)', (ctx) => {
+    const idx = new KnowledgeIndex();
+    idx.setFiles(data.map(([p]) => p));
+    for (const [p, t] of data) idx.update(p, t);
+    idx.backlinks(data[0][0]); // derive once (as after the initial build)
+    const total = idx.unresolvedLinks().length;
+    const meter = cpuLoadMeter();
+    const per: number[] = [];
+    for (let k = 0; k < 20; k++) {
+      const p = data[100 + k][0];
+      idx.update(p, `${data[100 + k][1]}\nedit ${k} [[Missing thing ${k % 3}]]`);
+      const t0 = performance.now();
+      const count = idx.unresolvedCount();
+      const top = idx.unresolvedLinks(300);
+      idx.tags();
+      per.push(performance.now() - t0);
+      expect(top).toHaveLength(300);
+      expect(count).toBeGreaterThanOrEqual(total);
+    }
+    per.sort((x, y) => x - y);
+    console.log(`[perf] panels after an edit @${N} (${total} targets): median ${per[10].toFixed(1)} ms, max ${per[19].toFixed(1)} ms`);
+    const load = meter.stop();
+    ctx.skip(load.busy, busyNote(load));
+    expect(per[10]).toBeLessThan(16);
+  });
+
   it('rewrites links across 5k notes quickly', (ctx) => {
     const meter = cpuLoadMeter();
     const files = data.map(([p]) => p);

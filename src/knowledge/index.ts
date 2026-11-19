@@ -122,6 +122,39 @@ interface Derived {
   unresolvedBy: Map<string, Set<string>>;
   /** Unique notes each note links to (filled on demand, dropped whenever that note is re-linked). */
   outNotes: Map<string, readonly string[]>;
+  /**
+   * Unresolved links grouped by lower-case target: built on the first unresolved query (a derive does
+   * not pay for it), then kept in step by link / unlink / patch (panels read them after every edit).
+   */
+  groups: Map<string, UGroup> | null;
+  /** Unresolved keys per note (with `groups`): dropping a note's entries never sweeps every group. */
+  keysOf: Map<string, Set<string>> | null;
+}
+
+type USource = UnresolvedLink['sources'][number];
+interface UGroup {
+  /** Sources per note, each with the link text as written. */
+  by: Map<string, Array<USource & { text: string }>>;
+  n: number;
+  /** Display text: as written in the first source (by path, line, col); cached until the group changes. */
+  target: string | null;
+}
+
+// Same order as String#localeCompare without arguments, much cheaper per call.
+const collator = new Intl.Collator();
+const cmpSource = (a: USource, b: USource) => collator.compare(a.from, b.from) || a.line - b.line || a.col - b.col;
+
+function addUnresolved(d: Derived, from: string, l: LinkRef, key: string) {
+  let g = d.groups!.get(key);
+  if (!g) d.groups!.set(key, (g = { by: new Map(), n: 0, target: null }));
+  let list = g.by.get(from);
+  if (!list) g.by.set(from, (list = []));
+  list.push({ from, line: l.line, col: l.col, length: l.length, text: l.target });
+  g.n++;
+  g.target = null;
+  let keys = d.keysOf!.get(from);
+  if (!keys) d.keysOf!.set(from, (keys = new Set()));
+  keys.add(key);
 }
 
 const NO_PATHS: readonly string[] = Object.freeze([]);
@@ -208,6 +241,9 @@ export class KnowledgeIndex implements KnowledgeApi {
   private unresolvedCache: { version: number; list: UnresolvedLink[] } | null = null;
   /** lower-case tag → notes, kept in step with `infos` (a note switch or an edit never rescans all notes). */
   private readonly tagIdx = new Map<string, { tag: string; notes: Set<string> }>();
+  /** Bumped whenever tagIdx changes: tags() is cached by it (typing rarely changes a note's tags). */
+  private tagVersion = 0;
+  private tagsCache: { v: number; tree: TagNode[] } | null = null;
   private readonly listeners = new Set<() => void>();
   version = 0;
 
@@ -337,6 +373,7 @@ export class KnowledgeIndex implements KnowledgeApi {
   clear(): void {
     this.infos.clear();
     this.tagIdx.clear();
+    this.tagVersion++;
     this.texts.clear();
     this.snippets.clear();
     this.hashes.clear();
@@ -391,7 +428,7 @@ export class KnowledgeIndex implements KnowledgeApi {
         if (l) l.push(n.path);
         else aliases.set(k, [n.path]);
       }
-    const d: Derived = { aliases, resolver: createLinkResolver([...this.fileSet], aliases), resolved: new Map(), incoming: new Map(), unresolvedBy: new Map(), outNotes: new Map() };
+    const d: Derived = { aliases, resolver: createLinkResolver([...this.fileSet], aliases), resolved: new Map(), incoming: new Map(), unresolvedBy: new Map(), outNotes: new Map(), groups: null, keysOf: null };
     for (const n of this.infos.values()) this.link(d, n);
     return (this.derived = d);
   }
@@ -407,8 +444,44 @@ export class KnowledgeIndex implements KnowledgeApi {
       const set = map.get(key);
       if (set) set.add(n.path);
       else map.set(key, new Set([n.path]));
+      if (!r && l.target && d.groups) addUnresolved(d, n.path, l, key);
     }
     d.resolved.set(n.path, out);
+  }
+
+  /** The unresolved groups, built from the derived links on first use. */
+  private groupsOf(d: Derived): Map<string, UGroup> {
+    if (d.groups) return d.groups;
+    d.groups = new Map();
+    d.keysOf = new Map();
+    for (const n of this.infos.values()) {
+      const res = d.resolved.get(n.path);
+      if (!res) continue;
+      for (let i = 0; i < n.links.length; i++) {
+        const l = n.links[i];
+        if (!res[i] && l.target) addUnresolved(d, n.path, l, l.target.toLowerCase());
+      }
+    }
+    return d.groups;
+  }
+
+  /** Forget a note's unresolved links (groups + unresolvedBy) via its own keys; false while no groups exist. */
+  private dropUnresolved(d: Derived, path: string): boolean {
+    if (!d.groups || !d.keysOf) return false;
+    const keys = d.keysOf.get(path);
+    if (!keys) return true;
+    for (const key of keys) {
+      d.unresolvedBy.get(key)?.delete(path);
+      const g = d.groups.get(key);
+      const list = g?.by.get(path);
+      if (!g || !list) continue;
+      g.n -= list.length;
+      g.by.delete(path);
+      g.target = null;
+      if (!g.by.size) d.groups.delete(key);
+    }
+    d.keysOf.delete(path);
+    return true;
   }
 
   private unlink(d: Derived, path: string, links: readonly LinkRef[] | undefined) {
@@ -420,6 +493,7 @@ export class KnowledgeIndex implements KnowledgeApi {
       if (r) d.incoming.get(r)?.delete(path);
       else if (links?.[i]) d.unresolvedBy.get(links[i].target.toLowerCase())?.delete(path);
     }
+    this.dropUnresolved(d, path);
     d.resolved.delete(path);
   }
 
@@ -449,12 +523,12 @@ export class KnowledgeIndex implements KnowledgeApi {
       }
     }
     // The edited note's own old links must be unlinked by position, but its LinkRefs are already
-    // replaced — sweep the unresolved sets instead (rare + small).
+    // replaced: drop them via the keys recorded at link time, or (no groups yet) sweep the unresolved sets.
     const res = d.resolved.get(path);
     d.outNotes.delete(path);
     if (res) {
       for (const r of res) if (r) d.incoming.get(r)?.delete(path);
-      if (res.includes(null)) for (const set of d.unresolvedBy.values()) set.delete(path);
+      if (!this.dropUnresolved(d, path) && res.includes(null)) for (const set of d.unresolvedBy.values()) set.delete(path);
       d.resolved.delete(path);
     }
     affected.delete(path);
@@ -558,29 +632,78 @@ export class KnowledgeIndex implements KnowledgeApi {
     return n.links.map((link, i) => ({ link, path: res[i] ?? null }));
   }
 
-  unresolvedLinks(): UnresolvedLink[] {
-    if (this.unresolvedCache?.version === this.version) return this.unresolvedCache.list;
+  /**
+   * How many distinct unresolved targets there are (a collapsed section header shows it after every
+   * edit): the groups' size once built, else a scan of the per-target sets (~1 ms at 150k, no allocation).
+   */
+  unresolvedCount(): number {
     const d = this.d();
-    const map = new Map<string, UnresolvedLink>();
-    const seen = new Set<string>();
-    for (const sources of d.unresolvedBy.values())
-      for (const from of sources) {
-        if (seen.has(from)) continue;
-        seen.add(from);
-        const links = this.infos.get(from)?.links ?? [];
-        const res = d.resolved.get(from) ?? [];
-        for (let i = 0; i < links.length; i++) {
-          const l = links[i];
-          if (res[i] || !l.target) continue;
-          const key = l.target.toLowerCase();
-          let u = map.get(key);
-          if (!u) map.set(key, (u = { target: l.target, sources: [] }));
-          u.sources.push({ from, line: l.line, col: l.col, length: l.length });
-        }
+    if (d.groups) return d.groups.size;
+    let n = 0;
+    for (const [key, set] of d.unresolvedBy) if (key && set.size) n++;
+    return n;
+  }
+
+  /**
+   * Unresolved targets, most-linked first (then by name), sources by path / line / col.
+   * `limit`: only the first `limit` of that order — cost ~O(targets) per call instead of a full sort
+   * (a panel showing the top few hundred re-reads this after every edit).
+   */
+  unresolvedLinks(limit?: number): UnresolvedLink[] {
+    if (limit === undefined && this.unresolvedCache?.version === this.version) return this.unresolvedCache.list;
+    const d = this.d();
+    const label = (g: UGroup) => {
+      if (g.target !== null) return g.target;
+      let best: (USource & { text: string }) | null = null;
+      for (const list of g.by.values()) for (const s of list) if (!best || cmpSource(s, best) < 0) best = s;
+      return (g.target = best!.text);
+    };
+    const cmpGroup = (a: UGroup, b: UGroup) => b.n - a.n || collator.compare(label(a), label(b));
+    let picked: UGroup[];
+    const groups = this.groupsOf(d);
+    if (limit === undefined || limit >= groups.size) picked = [...groups.values()].sort(cmpGroup);
+    else {
+      // Buckets by link count (small integers), then only the bucket that crosses `limit` is ranked by name.
+      const byN = new Map<number, UGroup[]>();
+      for (const g of groups.values()) {
+        const b = byN.get(g.n);
+        if (b) b.push(g);
+        else byN.set(g.n, [g]);
       }
-    const list = [...map.values()].sort((a, b) => b.sources.length - a.sources.length || a.target.localeCompare(b.target));
-    for (const u of list) u.sources.sort((a, b) => a.from.localeCompare(b.from) || a.line - b.line || a.col - b.col);
-    this.unresolvedCache = { version: this.version, list };
+      picked = [];
+      for (const n of [...byN.keys()].sort((a, b) => b - a)) {
+        const bucket = byN.get(n)!;
+        const need = limit - picked.length;
+        if (need <= 0) break;
+        if (bucket.length <= need) {
+          picked.push(...bucket.sort(cmpGroup));
+          continue;
+        }
+        // The `need` first names of a big bucket: most candidates fail one compare with the current last.
+        const top: UGroup[] = [];
+        for (const g of bucket) {
+          if (top.length === need && cmpGroup(g, top[need - 1]) >= 0) continue;
+          let lo = 0;
+          let hi = top.length;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (cmpGroup(top[mid], g) <= 0) lo = mid + 1;
+            else hi = mid;
+          }
+          top.splice(lo, 0, g);
+          if (top.length > need) top.pop();
+        }
+        picked.push(...top);
+      }
+    }
+    const list: UnresolvedLink[] = picked.map((g) => ({
+      target: label(g),
+      sources: [...g.by.values()]
+        .flat()
+        .sort(cmpSource)
+        .map(({ from, line, col, length }) => ({ from, line, col, length })),
+    }));
+    if (limit === undefined) this.unresolvedCache = { version: this.version, list };
     return list;
   }
 
@@ -589,6 +712,7 @@ export class KnowledgeIndex implements KnowledgeApi {
     this.infos.set(path, info);
     if (old && sameList(old.tags, info.tags)) return;
     if (old) this.untag(path, old.tags);
+    this.tagVersion++;
     for (const t of info.tags) {
       const key = t.toLowerCase();
       let e = this.tagIdx.get(key);
@@ -606,6 +730,7 @@ export class KnowledgeIndex implements KnowledgeApi {
   }
 
   private untag(path: string, tags: readonly string[]): void {
+    if (tags.length) this.tagVersion++;
     for (const t of tags) {
       const key = t.toLowerCase();
       const e = this.tagIdx.get(key);
@@ -639,7 +764,9 @@ export class KnowledgeIndex implements KnowledgeApi {
     return out.sort(compareMentions);
   }
 
+  /** The tag tree (shared between calls until a note's tags change: callers must not mutate it). */
   tags(): TagNode[] {
+    if (this.tagsCache?.v === this.tagVersion) return this.tagsCache.tree;
     const roots: TagNode[] = [];
     const nodes = new Map<string, TagNode & { set: Set<string> }>();
     const ensure = (full: string): TagNode & { set: Set<string> } => {
@@ -665,7 +792,9 @@ export class KnowledgeIndex implements KnowledgeApi {
       list
         .map((n) => ({ name: n.name, tag: n.tag, count: (n as TagNode & { set: Set<string> }).set.size, children: finish(n.children) }))
         .sort((a, b) => a.name.localeCompare(b.name));
-    return finish(roots);
+    const tree = finish(roots);
+    this.tagsCache = { v: this.tagVersion, tree };
+    return tree;
   }
 
   /** Notes tagged `tag` or a nested tag (`project` matches `project/x`). Leading '#' optional. */

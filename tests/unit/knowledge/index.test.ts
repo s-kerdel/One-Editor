@@ -256,3 +256,74 @@ describe('graph', () => {
     expect(new Set([...sim.x].map((v) => v.toFixed(2))).size).toBeGreaterThan(10);
   });
 });
+
+describe('unresolved links: incremental groups and the top-N query', () => {
+  // Skewed link counts (many ties), case variants of one target, edits that add / remove / re-resolve.
+  function vault(n: number): Record<string, string> {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < n; i++) {
+      const links = [`[[Missing ${i % 7}]]`, `[[missing ${i % 5}]]`, `[[Gap ${(i * 13) % 97}]]`, `[[Note ${(i * 7) % n}]]`, `[x](../nowhere/${i % 31}.md)`, i % 3 ? `[[Solo ${i}]]` : ''];
+      files[`f${i % 9}/Note ${i}.md`] = `# Note ${i}\n${links.join(' ')}\nline two [[Missing ${i % 7}]]`;
+    }
+    return files;
+  }
+  const expectTopN = (idx: KnowledgeIndex) => {
+    const all = idx.unresolvedLinks();
+    expect(idx.unresolvedCount()).toBe(all.length);
+    for (const k of [1, 3, 10, 50, 120, all.length - 1, all.length, all.length + 5]) expect(idx.unresolvedLinks(k), `top ${k}`).toEqual(all.slice(0, k));
+  };
+
+  it('top-N is exactly the head of the full order; count matches; stays so through edits', () => {
+    const files = vault(400);
+    const idx = build(files);
+    expectTopN(idx);
+    const steps: Array<[string, string | null]> = [
+      ['f1/Note 10.md', '# Note 10\n[[Missing 3]] [[Brand new gap]] [[MISSING 3]]'],
+      ['f2/Note 11.md', '# Note 11\nno links any more'],
+      ['f0/Missing 3.md', '# now it exists'], // resolves a popular target (new file → re-derive)
+      ['f3/Note 12.md', null], // removed
+      ['f1/Note 10.md', '# Note 10\n[[Solo 10]] [[solo 10]] [[Gap 5]]'],
+    ];
+    const current: Record<string, string> = { ...files };
+    for (const [p, t] of steps) {
+      if (t === null) {
+        idx.remove(p);
+        delete current[p];
+      } else {
+        idx.update(p, t);
+        current[p] = t;
+      }
+      const fresh = build(current);
+      expect(fresh.unresolvedCount(), `count before any list (scan path) after ${p}`).toBe(fresh.unresolvedLinks().length);
+      expect(idx.unresolvedLinks(), `incremental == fresh after ${p}`).toEqual(fresh.unresolvedLinks());
+      expectTopN(idx);
+    }
+  });
+});
+
+describe('tag tree cache', () => {
+  it('is shared while tags are unchanged and rebuilt on every kind of tag change', () => {
+    const idx = build({ 'a.md': '#x/y text', 'b.md': '---\ntags: [x, z]\n---\nbody', 'c.md': 'no tags' });
+    const first = idx.tags();
+    idx.update('a.md', '#x/y text, edited without touching tags');
+    idx.update('c.md', 'still no tags');
+    expect(idx.tags(), 'plain edits keep the cached tree').toBe(first);
+    const steps: Array<[string, () => void]> = [
+      ['tag added', () => idx.update('c.md', 'now #new')],
+      ['tag removed', () => idx.update('a.md', 'text only')],
+      ['frontmatter tags changed', () => idx.update('b.md', '---\ntags: [x/deep]\n---\nbody')],
+      ['note removed', () => idx.remove('c.md')],
+      ['note renamed', () => void idx.rename('b.md', 'moved/b.md')],
+      ['cleared', () => idx.clear()],
+    ];
+    let prev = idx.tags();
+    for (const [what, step] of steps) {
+      step();
+      const now = idx.tags();
+      expect(now, what).not.toBe(prev);
+      const current = Object.fromEntries(idx.files().filter((f) => idx.text(f) !== undefined).map((f) => [f, idx.text(f)!]));
+      expect(now, `${what}: same as a fresh index`).toEqual(build(current).tags());
+      prev = now;
+    }
+  });
+});
