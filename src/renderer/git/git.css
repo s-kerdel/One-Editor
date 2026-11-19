@@ -73,3 +73,10 @@
 .se-git-banner-dim { color: var(--text-muted); }
 .se-git-banner-btn { border: 0; background: transparent; color: var(--accent); font: inherit; padding: 2px 6px; border-radius: var(--radius-sm); cursor: pointer; }
 .se-git-banner-btn:hover { background: var(--bg-hover); }
+
+/* Branch item: a subtle spinner while git runs (only after 400 ms, so quick runs never flicker). */
+.se-git-spin { display: none; width: 9px; height: 9px; border: 1.5px solid var(--text-faint); border-top-color: transparent; border-radius: var(--radius-pill); flex: none; }
+.se-git-branch.se-git-busy .se-git-spin { display: inline-block; opacity: 0; animation: se-git-spin 0.9s linear infinite, se-git-spin-in 0.01s linear 0.4s forwards; }
+@keyframes se-git-spin { to { transform: rotate(360deg); } }
+@keyframes se-git-spin-in { to { opacity: 0.8; } }
+@media (prefers-reduced-motion: reduce) { .se-git-branch.se-git-busy .se-git-spin { animation: se-git-spin-in 0.01s linear 0.4s forwards; } }

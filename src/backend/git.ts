@@ -2,7 +2,9 @@
 // Runs the user's own `git` executable, so their config, SSH keys and credential manager apply.
 //
 // Safety rules (nothing here may mutate a repository or run repository-supplied programs):
-//  - only read commands; GIT_OPTIONAL_LOCKS=0 so `status` never rewrites the index (→ no index hooks);
+//  - only read commands; GIT_OPTIONAL_LOCKS=0 so `status` never rewrites the index (→ no index hooks).
+//    One exception, opt-out (`git.refreshIndex`): refreshIndex() re-records file timestamps in the index
+//    (`update-index --refresh`, hooks off, never while index.lock exists, never killed);
 //  - `core.fsmonitor` is forced off and filter drivers defined in the repo's *own* config are neutralised:
 //    a downloaded folder with a hostile `.git/config` must not get code execution by being opened;
 //  - `diff` runs with --no-ext-diff --no-textconv;
@@ -14,11 +16,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import {
   GIT_REV_RE,
   type GitActionResult,
   type GitBranch,
+  type GitBranchDetails,
   type GitBranchList,
+  type GitRemoteBranchPage,
   type GitCommitFiles,
   type GitJobError,
   type GitJobTag,
@@ -31,7 +36,19 @@ import {
   type GitStatusResult,
   type GitUnavailable,
 } from '../shared/git';
-import { BRANCH_FORMAT, LOG_FORMAT, gitMessage, isAuthError, parseBranches, parseLog, parseNameStatus, terminalCommand } from './git-ops';
+import { DETAIL_FORMAT, LOCAL_BRANCH_FORMAT, LOG_FORMAT, TRACE2_ENV, gitMessage, isAuthError, parseDetails, parseLocalBranches, parseLog, parseNameStatus, parseRemoteRefs, splitTrace2, terminalCommand } from './git-ops';
+import { gitSubcommand, logGitActivity } from './git-activity';
+import { WslGit, parseNetUse, parseWslPath, resolveMappedDrive, toUncPath, type WslPath } from './git-wsl';
+
+let netUse: Promise<Map<string, string>> | null = null;
+/** Drive letters mapped to network shares (`net use`), once per process. */
+function mappedDrives(): Promise<Map<string, string>> {
+  netUse ??= run(`${process.env.SystemRoot || 'C:\\Windows'}\\System32\\net.exe`, ['use'], { cwd: undefined, env: process.env, timeoutMs: 5000, maxBytes: 256 * 1024, quiet: true }).then(
+    (r) => (r.code === 0 ? parseNetUse(r.stdout.toString('utf8')) : new Map()),
+    () => new Map(),
+  );
+  return netUse;
+}
 import { normalize } from '../shared/paths';
 import { BackendFailure } from './errors';
 import { resolveInside } from './pathsafe';
@@ -48,6 +65,8 @@ const MIN_VERSION: [number, number] = [2, 18]; // porcelain v2, --absolute-git-d
 const T_QUICK = 5_000;
 const T_STATUS = 20_000;
 const T_READ = 10_000;
+/** Status output is parsed in slices this big when it arrives all at once. */
+const FEED_SLICE = 256 * 1024;
 /** Background lists (branches / history / commit files): generous, but visible when exceeded. */
 const T_LOW = 20_000;
 /** Background git processes at a time: a slow `git log` can never fan out over status / diffs. */
@@ -148,7 +167,8 @@ const REPO_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRE
 
 export function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(base)) if (!REPO_ENV.includes(k.toUpperCase())) env[k] = v;
+  // GIT_TRACE*: trace output on stderr would garble the error messages we read there.
+  for (const [k, v] of Object.entries(base)) if (!REPO_ENV.includes(k.toUpperCase()) && !/^GIT_TRACE/i.test(k)) env[k] = v;
   env.GIT_TERMINAL_PROMPT = '0';
   env.GIT_OPTIONAL_LOCKS = '0';
   env.GCM_INTERACTIVE = 'never';
@@ -172,6 +192,7 @@ export interface RunResult {
 interface RunOptions {
   cwd: string | undefined;
   env: NodeJS.ProcessEnv;
+  /** 0 = no timeout, never killed (index refresh: a killed git can leave index.lock behind). */
   timeoutMs: number;
   maxBytes: number;
   input?: string;
@@ -182,12 +203,19 @@ interface RunOptions {
   signal?: AbortSignal;
   /** Below-normal OS priority: background lists must not steal CPU / disk from status and diffs. */
   low?: boolean;
+  /** Activity log: why this run happened. */
+  trigger?: string;
+  /** Stream stdout here instead of collecting it (the result's stdout is then empty). */
+  onChunk?: (chunk: Buffer) => void;
+  /** Not logged (the caller logs it, e.g. the WSL runner). */
+  quiet?: boolean;
 }
 
 export function run(git: string, args: string[], o: RunOptions): Promise<RunResult> {
   return new Promise((resolve) => {
     if (o.signal?.aborted) return resolve({ code: null, stdout: Buffer.alloc(0), stderr: '', timedOut: false, overflow: false, aborted: true });
     let child: ReturnType<typeof spawn>;
+    const t0 = performance.now();
     try {
       child = spawn(git, args, { cwd: o.cwd, env: o.env, windowsHide: true, detached: !!o.detached && process.platform !== 'win32', stdio: [o.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
     } catch (error: any) {
@@ -209,10 +237,13 @@ export function run(git: string, args: string[], o: RunOptions): Promise<RunResu
         child.kill();
       }
     };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      kill();
-    }, o.timeoutMs);
+    const timer =
+      o.timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            kill();
+          }, o.timeoutMs)
+        : undefined;
     const onAbort = () => {
       aborted = true;
       kill();
@@ -230,15 +261,17 @@ export function run(git: string, args: string[], o: RunOptions): Promise<RunResu
         overflow = true;
         chunks.length = 0;
         child.kill();
-      } else chunks.push(c);
+      } else if (o.onChunk) o.onChunk(c);
+      else chunks.push(c);
     });
     child.stderr!.on('data', (c: Buffer) => {
-      if (stderr.length < 8192) stderr += c.toString('utf8');
+      if (stderr.length < 64 * 1024) stderr += c.toString('utf8'); // status: ~8 KB of trace2 events
     });
     child.on('error', (e) => (error = e));
     child.on('close', (code) => {
       clearTimeout(timer);
       o.signal?.removeEventListener('abort', onAbort);
+      if (!o.quiet) logGitActivity({ kind: gitSubcommand(args), trigger: o.trigger, ms: Math.round(performance.now() - t0), repo: o.cwd ?? '', ok: code === 0 || code === 1, at: Date.now() });
       resolve({ code, stdout: Buffer.concat(chunks), stderr, timedOut, overflow, error, ...(aborted ? { aborted } : {}) });
     });
     if (o.input !== undefined) {
@@ -281,76 +314,118 @@ function fieldsAndPath(rec: string, n: number): { f: string[]; path: string } | 
 }
 
 /**
- * `git status --porcelain=v2 -z --branch` → branch + entries with workspace-relative paths.
+ * `git status --porcelain=v2 -z --branch` → branch + entries with workspace-relative paths, parsed as the
+ * bytes arrive (chunk by chunk: a 50k-entry status never blocks the main thread in one go).
  * Git prints paths relative to the repository root; `prefix` ("docs/" or "") is the workspace folder
  * inside the repository, entries outside it are dropped.
  */
-export function parsePorcelainV2(out: string, prefix = '', maxEntries = GIT_MAX_ENTRIES): ParsedStatus {
-  const branch: GitBranch = { head: null, oid: null, detached: false, upstream: null, ahead: 0, behind: 0 };
-  const entries: GitEntry[] = [];
-  let truncated = false;
-  const pre = prefix && !prefix.endsWith('/') ? prefix + '/' : prefix;
-  const toWs = (p: string): { path: string; dir: boolean } | null => {
+export class PorcelainStream {
+  readonly branch: GitBranch = { head: null, oid: null, detached: false, upstream: null, ahead: 0, behind: 0 };
+  readonly entries: GitEntry[] = [];
+  truncated = false;
+  private decoder = new StringDecoder('utf8');
+  private rest = '';
+  /** A rename record waits for its source path (the next NUL field); e = null: dropped (outside). */
+  private awaiting: { e: GitEntry | null; renamed: boolean } | null = null;
+  private readonly pre: string;
+
+  constructor(
+    prefix = '',
+    private readonly maxEntries = GIT_MAX_ENTRIES,
+  ) {
+    this.pre = prefix && !prefix.endsWith('/') ? prefix + '/' : prefix;
+  }
+
+  push(chunk: Buffer | string) {
+    const text = this.rest + (typeof chunk === 'string' ? chunk : this.decoder.write(chunk));
+    const recs = text.split('\0');
+    this.rest = recs.pop() ?? '';
+    for (const r of recs) this.record(r);
+  }
+
+  end(): ParsedStatus {
+    const tail = this.rest + this.decoder.end();
+    this.rest = '';
+    if (tail) this.record(tail);
+    if (this.awaiting?.e) this.add(this.awaiting.e); // source missing: keep the entry
+    this.awaiting = null;
+    return { branch: this.branch, entries: this.entries, truncated: this.truncated };
+  }
+
+  private toWs(p: string): { path: string; dir: boolean } | null {
     const dir = p.endsWith('/');
     const clean = dir ? p.slice(0, -1) : p;
-    if (!pre) return { path: clean, dir };
-    if (clean + '/' === pre) return { path: '', dir }; // the workspace folder itself (untracked/ignored as a whole)
-    if (!clean.startsWith(pre)) return null;
-    return { path: clean.slice(pre.length), dir };
-  };
-  const push = (e: GitEntry) => {
-    if (entries.length >= maxEntries) truncated = true;
-    else entries.push(e);
-  };
-  const recs = out.split('\0');
-  for (let i = 0; i < recs.length; i++) {
-    const rec = recs[i];
-    if (!rec) continue;
+    if (!this.pre) return { path: clean, dir };
+    if (clean + '/' === this.pre) return { path: '', dir }; // the workspace folder itself (untracked/ignored as a whole)
+    if (!clean.startsWith(this.pre)) return null;
+    return { path: clean.slice(this.pre.length), dir };
+  }
+
+  private add(e: GitEntry) {
+    if (this.entries.length >= this.maxEntries) this.truncated = true;
+    else this.entries.push(e);
+  }
+
+  private record(rec: string) {
+    if (this.awaiting) {
+      // -z: the rename source is its own field
+      const { e, renamed } = this.awaiting;
+      this.awaiting = null;
+      if (!e) return;
+      const from = this.toWs(rec);
+      e.from = from ? from.path : null;
+      if (renamed && e.state !== 'deleted') e.state = 'renamed';
+      this.add(e);
+      return;
+    }
+    if (!rec) return;
     const kind = rec[0];
     if (kind === '#') {
       const line = rec.replace(/\r$/, '');
       const sp = line.indexOf(' ', 2);
       const key = sp === -1 ? line.slice(2) : line.slice(2, sp);
       const val = sp === -1 ? '' : line.slice(sp + 1);
-      if (key === 'branch.oid') branch.oid = val === '(initial)' ? null : val;
+      const b = this.branch;
+      if (key === 'branch.oid') b.oid = val === '(initial)' ? null : val;
       else if (key === 'branch.head') {
-        branch.detached = val === '(detached)';
-        branch.head = branch.detached ? null : val;
-      } else if (key === 'branch.upstream') branch.upstream = val;
+        b.detached = val === '(detached)';
+        b.head = b.detached ? null : val;
+      } else if (key === 'branch.upstream') b.upstream = val;
       else if (key === 'branch.ab') {
         const m = /^\+(\d+) -(\d+)$/.exec(val);
-        if (m) [branch.ahead, branch.behind] = [Number(m[1]), Number(m[2])];
+        if (m) [b.ahead, b.behind] = [Number(m[1]), Number(m[2])];
       }
-      continue;
+      return;
     }
-    if (rec[1] !== ' ') continue; // unknown record type: be lenient
+    if (rec[1] !== ' ') return; // unknown record type: be lenient
     if (kind === '?' || kind === '!') {
-      const ws = toWs(rec.slice(2));
-      if (ws) push({ path: ws.path, state: kind === '?' ? 'untracked' : 'ignored', ...(ws.dir ? { dir: true } : {}) });
-      continue;
+      const ws = this.toWs(rec.slice(2));
+      if (ws) this.add({ path: ws.path, state: kind === '?' ? 'untracked' : 'ignored', ...(ws.dir ? { dir: true } : {}) });
+      return;
     }
-    if (kind === '1' || kind === '2' || kind === 'u') {
-      const parsed = fieldsAndPath(rec, kind === '1' ? 8 : kind === '2' ? 9 : 10);
-      const orig = kind === '2' ? recs[++i] : undefined; // -z: the rename source is its own field
-      if (!parsed) continue;
-      const ws = toWs(parsed.path);
-      if (!ws) continue;
-      const [xy, sub] = parsed.f.slice(1, 3);
-      const e: GitEntry = { path: ws.path, ...stateOf(xy) };
-      if (kind === 'u') e.state = 'conflicted';
-      else if (kind === '2') {
-        if (xy[0] === 'R' && e.state !== 'deleted') e.state = 'renamed';
-        const from = orig !== undefined ? toWs(orig) : null;
-        e.from = from ? from.path : null;
-      }
-      if (sub?.[0] === 'S') {
-        e.submodule = true;
-        if (e.state !== 'conflicted' && e.state !== 'deleted' && e.state !== 'added') e.state = 'modified';
-      }
-      push(e);
+    if (kind !== '1' && kind !== '2' && kind !== 'u') return;
+    const parsed = fieldsAndPath(rec, kind === '1' ? 8 : kind === '2' ? 9 : 10);
+    const ws = parsed && this.toWs(parsed.path);
+    const [xy, sub] = parsed ? parsed.f.slice(1, 3) : ['', ''];
+    const e: GitEntry | null = ws ? { path: ws.path, ...stateOf(xy) } : null;
+    if (e && kind === 'u') e.state = 'conflicted';
+    if (e && sub?.[0] === 'S') {
+      e.submodule = true;
+      if (e.state !== 'conflicted' && e.state !== 'deleted' && e.state !== 'added') e.state = 'modified';
     }
+    if (kind === '2') {
+      // Consume the source field even when this entry is dropped (outside the workspace).
+      this.awaiting = { e, renamed: xy[0] === 'R' };
+      return;
+    }
+    if (e) this.add(e);
   }
-  return { branch, entries, truncated };
+}
+
+export function parsePorcelainV2(out: string, prefix = '', maxEntries = GIT_MAX_ENTRIES): ParsedStatus {
+  const s = new PorcelainStream(prefix, maxEntries);
+  s.push(out);
+  return s.end();
 }
 
 // ---- repository-local config that would run programs ---------------------------------------
@@ -389,7 +464,46 @@ export interface GitServiceOptions {
   watchDebounceMs?: number;
   /** Timeout for background lists (branches / history / commit files). */
   lowTimeoutMs?: number;
+  /** Repositories under \\wsl.localhost\<distro>\…: run git inside the distro ('auto', default) or not. */
+  wsl?: {
+    mode?: 'auto' | 'off';
+    /** wsl.exe (tests: a fake). */
+    exe?: string;
+    /** Persistent helper (default on). */
+    helper?: boolean;
+    /** Linux path in the distro → path this process can open (default: the \\wsl.localhost UNC path). */
+    hostPath?: (w: WslPath, linux: string) => string;
+  };
 }
+
+interface ExecOptions {
+  timeoutMs: number;
+  maxBytes: number;
+  input?: string;
+  signal?: AbortSignal;
+  low?: boolean;
+  trigger?: string;
+  onChunk?: (chunk: Buffer) => void;
+  /** Network: credential helpers may show their own window (GCM); never through the WSL helper. */
+  net?: boolean;
+  /** Mutating / long-running: per-call process (not the WSL helper). */
+  direct?: boolean;
+  env?: NodeJS.ProcessEnv;
+  detached?: boolean;
+  /** trace2 event counters on stderr (status: how many unchanged files git had to re-read). */
+  trace?: boolean;
+}
+
+/** Stale stat cache in the index, seen by the last status. */
+export interface IndexHint {
+  /** Unchanged files git re-read (stat data out of date); null = git did not say (old git). */
+  wasted: number | null;
+  ms: number;
+}
+
+export type IndexRefreshResult = { ok: true; ms: number } | { ok: false; skipped: 'locked' | 'busy' | 'unavailable' } | { ok: false; message: string };
+
+const TRACE2_LIST = Object.entries(TRACE2_ENV).map(([k, v]) => `${k}=${v}`);
 
 interface Repo {
   ok: true;
@@ -422,14 +536,80 @@ export class GitService {
   private disposed = false;
   private readonly platform: NodeJS.Platform;
   private readonly env: NodeJS.ProcessEnv;
+  /** Path rules of the platform the paths belong to (win32 rules are tested on Linux). */
+  private readonly P: PlatformPath;
+  /** The workspace is inside a WSL distro (\\wsl.localhost\<distro>\…, or a drive letter mapped there). */
+  wslTarget: WslPath | null;
+  private wsl: WslGit | null = null;
+  /** git runs inside the distro (decided at discovery; false = Windows git.exe fallback). */
+  private viaWsl = false;
+  /** git processes of ours running now / mutations queued or running (index refresh waits for both). */
+  private inflight = 0;
+  private acting = 0;
+  private scan: IndexHint | null = null;
+  private refreshRun: Promise<IndexRefreshResult> | null = null;
 
   constructor(
     readonly root: string,
     private readonly opts: GitServiceOptions = {},
   ) {
-    this.root = path.resolve(root);
     this.platform = opts.platform ?? process.platform;
+    this.P = this.platform === 'win32' ? path.win32 : path.posix;
+    this.root = this.P.resolve(root);
     this.env = gitEnv(opts.env ?? process.env);
+    this.wslTarget = this.platform === 'win32' && opts.wsl?.mode !== 'off' ? parseWslPath(this.root) : null;
+  }
+
+  /** How git is reached for this folder (status bar tooltip, logs). */
+  get engine(): 'wsl' | 'native' {
+    return this.viaWsl ? 'wsl' : 'native';
+  }
+
+  /** The one place git processes start: Windows / POSIX git, or git inside the WSL distro. */
+  private exec(git: GitExecutable, args: string[], o: ExecOptions): Promise<RunResult> {
+    this.inflight++;
+    return this.spawnGit(git, args, o).finally(() => this.inflight--);
+  }
+
+  private spawnGit(git: GitExecutable, args: string[], o: ExecOptions): Promise<RunResult> {
+    if (this.viaWsl && this.wsl && this.wslTarget) {
+      const t0 = performance.now();
+      return this.wsl
+        .run(args, { cwd: this.wslTarget.linux, timeoutMs: o.timeoutMs, maxBytes: o.maxBytes, input: o.input, signal: o.signal, low: o.low, direct: o.direct || o.net, net: o.net, env: o.trace ? TRACE2_LIST : undefined })
+        .then((r) => {
+          logGitActivity({ kind: gitSubcommand(args), trigger: o.trigger ? `${o.trigger}/wsl` : 'wsl', ms: Math.round(performance.now() - t0), repo: this.root, ok: r.code === 0 || r.code === 1, at: Date.now() });
+          if (o.onChunk && r.stdout.length) {
+            o.onChunk(r.stdout);
+            return { ...r, stdout: Buffer.alloc(0) };
+          }
+          return r;
+        });
+    }
+    const env = o.env ?? (o.trace ? { ...this.env, ...TRACE2_ENV } : this.env);
+    return run(git.path, args, { cwd: this.root, env, timeoutMs: o.timeoutMs, maxBytes: o.maxBytes, input: o.input, signal: o.signal, low: o.low, trigger: o.trigger, onChunk: o.onChunk, detached: o.detached });
+  }
+
+  /** WSL: git inside the distro when it has one (docker-desktop does not → Windows git). */
+  private async wslGit(): Promise<GitExecutable | null> {
+    // A drive letter mapped to \\wsl$\… (net use): best effort, Windows only, looked up once per process.
+    if (!this.wslTarget && this.platform === 'win32' && this.opts.wsl?.mode !== 'off' && /^[A-Za-z]:[\\/]/.test(this.root) && !this.opts.wsl?.exe) {
+      const unc = resolveMappedDrive(this.root, await mappedDrives());
+      this.wslTarget = unc ? parseWslPath(unc) : null;
+    }
+    const t = this.wslTarget;
+    if (!t) return null;
+    this.wsl ??= new WslGit(t.distro, { exe: this.opts.wsl?.exe, helper: this.opts.wsl?.helper, env: this.opts.env ?? process.env }, (exe, args, o) =>
+      run(exe, args, { cwd: undefined, env: o.env, timeoutMs: o.timeoutMs, maxBytes: o.maxBytes, input: o.input, signal: o.signal, quiet: true }),
+    );
+    if (!(await this.wsl.available())) return null;
+    this.viaWsl = true;
+    const v = await this.wsl.run(['--version'], { cwd: t.linux, timeoutMs: T_QUICK, maxBytes: 4096 });
+    const version = v.code === 0 ? parseGitVersion(v.stdout.toString('utf8')) : null;
+    if (!version || !atLeast(version, ...MIN_VERSION)) {
+      this.viaWsl = false;
+      return null;
+    }
+    return { path: `wsl:${t.distro}`, version };
   }
 
   /** Repository facts for the workspace (cached; re-checked when it was not a repo a moment ago). */
@@ -446,32 +626,56 @@ export class GitService {
     return this.repoP;
   }
 
+  /** Is this folder inside a repository (and is git usable)? Discovery only, no status. */
+  async probe(): Promise<{ ok: true } | GitUnavailable> {
+    const r = await this.repo();
+    return r.ok ? { ok: true } : r;
+  }
+
   /** Forget cached repository facts (`.git` appeared / vanished, config changed). */
   invalidate() {
     this.repoP = null;
   }
 
   private async discover(): Promise<Repo | GitUnavailable> {
-    const git = await locateGit({ gitPath: this.opts.gitPath, platform: this.platform, env: this.opts.env ?? process.env });
+    const git = (await this.wslGit()) ?? (await locateGit({ gitPath: this.opts.gitPath, platform: this.platform, env: this.opts.env ?? process.env }));
     if (!git) return { ok: false, reason: 'no-git', ...(hasDotGitAbove(this.root) ? { repoLikely: true } : {}) };
-    const r = await run(git.path, ['rev-parse', '--show-toplevel', '--show-prefix', '--absolute-git-dir', '--git-common-dir'], { cwd: this.root, env: this.env, timeoutMs: T_QUICK, maxBytes: 64 * 1024 });
+    const r = await this.exec(git, ['rev-parse', '--show-toplevel', '--show-prefix', '--absolute-git-dir', '--git-common-dir'], { timeoutMs: T_QUICK, maxBytes: 64 * 1024, trigger: 'discover' });
     const fail = failure(r);
     if (fail) return fail;
     const [toplevel, prefix, gitDir, common] = r.stdout.toString('utf8').replace(/\r/g, '').split('\n');
     if (!toplevel || !gitDir) return { ok: false, reason: 'no-repo' };
-    const commonDir = path.resolve(this.root, common || gitDir);
+    // Inside WSL git answers with Linux paths: the watchers / marker checks need the Windows side of them.
+    const t = this.wslTarget;
+    const host = this.viaWsl && t ? (linux: string) => (this.opts.wsl?.hostPath ?? ((w, l) => toUncPath(w, l)))(t, linux) : (p: string) => this.P.resolve(this.root, p);
+    const commonLinux = this.viaWsl && t ? path.posix.resolve(t.linux, common || gitDir) : common || gitDir;
     const base = ['-c', 'core.quotepath=off', '-c', 'core.fsmonitor=', '-c', 'status.relativePaths=false', '-c', 'color.ui=false', '-c', 'log.showSignature=false'];
-    const cfg = await run(git.path, ['config', '--local', '--includes', '-z', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$'], { cwd: this.root, env: this.env, timeoutMs: T_QUICK, maxBytes: 256 * 1024 });
+    const cfg = await this.exec(git, ['config', '--local', '--includes', '-z', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$'], { timeoutMs: T_QUICK, maxBytes: 256 * 1024, trigger: 'discover' });
     if (cfg.code === 0) base.push(...untrustedFilterOverrides(cfg.stdout.toString('utf8')));
-    return { ok: true, git, toplevel: path.resolve(toplevel), prefix: prefix ?? '', gitDir: path.resolve(gitDir), commonDir, base };
+    return { ok: true, git, toplevel: host(toplevel), prefix: prefix ?? '', gitDir: host(gitDir), commonDir: host(commonLinux), base };
   }
 
-  private git(repo: Repo, args: string[], o: { timeoutMs: number; maxBytes: number; input?: string }) {
-    return run(repo.git.path, [...repo.base, ...args], { cwd: this.root, env: this.env, ...o });
+  private git(repo: Repo, args: string[], o: Omit<ExecOptions, 'env'>) {
+    return this.exec(repo.git, [...repo.base, ...args], o);
+  }
+
+  /** Why the next status runs (activity log). */
+  private nextTrigger: string | null = null;
+  private feeding: Promise<void> = Promise.resolve();
+  /** Parse big outputs in slices with a yield in between (WSL helper output arrives in one piece). */
+  private feed(stream: PorcelainStream, c: Buffer) {
+    if (c.length <= FEED_SLICE) return void stream.push(c);
+    this.feeding = this.feeding.then(async () => {
+      for (let i = 0; i < c.length; i += FEED_SLICE) {
+        stream.push(c.subarray(i, i + FEED_SLICE));
+        await new Promise<void>((r) => setImmediate(r));
+      }
+    });
   }
 
   /** Branch + changed paths. Concurrent callers share a run; a call during a run gets the next one. */
-  status(): Promise<GitStatusResult> {
+  status(trigger?: string): Promise<GitStatusResult> {
+    if (trigger) this.nextTrigger = trigger;
     if (!this.statusRun) {
       this.statusRun = this.statusOnce().finally(() => (this.statusRun = null));
       return this.statusRun;
@@ -489,19 +693,72 @@ export class GitService {
     const t0 = performance.now();
     // untracked=normal / ignored=matching: one entry per untracked or ignored folder (fast on big trees).
     // Submodules: one entry each, without walking their work trees.
-    const args = ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=normal', '--ignored=matching', '--ignore-submodules=dirty', '--', '.'];
-    const r = await this.git(repo, args, { timeoutMs: T_STATUS, maxBytes: MAX_STATUS_BYTES });
+    // core.untrackedCache: read-only use of the cache when the user's git built one (never written here).
+    const args = ['-c', 'core.untrackedCache=true', 'status', '--porcelain=v2', '-z', '--branch', '--untracked-files=normal', '--ignored=matching', '--ignore-submodules=dirty', '--', '.'];
+    const stream = new PorcelainStream(repo.prefix);
+    const raw = await this.git(repo, args, { timeoutMs: T_STATUS, maxBytes: MAX_STATUS_BYTES, trigger: this.nextTrigger ?? 'status', onChunk: (c) => this.feed(stream, c), trace: true });
+    this.nextTrigger = null;
+    await this.feeding;
+    const { stderr, data } = splitTrace2(raw.stderr);
+    const r = { ...raw, stderr };
     const fail = failure(r);
     if (fail) {
       if (fail.reason === 'no-repo') this.invalidate(); // .git was removed
       return fail;
     }
-    const parsed = parsePorcelainV2(r.stdout.toString('utf8'), repo.prefix);
+    const parsed = stream.end();
     const out: GitStatus = { ok: true, branch: parsed.branch, entries: parsed.entries, prefix: repo.prefix, ms: Math.round(performance.now() - t0) };
     if (parsed.truncated) out.truncated = true;
+    // refresh/sum_scan = files whose stat data did not match; minus the ones really changed in the work tree
+    // = re-read for nothing.
+    const scanned = data['refresh/sum_scan'];
+    let changed = 0;
+    for (const e of parsed.entries) if (e.unstaged && e.state !== 'untracked' && e.state !== 'ignored') changed++;
+    this.scan = { wasted: scanned === undefined ? null : Math.max(0, scanned - changed), ms: out.ms };
     const state = repoState(repo.gitDir);
     if (state) out.state = state;
     return out;
+  }
+
+  /** What the last status said about the index's stat cache (null before the first status / after a refresh). */
+  indexHint(): IndexHint | null {
+    return this.scan;
+  }
+
+  /** No git process of ours running, no mutation queued, no background list waiting. */
+  get idle(): boolean {
+    return this.inflight === 0 && this.acting === 0 && !this.statusRun && !this.lowQueue.length && !this.lowRunning.size;
+  }
+
+  /**
+   * Re-record timestamps / sizes of unchanged files in the index (`update-index --refresh`), so later
+   * read-only statuses stop re-reading them. File contents, staging and history are untouched.
+   * Hooks off (post-index-change), fsmonitor off, repo-local filters neutralised (repo.base).
+   * Skipped while index.lock exists (someone's git is writing; the lock is never removed).
+   * No timeout: killing git mid-write can leave index.lock behind on Windows.
+   */
+  refreshIndex(): Promise<IndexRefreshResult> {
+    return (this.refreshRun ??= this.refreshOnce().finally(() => (this.refreshRun = null)));
+  }
+
+  private async refreshOnce(): Promise<IndexRefreshResult> {
+    const repo = await this.repo();
+    if (!repo.ok) return { ok: false, skipped: 'unavailable' };
+    if (!this.idle) return { ok: false, skipped: 'busy' };
+    // Inside serial(): one of our own commits / stages cannot start while it writes the index.
+    return this.serial(async (): Promise<IndexRefreshResult> => {
+      if (fs.existsSync(path.join(repo.gitDir, 'index.lock'))) return { ok: false, skipped: 'locked' };
+      const t0 = performance.now();
+      const noHooks = this.platform === 'win32' && !this.viaWsl ? 'NUL' : '/dev/null';
+      const args = ['-c', `core.hooksPath=${noHooks}`, 'update-index', '-q', '--unmerged', '--ignore-missing', '--ignore-submodules', '--refresh'];
+      const r = await this.git(repo, args, { timeoutMs: 0, maxBytes: 1024 * 1024, low: true, direct: true, trigger: 'index-refresh' });
+      if (r.code === 0) {
+        this.scan = null;
+        return { ok: true, ms: Math.round(performance.now() - t0) };
+      }
+      if (/index\.lock/.test(r.stderr) && /exists/i.test(r.stderr)) return { ok: false, skipped: 'locked' };
+      return { ok: false, message: firstLine(r.stderr) || r.error?.message || `git update-index exited with ${r.code}` };
+    });
   }
 
   /** Workspace path checked against the containment rules → clean POSIX rel. */
@@ -578,7 +835,8 @@ export class GitService {
 
   private chain: Promise<unknown> = Promise.resolve();
   private serial<T>(fn: () => Promise<T>): Promise<T> {
-    const p = this.chain.then(fn, fn);
+    this.acting++;
+    const p = this.chain.then(fn, fn).finally(() => this.acting--);
     this.chain = p.catch(() => {});
     return p;
   }
@@ -594,13 +852,15 @@ export class GitService {
   private async act(repo: Repo, args: string[], o: { input?: string; timeoutMs?: number; net?: boolean; ok?: string; explain?: (text: string) => string | null } = {}): Promise<GitActionResult> {
     const env = o.net ? { ...this.env } : this.env;
     if (o.net) delete env.GCM_INTERACTIVE; // the credential manager's own window is fine; terminal prompts are not
-    const r = await run(repo.git.path, ['-c', 'core.quotepath=off', '-c', 'color.ui=false', ...args], {
-      cwd: this.root,
+    const r = await this.exec(repo.git, ['-c', 'core.quotepath=off', '-c', 'color.ui=false', ...args], {
       env,
       timeoutMs: o.timeoutMs ?? 60_000,
       maxBytes: 4 * 1024 * 1024,
       input: o.input,
       detached: o.net,
+      net: o.net,
+      direct: true,
+      trigger: 'action',
     });
     if (r.error) return { ok: false, message: r.error.message };
     const text = r.stderr + (r.stderr && r.stdout.length ? '\n' : '') + r.stdout.toString('utf8');
@@ -803,11 +1063,12 @@ export class GitService {
     for (const j of this.lowQueue) if (match(j.tag)) j.ac.abort();
     this.lowQueue = this.lowQueue.filter((j) => !j.ac.signal.aborted);
     for (const j of this.lowRunning) if (match(j.tag)) j.ac.abort();
+    if (match('branches')) this.branchAc?.abort();
   }
 
   /** git for a background job: low priority, killable, its own timeout. */
   private bg(repo: Repo, args: string[], signal: AbortSignal, maxBytes: number) {
-    return run(repo.git.path, [...repo.base, ...args], { cwd: this.root, env: this.env, timeoutMs: this.opts.lowTimeoutMs ?? T_LOW, maxBytes, signal, low: true });
+    return this.exec(repo.git, [...repo.base, ...args], { timeoutMs: this.opts.lowTimeoutMs ?? T_LOW, maxBytes, signal, low: true, trigger: 'background' });
   }
 
   private static jobError(r: RunResult): { error: GitJobError; message?: string } | null {
@@ -817,23 +1078,95 @@ export class GitService {
     return null;
   }
 
-  /** Local branches, then remote ones, each most recently committed first; capped at BRANCH_CAP. */
+  // Branches in phases, so thousands of remote refs never hold up the list: (1) local branches + the
+  // remote count straight from the refs (no commit objects, no `:short` atoms), (2) dates / subjects in
+  // background batches for what is on screen, (3) remote branches a window at a time from a cached,
+  // name-sorted listing.
+
+  private branchRun: Promise<GitBranchList> | null = null;
+  private branchAc: AbortController | null = null;
+  /** Remote-tracking refs (name-sorted), refreshed when refs change (the .git watcher bumps refsGen). */
+  private remoteRefs: { gen: number; at: number; list: Array<{ name: string; oid: string }> } | null = null;
+  private remoteRun: Promise<Array<{ name: string; oid: string }> | GitJobError> | null = null;
+  private refsGen = 0;
+
+  /** Phase 1: local branches (name-sorted, current first) and how many remote ones. Single-flight. */
   branches(): Promise<GitBranchList> {
-    const none = (error: GitJobError): GitBranchList => ({ branches: [], remotes: [], error });
+    if (this.branchRun) return this.branchRun;
+    const ac = (this.branchAc = new AbortController());
+    const p = (async (): Promise<GitBranchList> => {
+      const repo = await this.repo();
+      if (!repo.ok) return { branches: [], remotes: [], remoteCount: 0 };
+      const local = this.git(repo, ['for-each-ref', `--format=${LOCAL_BRANCH_FORMAT}`, 'refs/heads'], { timeoutMs: T_READ, maxBytes: 16 * 1024 * 1024, signal: ac.signal, trigger: 'branches' });
+      const [l, remotes, refs] = await Promise.all([local, this.remotes(repo), this.remoteList(repo, ac.signal, true)]);
+      const fail = GitService.jobError(l);
+      if (fail) return { branches: [], remotes, remoteCount: 0, error: fail.error, message: fail.message };
+      return { branches: parseLocalBranches(l.stdout.toString('utf8')), remotes, remoteCount: Array.isArray(refs) ? refs.length : 0 };
+    })().finally(() => {
+      if (this.branchRun === p) this.branchRun = null;
+      if (this.branchAc === ac) this.branchAc = null;
+    });
+    this.branchRun = p;
+    return p;
+  }
+
+  /** Name-sorted remote-tracking refs (cached until refs change; a names-only listing is cheap). */
+  private remoteList(repo: Repo, signal?: AbortSignal, fresh = false): Promise<Array<{ name: string; oid: string }> | GitJobError> {
+    const c = this.remoteRefs;
+    if (!fresh && c && c.gen === this.refsGen && Date.now() - c.at < 60_000) return Promise.resolve(c.list);
+    if (this.remoteRun) return this.remoteRun;
+    const gen = this.refsGen;
+    const p = (async () => {
+      const r = await this.git(repo, ['for-each-ref', '--format=%(refname)%00%(objectname)', 'refs/remotes'], { timeoutMs: T_READ, maxBytes: 64 * 1024 * 1024, signal, trigger: 'remotes' });
+      const fail = GitService.jobError(r);
+      if (fail) return fail.error;
+      const list = parseRemoteRefs(r.stdout.toString('utf8'));
+      this.remoteRefs = { gen, at: Date.now(), list };
+      return list;
+    })().finally(() => {
+      if (this.remoteRun === p) this.remoteRun = null;
+    });
+    this.remoteRun = p;
+    return p;
+  }
+
+  /** A window of remote branches, name-sorted; `filter` matches anywhere in the name (case-insensitive). */
+  async remoteBranches(opts: unknown): Promise<GitRemoteBranchPage> {
+    const o = (opts && typeof opts === 'object' ? opts : {}) as { offset?: unknown; limit?: unknown; filter?: unknown };
+    const offset = Math.max(0, Math.floor(Number(o.offset) || 0));
+    const limit = Math.max(1, Math.min(1000, Math.floor(Number(o.limit) || 200)));
+    const q = typeof o.filter === 'string' ? o.filter.trim().toLowerCase().slice(0, 200) : '';
+    const repo = await this.repo();
+    if (!repo.ok) return { total: 0, items: [] };
+    const list = await this.remoteList(repo);
+    if (!Array.isArray(list)) return { total: 0, items: [], error: list };
+    const hits = q ? list.filter((b) => b.name.toLowerCase().includes(q)) : list;
+    return { total: hits.length, items: hits.slice(offset, offset + limit) };
+  }
+
+  /** Phase 2: commit date + subject for the given commits (what is on screen), in the background queue. */
+  async branchDetails(oids: unknown, tag: unknown = 'branches'): Promise<GitBranchDetails> {
+    if (!Array.isArray(oids) || oids.length > 2000 || !oids.every((x) => typeof x === 'string' && /^[0-9a-f]{40,64}$/.test(x))) throw new BackendFailure('EINVAL', 'Expected a list of commit ids');
+    const t: GitJobTag = tag === 'remotes' ? 'remotes' : 'branches';
+    const none = (error: GitJobError): GitBranchDetails => ({ details: [], error });
+    const unique = [...new Set(oids as string[])];
+    if (!unique.length) return Promise.resolve({ details: [] });
     return this.background(
-      'branches',
+      t,
       async (signal) => {
         const repo = await this.repo();
-        if (!repo.ok) return { branches: [], remotes: [] };
-        const r = await this.bg(repo, ['for-each-ref', '--sort=-committerdate', `--count=${BRANCH_CAP + 1}`, `--format=${BRANCH_FORMAT}`, 'refs/heads', 'refs/remotes'], signal, 16 * 1024 * 1024);
+        if (!repo.ok) return { details: [] };
+        const r = await this.exec(repo.git, [...repo.base, 'log', '--no-walk=unsorted', '--stdin', '-z', '--no-decorate', `--format=${DETAIL_FORMAT}`], {
+          timeoutMs: this.opts.lowTimeoutMs ?? T_LOW,
+          maxBytes: 8 * 1024 * 1024,
+          signal,
+          low: true,
+          input: unique.join('\n') + '\n',
+          trigger: t,
+        });
         const fail = GitService.jobError(r);
         if (fail) return { ...none(fail.error), message: fail.message };
-        let list = parseBranches(r.stdout.toString('utf8'));
-        const truncated = list.length > BRANCH_CAP;
-        if (truncated) list = list.slice(0, BRANCH_CAP);
-        const out: GitBranchList = { branches: [...list.filter((b) => !b.remote), ...list.filter((b) => b.remote)], remotes: await this.remotes(repo) };
-        if (truncated) out.truncated = true;
-        return out;
+        return { details: parseDetails(r.stdout.toString('utf8')) };
       },
       none,
     );
@@ -979,6 +1312,7 @@ export class GitService {
       }
       this.touched.clear();
       if (!changed.length || this.disposed) return;
+      if (changed.some((f) => f.includes(`${path.sep}refs${path.sep}`) || path.basename(f) === 'packed-refs')) this.refsGen++;
       if (changed.some((f) => path.dirname(f) === this.root || path.basename(f) === 'config')) {
         // Repository appeared / vanished / was reconfigured: rediscover and re-arm the watchers.
         this.invalidate();
@@ -990,7 +1324,7 @@ export class GitService {
           l();
         } catch {}
       });
-    }, this.opts.watchDebounceMs ?? 150);
+    }, this.opts.watchDebounceMs ?? 300);
   }
 
   private stopWatching(clearListeners = false) {
@@ -1005,6 +1339,7 @@ export class GitService {
   dispose() {
     this.disposed = true;
     this.cancel();
+    this.wsl?.dispose();
     if (this.watchTimer) clearTimeout(this.watchTimer);
     this.stopWatching(true);
   }

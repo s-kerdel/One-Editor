@@ -4,7 +4,7 @@
 import './scm.css';
 import { signal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { GitBranchInfo, GitCommit, GitCommitFile, GitCommitFiles, GitEntry, GitJobError, GitStatus } from '@shared/git';
+import type { GitBranchInfo, GitCommit, GitCommitFile, GitCommitFiles, GitCommitInfo, GitEntry, GitJobError, GitStatus } from '@shared/git';
 import { basename, dirname } from '@shared/paths';
 import { app } from '../app/app';
 import * as ui from '../app/ui';
@@ -20,13 +20,18 @@ import { branchLabel } from './ui';
 import { git, gitCall } from './rpc';
 
 /** Stop a background list (fire and forget: the backend kills the running git). */
-const cancelJob = (tag: 'branches' | 'history' | 'files') => void gitCall()?.('cancel', tag).catch(() => {});
+const cancelJob = (tag: 'branches' | 'remotes' | 'history' | 'files') => void gitCall()?.('cancel', tag).catch(() => {});
 
 /** Survive panel switches (the pane unmounts when another panel is shown). */
 const draft = signal('');
 const amend = signal(false);
 const open = signal<Record<string, boolean>>({ conflicts: true, staged: true, changes: true, untracked: true, branches: false, history: false });
 const ROW_CAP = 400;
+
+/** Parent folder with several repositories: the one the pane works on ('' = the only one). */
+export const paneRepo = signal<string>('');
+/** Repository argument for repository-level calls (undefined with a single repository). */
+const R = () => paneRepo.peek() || undefined;
 
 const toggle = (k: string) => (open.value = { ...open.value, [k]: !open.value[k] });
 
@@ -133,7 +138,7 @@ function GroupView({ s, group, list }: { s: GitStore; group: Group; list: GitEnt
           <span class="se-scm-count">{list.length}</span>
         </button>
         <span class="se-scm-acts">
-          {group === 'staged' && head('minus', 'Unstage all', () => unstage(s, null), 'unstage-all')}
+          {group === 'staged' && head('minus', 'Unstage all', () => unstage(s, null, R()), 'unstage-all')}
           {group === 'changes' && head('undo', 'Discard all changes', () => discard(s, paths, 0), 'discard-all')}
           {group === 'untracked' && head('undo', 'Discard all untracked (move to trash)', () => discard(s, paths, paths.length), 'discard-all')}
           {(group === 'changes' || group === 'untracked') && head('plus', group === 'changes' ? 'Stage all changes' : 'Stage all untracked', () => stage(s, paths), 'stage-all')}
@@ -161,13 +166,13 @@ async function doCommit(s: GitStore, st: GitStatus, g: Record<Group, GitEntry[]>
     const n = g.changes.length + g.untracked.length;
     if (!n) return void app.toast('Nothing to commit', 'info');
     if (!(await ui.confirmDialog('Nothing is staged', `Stage all ${n} ${n === 1 ? 'change' : 'changes'} and commit them?`, 'Stage all & commit'))) return;
-    if (!(await stage(s, null)).ok) return;
+    if (!(await stage(s, null, R())).ok) return;
   }
-  const r = await runGit(s, 'Committing', () => git('commit', { message: draft.value, amend: amend.value }));
+  const r = await runGit(s, 'Committing', () => git('commit', { message: draft.value, amend: amend.value, repo: R() }));
   if (!r.ok) return;
   draft.value = '';
   amend.value = false;
-  if (push) await runGit(s, 'Pushing', () => git('push'));
+  if (push) await runGit(s, 'Pushing', () => git('push', R()));
 }
 
 /** Pre-fill (never send) a Claude Code prompt that writes the message for the staged changes. */
@@ -229,7 +234,7 @@ function CommitBox({ s, st, g }: { s: GitStore; st: GitStatus; g: Record<Group, 
           onChange={async (e) => {
             const on = (e.currentTarget as HTMLInputElement).checked;
             amend.value = on;
-            if (on && !draft.value.trim()) draft.value = await git('lastMessage').catch(() => '');
+            if (on && !draft.value.trim()) draft.value = await git('lastMessage', R()).catch(() => '');
           }}
         />
         Amend the last commit
@@ -258,21 +263,21 @@ function SyncBar({ s, st }: { s: GitStore; st: GitStatus }) {
       </button>
       <span class="se-scm-spacer" />
       {working && <span class="se-scm-busy" role="status">{working}</span>}
-      <button class="se-icon-btn small" title="Fetch" aria-label="Fetch" disabled={!!working} onClick={() => runGit(s, 'Fetching', () => git('fetch'), { save: false })}>
+      <button class="se-icon-btn small" title="Fetch" aria-label="Fetch" disabled={!!working} onClick={() => runGit(s, 'Fetching', () => git('fetch', R()), { save: false })}>
         <Icon name="refresh" size={14} />
       </button>
       {b.upstream ? (
         <>
-          <button class="se-btn small se-scm-pull" disabled={!!working} title={`Pull from ${b.upstream}`} onClick={() => runGit(s, 'Pulling', () => git('pull'))}>
+          <button class="se-btn small se-scm-pull" disabled={!!working} title={`Pull from ${b.upstream}`} onClick={() => runGit(s, 'Pulling', () => git('pull', R()))}>
             <Icon name="arrowDown" size={12} /> {b.behind}
           </button>
-          <button class="se-btn small se-scm-push" disabled={!!working} title={`Push to ${b.upstream}`} onClick={() => runGit(s, 'Pushing', () => git('push'), { save: false })}>
+          <button class="se-btn small se-scm-push" disabled={!!working} title={`Push to ${b.upstream}`} onClick={() => runGit(s, 'Pushing', () => git('push', R()), { save: false })}>
             <Icon name="arrowUp" size={12} /> {b.ahead}
           </button>
         </>
       ) : (
         b.head && (
-          <button class="se-btn small se-scm-push" disabled={!!working} title="Push this branch and track it" onClick={() => runGit(s, 'Publishing', () => git('push'), { save: false })}>
+          <button class="se-btn small se-scm-push" disabled={!!working} title="Push this branch and track it" onClick={() => runGit(s, 'Publishing', () => git('push', R()), { save: false })}>
             <Icon name="arrowUp" size={12} /> Publish
           </button>
         )
@@ -336,49 +341,83 @@ function rowHeight(): number {
 
 // ---- branches --------------------------------------------------------------------------------
 
-/** Branch rows rendered at most (the filter box narrows the rest). */
+/** Local branch rows rendered at most (the filter box narrows the rest). */
 const BRANCH_ROWS = 200;
+/** Remote rows visible before the remote list scrolls on its own. */
+const REMOTE_ROWS = 12;
+
+type Details = Map<string, GitCommitInfo>;
+
+/** Most recent first, the current branch on top. */
+const byDate = (list: GitBranchInfo[], d: Details) => [...list].sort((a, b) => Number(b.current) - Number(a.current) || (d.get(b.oid)?.date ?? 0) - (d.get(a.oid)?.date ?? 0)).map((b) => b.name);
 
 function Branches({ s, st }: { s: GitStore; st: GitStatus }) {
-  const [res, setRes] = useState<{ list: GitBranchInfo[]; truncated?: boolean; error?: GitJobError; message?: string } | null>(null);
+  const [res, setRes] = useState<{ local: GitBranchInfo[]; remoteCount: number; error?: GitJobError; message?: string } | null>(null);
+  const [details, setDetails] = useState<Details>(new Map());
+  /** Display order of local branches: re-sorted by date once, then stable (rows never jump later). */
+  const [order, setOrder] = useState<string[] | null>(null);
+  const [pending, setPending] = useState(false);
   const [filter, setFilter] = useState('');
+  const [remotesOpen, setRemotesOpen] = useState(false);
   const [nonce, setNonce] = useState(0);
   const isOpen = open.value.branches;
   const head = st.branch.head;
-  // Only while expanded; collapsing (or closing the pane) stops a running for-each-ref.
+  // Only while expanded. Phase 1 (refs only) is instant; dates follow in the background.
   useEffect(() => {
     if (!isOpen) return;
     let alive = true;
-    void git('branches').then(
-      (r) => alive && r.error !== 'cancelled' && setRes({ list: r.branches, truncated: r.truncated, error: r.error, message: r.message }),
-      (err) => alive && setRes({ list: [], error: 'failed', message: String(err?.message ?? err) }),
+    void git('branches', R()).then(
+      (r) => {
+        if (!alive || r.error === 'cancelled') return;
+        setRes({ local: r.branches, remoteCount: r.remoteCount, error: r.error, message: r.message });
+        if (r.error || !r.branches.length) return;
+        setPending(true);
+        void git('branchDetails', r.branches.map((b) => b.oid), 'branches', R()).then((d) => {
+          if (!alive || d.error === 'cancelled') return;
+          setPending(false);
+          setDetails((old) => {
+            const m = new Map(old);
+            for (const x of d.details) m.set(x.oid, x);
+            setOrder((prev) => prev ?? byDate(r.branches, m));
+            return m;
+          });
+        });
+      },
+      (err) => alive && setRes({ local: [], remoteCount: 0, error: 'failed', message: String(err?.message ?? err) }),
     );
     return () => {
       alive = false;
       cancelJob('branches');
     };
-  }, [isOpen, head, st.branch.oid, nonce]);
+  }, [isOpen, head, st.branch.oid, nonce, paneRepo.value]);
   const dirty = s.marks.value.count;
   // "Current" comes from the live status: the list refreshes a moment after a switch.
-  const isCurrent = (b: GitBranchInfo) => !b.remote && b.name === head;
-  const switchTo = async (b: GitBranchInfo) => {
+  const isCurrent = (b: { name: string; remote?: boolean }) => !b.remote && b.name === head;
+  const switchTo = async (b: { name: string; remote?: boolean }) => {
     if (isCurrent(b)) return;
     if (dirty && !(await ui.confirmDialog(`Switch to ${b.name}?`, `You have ${dirty} uncommitted ${dirty === 1 ? 'change' : 'changes'}. Git carries them over to the other branch, or refuses when they would be overwritten.`, 'Switch'))) return;
-    await runGit(s, 'Switching', () => git('switchBranch', b.name));
+    await runGit(s, 'Switching', () => git('switchBranch', b.name, R()));
   };
   const create = async () => {
     const name = await ui.promptDialog('New branch', '', 'feature/my-change', 'Create & switch');
-    if (name) await runGit(s, 'Creating branch', () => git('createBranch', name));
+    if (name) await runGit(s, 'Creating branch', () => git('createBranch', name, R()));
   };
   const q = filter.trim().toLowerCase();
-  const matches = useMemo(() => (res ? (q ? res.list.filter((b) => b.name.toLowerCase().includes(q)) : res.list) : []), [res, q]);
+  const local = useMemo(() => {
+    if (!res) return [];
+    if (!order) return res.local;
+    const by = new Map(res.local.map((b) => [b.name, b]));
+    const known = order.filter((n) => by.has(n)).map((n) => by.get(n)!);
+    return [...known, ...res.local.filter((b) => !order.includes(b.name))]; // new branches at the end
+  }, [res, order]);
+  const matches = useMemo(() => (q ? local.filter((b) => b.name.toLowerCase().includes(q)) : local), [local, q]);
   return (
     <section class="se-scm-group" data-section="branches">
       <div class="se-section-head se-scm-ghead">
         <button class="se-scm-toggle se-section-toggle" aria-expanded={isOpen} onClick={() => toggle('branches')}>
           <Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={12} class="se-section-chev" />
           <span class="se-section-title">Branches</span>
-          {isOpen && res && !res.error && <span class="se-scm-count">{res.truncated ? `${res.list.length}+` : res.list.length}</span>}
+          {isOpen && res && !res.error && <span class="se-scm-count">{res.local.length}</span>}
         </button>
         <span class="se-scm-acts">
           <button
@@ -398,28 +437,138 @@ function Branches({ s, st }: { s: GitStore; st: GitStatus }) {
         <div role="list" class="se-scm-list se-scm-branches">
           {!res && SKELETON}
           {res?.error && <JobError error={res.error} message={res.message} retry={() => (setRes(null), setNonce((n) => n + 1))} />}
-          {res && !res.error && res.list.length > 15 && (
-            <input class="se-scm-filter" type="search" placeholder={`Filter ${res.list.length}${res.truncated ? '+' : ''} branches`} aria-label="Filter branches" value={filter} onInput={(e) => setFilter((e.currentTarget as HTMLInputElement).value)} />
+          {res && !res.error && res.local.length > 15 && (
+            <input class="se-scm-filter" type="search" placeholder={`Filter ${res.local.length} branches`} aria-label="Filter branches" value={filter} onInput={(e) => setFilter((e.currentTarget as HTMLInputElement).value)} />
           )}
           <div class="se-scm-blist">
-          {matches.slice(0, BRANCH_ROWS).map((b) => (
-            <div class={`se-scm-row se-scm-brow${isCurrent(b) ? ' current' : ''}${b.remote ? ' remote' : ''}`} role="listitem" tabIndex={0} data-branch={b.name} title={`${b.name}\n${b.subject}\n${ago(b.date)}${isCurrent(b) ? '' : '\nClick to switch'}`} onClick={() => switchTo(b)} onKeyDown={(e) => e.key === 'Enter' && switchTo(b)}>
-              <span class="se-scm-bicon">{isCurrent(b) ? <Icon name="check" size={12} /> : <Icon name="gitBranch" size={12} />}</span>
-              <span class="se-scm-name">{b.name}</span>
-              {isCurrent(b) && (st.branch.ahead > 0 || st.branch.behind > 0) && (
-                <span class="se-scm-dir">
-                  ↑{st.branch.ahead} ↓{st.branch.behind}
-                </span>
-              )}
-              <span class="se-scm-dir se-scm-when">{ago(b.date)}</span>
-            </div>
-          ))}
-          {res && !res.error && matches.length > BRANCH_ROWS && <div class="se-scm-more">{matches.length - BRANCH_ROWS} more — type to filter</div>}
+            {matches.slice(0, BRANCH_ROWS).map((b) => {
+              const d = details.get(b.oid);
+              return (
+                <div class={`se-scm-row se-scm-brow${isCurrent(b) ? ' current' : ''}`} role="listitem" tabIndex={0} data-branch={b.name} title={`${b.name}${d ? `\n${d.subject}\n${ago(d.date)}` : ''}${isCurrent(b) ? '' : '\nClick to switch'}`} onClick={() => switchTo(b)} onKeyDown={(e) => e.key === 'Enter' && switchTo(b)}>
+                  <span class="se-scm-bicon">{isCurrent(b) ? <Icon name="check" size={12} /> : <Icon name="gitBranch" size={12} />}</span>
+                  <span class="se-scm-name">{b.name}</span>
+                  {isCurrent(b) && (st.branch.ahead > 0 || st.branch.behind > 0) ? (
+                    <span class="se-scm-dir">
+                      ↑{st.branch.ahead} ↓{st.branch.behind}
+                    </span>
+                  ) : (
+                    <span class="se-scm-dir" />
+                  )}
+                  <span class="se-scm-when">{d ? ago(d.date) : pending ? '…' : ''}</span>
+                </div>
+              );
+            })}
+            {res && !res.error && matches.length > BRANCH_ROWS && <div class="se-scm-more">{matches.length - BRANCH_ROWS} more — type to filter</div>}
+            {res && !res.error && !matches.length && <div class="se-scm-more">{q ? 'No branch matches' : 'No branches yet'}</div>}
           </div>
-          {res && !res.error && !matches.length && <div class="se-scm-more">{q ? 'No branch matches' : 'No branches yet'}</div>}
+          {pending && <div class="se-scm-more se-scm-pending">Still loading dates…</div>}
+          {res && !res.error && res.remoteCount > 0 && (
+            <>
+              <button class="se-scm-row se-scm-subhead se-section-toggle" aria-expanded={remotesOpen} onClick={() => setRemotesOpen(!remotesOpen)}>
+                <Icon name={remotesOpen ? 'chevronDown' : 'chevronRight'} size={12} class="se-section-chev" />
+                <span class="se-scm-name">Remote branches</span>
+                <span class="se-scm-count">{res.remoteCount.toLocaleString()}</span>
+              </button>
+              {remotesOpen && <RemoteBranches total={res.remoteCount} onPick={(name) => switchTo({ name, remote: true })} />}
+            </>
+          )}
         </div>
       )}
     </section>
+  );
+}
+
+/** Virtualised, name-sorted remote branches; names come a window at a time, dates for what is visible. */
+function RemoteBranches({ total, onPick }: { total: number; onPick: (name: string) => void }) {
+  const [filter, setFilter] = useState('');
+  const [view, setView] = useState<{ q: string; total: number; rows: Map<number, { name: string; oid: string }> }>({ q: '', total, rows: new Map() });
+  const [details, setDetails] = useState<Details>(new Map());
+  const [top, setTop] = useState(0);
+  const ROW_H = rowHeight();
+  const q = filter.trim();
+  const count = view.q === q ? view.total : total;
+  const height = Math.max(1, Math.min(count || 1, REMOTE_ROWS)) * ROW_H;
+  const first = Math.max(0, Math.floor(top / ROW_H) - 10);
+  const last = Math.min(count, Math.ceil((top + height) / ROW_H) + 10);
+  // Names for the window (debounced while scrolling / typing; the backend keeps the listing cached).
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(() => {
+      void git('remoteBranches', { offset: first, limit: Math.max(1, last - first), filter: q, repo: R() }).then((p) => {
+        if (!alive) return;
+        setView((v) => {
+          const rows = v.q === q ? new Map(v.rows) : new Map<number, { name: string; oid: string }>();
+          p.items.forEach((it, i) => rows.set(first + i, it));
+          return { q, total: p.total, rows };
+        });
+      });
+    }, 60);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [first, last, q]);
+  // Dates for the visible rows only; scrolling on cancels the batch still running.
+  const visible: Array<{ name: string; oid: string }> = [];
+  for (let i = first; i < last; i++) {
+    const r = view.q === q ? view.rows.get(i) : undefined;
+    if (r) visible.push(r);
+  }
+  const missing = visible.filter((r) => !details.has(r.oid)).map((r) => r.oid);
+  const key = missing.join(',');
+  useEffect(() => {
+    if (!missing.length) return;
+    let alive = true;
+    const t = setTimeout(() => {
+      void git('branchDetails', missing, 'remotes', R()).then((d) => {
+        if (!alive || d.error) return;
+        setDetails((old) => {
+          const m = new Map(old);
+          for (const x of d.details) m.set(x.oid, x);
+          return m;
+        });
+      });
+    }, 150);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+      cancelJob('remotes');
+    };
+  }, [key]);
+  useEffect(() => () => cancelJob('remotes'), []);
+  return (
+    <div class="se-scm-remotes">
+      {total > 15 && <input class="se-scm-filter" type="search" placeholder={`Filter ${total.toLocaleString()} remote branches`} aria-label="Filter remote branches" value={filter} onInput={(e) => (setFilter((e.currentTarget as HTMLInputElement).value), setTop(0))} />}
+      {view.q === q && !count && <div class="se-scm-more">No remote branch matches</div>}
+      <div class="se-scm-hist" role="list" aria-label="Remote branches" style={{ height: `${height}px` }} onScroll={(e) => setTop((e.currentTarget as HTMLElement).scrollTop)}>
+        <div style={{ height: `${count * ROW_H}px`, position: 'relative' }}>
+          {Array.from({ length: Math.max(0, last - first) }, (_, k) => {
+            const i = first + k;
+            const r = view.q === q ? view.rows.get(i) : undefined;
+            const d = r && details.get(r.oid);
+            return (
+              <div
+                class="se-scm-row se-scm-brow remote"
+                role="listitem"
+                tabIndex={r ? 0 : -1}
+                data-branch={r?.name}
+                style={{ position: 'absolute', top: `${i * ROW_H}px`, left: 0, right: 0 }}
+                title={r ? `${r.name}${d ? `\n${d.subject}\n${ago(d.date)}` : ''}\nClick to switch (creates a local tracking branch)` : undefined}
+                onClick={() => r && onPick(r.name)}
+                onKeyDown={(e) => e.key === 'Enter' && r && onPick(r.name)}
+              >
+                <span class="se-scm-bicon">
+                  <Icon name="gitBranch" size={12} />
+                </span>
+                <span class="se-scm-name">{r ? r.name : <span class="se-skel-row se-scm-skel-inline" />}</span>
+                <span class="se-scm-dir" />
+                <span class="se-scm-when">{d ? ago(d.date) : r ? '…' : ''}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -459,7 +608,7 @@ function History({ st }: { st: GitStatus }) {
     const g = gen.current;
     const skip = reset ? 0 : cur.commits.length;
     setH((x) => ({ ...(reset ? { commits: [], more: true } : x), loading: true, error: undefined }));
-    void git('log', { skip, limit: PAGE }).then(
+    void git('log', { skip, limit: PAGE, repo: R() }).then(
       (p) => {
         if (g !== gen.current || p.error === 'cancelled') return;
         inFlight.current = false;
@@ -485,7 +634,7 @@ function History({ st }: { st: GitStatus }) {
       cancelJob('history');
       cancelJob('files');
     };
-  }, [isOpen, st.branch.oid]);
+  }, [isOpen, st.branch.oid, paneRepo.value]);
 
   const pick = (c: GitCommit) => {
     if (sel?.oid === c.oid) {
@@ -496,7 +645,7 @@ function History({ st }: { st: GitStatus }) {
     cancelJob('files');
     setSel(c);
     setFiles('loading');
-    void git('commitFiles', c.oid, c.parents[0] ?? null).then(
+    void git('commitFiles', c.oid, c.parents[0] ?? null, R()).then(
       (r) => r.error !== 'cancelled' && setFiles((f) => (f === 'loading' ? r : f)),
       () => setFiles(null),
     );
@@ -611,13 +760,33 @@ export function SourceControl() {
   const st = s.status.value;
   if (!st) return <div class="se-scm se-scm-loading" aria-busy="true" />;
   if (!st.ok) return <Empty text={`${REASON[st.reason] ?? REASON.error}${st.message ? ` ${st.message}` : ''}`} terminal={st.reason === 'no-repo' ? 'git init' : undefined} />;
-  const g = groups(st);
+  // Several repositories below this folder: the pane works on one at a time.
+  const repos = st.repos ?? [];
+  const multi = repos.length > 1;
+  const sel = multi ? (repos.find((r) => r.rel === paneRepo.value) ?? repos.find((r) => r.rel === s.repoOf(app.activePath.value ?? '')?.rel) ?? repos[0]) : null;
+  if (sel && paneRepo.peek() !== sel.rel) queueMicrotask(() => (paneRepo.value = sel.rel));
+  if (!multi && paneRepo.peek()) queueMicrotask(() => (paneRepo.value = ''));
+  const view: GitStatus = sel ? { ...st, branch: sel.branch ?? st.branch, state: sel.state, entries: st.entries.filter((e) => e.path === sel.rel || e.path.startsWith(sel.rel + '/')) } : st;
+  const g = groups(view);
   const clean = !g.conflicts.length && !g.staged.length && !g.changes.length && !g.untracked.length;
   return (
     <div class="se-scm" data-testid="scm">
-      <SyncBar s={s} st={st} />
-      {st.state && <div class="se-scm-state">{STATE_TEXT[st.state]}</div>}
-      <CommitBox s={s} st={st} g={g} />
+      {multi && (
+        <label class="se-scm-repo">
+          <Icon name="folder" size={13} />
+          <select aria-label="Repository" value={sel?.rel} onChange={(e) => (paneRepo.value = (e.currentTarget as HTMLSelectElement).value)}>
+            {repos.map((r) => (
+              <option value={r.rel}>
+                {r.rel}
+                {r.branch ? ` · ${branchLabel(r.branch)}` : ' · unavailable'}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <SyncBar s={s} st={view} />
+      {view.state && <div class="se-scm-state">{STATE_TEXT[view.state]}</div>}
+      <CommitBox s={s} st={view} g={g} />
       <ErrorBox />
       <div class="se-scm-scroll">
         <GroupView s={s} group="conflicts" list={g.conflicts} />
@@ -625,8 +794,8 @@ export function SourceControl() {
         <GroupView s={s} group="changes" list={g.changes} />
         <GroupView s={s} group="untracked" list={g.untracked} />
         {clean && <div class="se-scm-clean">No changes since the last commit.</div>}
-        <Branches s={s} st={st} />
-        <History st={st} />
+        <Branches s={s} st={view} />
+        <History st={view} />
       </div>
     </div>
   );

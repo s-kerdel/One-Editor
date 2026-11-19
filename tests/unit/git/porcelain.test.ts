@@ -148,3 +148,31 @@ describe('misc', () => {
     expect(untrustedFilterOverrides('')).toEqual([]);
   });
 });
+
+describe('PorcelainStream (chunked)', () => {
+  it('gives the same result for any chunk split, incl. inside UTF-8 and rename pairs', async () => {
+    const { PorcelainStream } = await import('../../../src/backend/git');
+    const H = 'a'.repeat(40);
+    const out = Buffer.from(
+      [
+        `# branch.oid ${H}`,
+        '# branch.head main',
+        `1 .M N... 100644 100644 100644 ${H} ${H} ünï cødé/日本 語.md`,
+        `2 R. N... 100644 100644 100644 ${H} ${H} R100 docs/new 😀.md`,
+        'docs/old 😀.md',
+        '? docs/untracked.md',
+        '! build/',
+      ].join('\0') + '\0',
+    );
+    const whole = new PorcelainStream('docs/');
+    whole.push(out);
+    const expected = whole.end();
+    expect(expected.entries.map((e) => e.path)).toEqual(['new 😀.md', 'untracked.md']);
+    for (let cut = 1; cut < out.length; cut += 3) {
+      const s = new PorcelainStream('docs/');
+      s.push(out.subarray(0, cut));
+      s.push(out.subarray(cut));
+      expect(s.end()).toEqual(expected);
+    }
+  });
+});

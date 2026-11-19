@@ -43,7 +43,48 @@ export interface GitStatus {
   ms: number;
   /** A merge / rebase / cherry-pick / revert is in progress. */
   state?: GitRepoState;
+  /** Snapshot version (deltas are relative to it). */
+  version?: number;
+  /** Every repository in the folder (one, or several below a parent folder); entries are combined. */
+  repos?: GitRepoInfo[];
 }
+
+export interface GitRepoInfo {
+  /** Repository folder, workspace-relative ('' = the workspace is inside this repository). */
+  rel: string;
+  branch: GitBranch | null;
+  state?: GitRepoState;
+  /** 'wsl': git runs inside the WSL distro the folder lives in. */
+  engine?: 'wsl' | 'native';
+  /** The workspace folder inside the repository ('' or "docs/"). */
+  prefix?: string;
+  error?: GitUnavailableReason;
+}
+
+/** Only what changed since the renderer's version `base`. */
+export interface GitStatusDelta {
+  ok: true;
+  delta: true;
+  version: number;
+  base: number;
+  /** Added or changed entries. */
+  set: GitEntry[];
+  removed: string[];
+  branch: GitBranch;
+  prefix: string;
+  ms: number;
+  state?: GitRepoState;
+  repos: GitRepoInfo[];
+}
+
+/** Nothing changed since the renderer's version. */
+export interface GitStatusSame {
+  ok: true;
+  same: true;
+  version: number;
+}
+
+export type GitStatusReply = GitStatusResult | GitStatusDelta | GitStatusSame;
 
 export type GitUnavailableReason =
   /** No git executable found. */
@@ -100,22 +141,47 @@ export interface GitBranchInfo {
   name: string;
   remote: boolean;
   current: boolean;
-  /** Abbreviated commit id. */
+  /** Full commit id. */
   oid: string;
   upstream: string | null;
-  /** Seconds since the epoch. */
+  /** Commit date (seconds since the epoch) and subject: filled in later (branchDetails). */
+  date?: number;
+  subject?: string;
+}
+
+/** Date + subject of a commit (branch rows). */
+export interface GitCommitInfo {
+  oid: string;
   date: number;
   subject: string;
+}
+
+export interface GitBranchDetails {
+  details: GitCommitInfo[];
+  error?: GitJobError;
+  message?: string;
+}
+
+/** A window of remote branches (name-sorted, optionally filtered). */
+export interface GitRemoteBranchPage {
+  /** Matching remote branches in total. */
+  total: number;
+  /** From `offset`, at most `limit`. */
+  items: Array<{ name: string; oid: string }>;
+  error?: GitJobError;
+  message?: string;
 }
 
 /** Why a background (low-priority) list came back without its rows. */
 export type GitJobError = 'timeout' | 'cancelled' | 'failed';
 
 export interface GitBranchList {
-  /** Most recently committed first (capped: see `truncated`). Ahead/behind: only for the current branch, in the status. */
+  /** Local branches, name-sorted, current first; no dates yet (branchDetails). Ahead/behind: the status. */
   branches: GitBranchInfo[];
+  /** Remote names ("origin"). */
   remotes: string[];
-  truncated?: boolean;
+  /** Remote-tracking branches (listed on demand: remoteBranches). */
+  remoteCount: number;
   error?: GitJobError;
   message?: string;
 }
@@ -141,7 +207,7 @@ export interface GitTextHunk {
 export type GitTextDiff = { engine: 'git'; hunks: GitTextHunk[]; patch: string } | { engine: 'none'; reason: string };
 
 /** Background lists the renderer may cancel (section collapsed, pane closed). */
-export type GitJobTag = 'branches' | 'history' | 'files';
+export type GitJobTag = 'branches' | 'remotes' | 'history' | 'files';
 
 export interface GitCommit {
   oid: string;
@@ -173,29 +239,41 @@ export interface GitCommitFiles {
 
 /** Every operation behind the single `git(op, ...args)` RPC. Mutating ones validate every path. */
 export interface GitOps {
-  status(): GitStatusResult;
+  /** `since`: the version the caller has (→ same / delta / full); `fresh`: run now (after an action). */
+  status(opts?: { since?: number; fresh?: boolean }): GitStatusReply;
+  /** Window focus / a file was opened: maybe look again (the backend decides, see GitMonitor). */
+  nudge(kind: 'focus' | 'open'): void;
+  /** Pause status runs while no window shows (one catch-up run on show). */
+  visibility(client: string, visible: boolean): void;
   headFile(path: string, rev?: string): GitHeadFile;
   diff(path: string, rev?: string): string | null;
-  /** null = everything in the workspace. */
-  stage(paths: string[] | null): GitActionResult;
-  unstage(paths: string[] | null): GitActionResult;
+  // Path operations go to the repository that holds each path. Repository operations take `repo`: the
+  // repository folder from `status().repos` ('' / omitted = the only or first repository).
+  /** null = everything in `repo`. */
+  stage(paths: string[] | null, repo?: string): GitActionResult;
+  unstage(paths: string[] | null, repo?: string): GitActionResult;
   /** Work-tree changes back to the index; untracked files go to the trash. */
   discard(paths: string[]): GitActionResult;
-  commit(opts: { message: string; amend?: boolean }): GitActionResult;
-  lastMessage(): string;
-  fetch(): GitActionResult;
-  pull(): GitActionResult;
-  push(): GitActionResult;
-  branches(): GitBranchList;
-  createBranch(name: string): GitActionResult;
-  switchBranch(name: string): GitActionResult;
-  log(opts?: { skip?: number; limit?: number }): GitLogPage;
+  commit(opts: { message: string; amend?: boolean; repo?: string }): GitActionResult;
+  lastMessage(repo?: string): string;
+  fetch(repo?: string): GitActionResult;
+  pull(repo?: string): GitActionResult;
+  push(repo?: string): GitActionResult;
+  /** Phase 1, instant: local branches + how many remote ones (no commit objects read). */
+  branches(repo?: string): GitBranchList;
+  /** Name-sorted remote branches, a window at a time (cached listing). */
+  remoteBranches(opts?: { offset?: number; limit?: number; filter?: string; repo?: string }): GitRemoteBranchPage;
+  /** Dates + subjects for these commits (background; `tag` decides what a cancel stops). */
+  branchDetails(oids: string[], tag?: 'branches' | 'remotes', repo?: string): GitBranchDetails;
+  createBranch(name: string, repo?: string): GitActionResult;
+  switchBranch(name: string, repo?: string): GitActionResult;
+  log(opts?: { skip?: number; limit?: number; repo?: string }): GitLogPage;
   /** `parent`: the commit's first parent when the caller knows it (saves a spawn); null = root commit. */
-  commitFiles(oid: string, parent?: string | null): GitCommitFiles;
+  commitFiles(oid: string, parent?: string | null, repo?: string): GitCommitFiles;
   /** Stop queued / running background jobs with this tag (all when omitted). */
   cancel(tag?: GitJobTag): void;
   /** Two texts through `git diff --no-index --histogram` (≤ 5 MB each). Needs git, not a repository. */
   diffTexts(a: string, b: string, opts?: { ignoreWhitespace?: boolean }): GitTextDiff;
 }
 export type GitOp = keyof GitOps;
-export const GIT_OPS: readonly GitOp[] = ['status', 'headFile', 'diff', 'stage', 'unstage', 'discard', 'commit', 'lastMessage', 'fetch', 'pull', 'push', 'branches', 'createBranch', 'switchBranch', 'log', 'commitFiles', 'cancel', 'diffTexts'];
+export const GIT_OPS: readonly GitOp[] = ['status', 'headFile', 'diff', 'stage', 'unstage', 'discard', 'commit', 'lastMessage', 'fetch', 'pull', 'push', 'branches', 'createBranch', 'switchBranch', 'log', 'commitFiles', 'cancel', 'diffTexts', 'remoteBranches', 'branchDetails', 'nudge', 'visibility'];

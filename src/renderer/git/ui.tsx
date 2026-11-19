@@ -77,20 +77,25 @@ export function openBranchMenu(store: GitStore, anchor: HTMLElement) {
 export function GitBranchItem({ store }: { store: GitStore }) {
   const s = store.status.value;
   if (!s?.ok) return null;
-  const b = s.branch;
+  // Several repositories below the folder: the one holding the open file.
+  const repo = store.repoOf(app.activePath.value ?? '') ?? s.repos?.find((r) => r.branch) ?? null;
+  const b = repo?.branch ?? s.branch;
+  const multi = (s.repos?.length ?? 0) > 1;
   const count = store.marks.value.count;
-  const label = branchLabel(b);
+  const label = multi && repo?.rel ? `${repo.rel} · ${branchLabel(b)}` : branchLabel(b);
+  const via = repo?.engine === 'wsl' ? '\ngit runs inside WSL' : '';
   return (
     <button
-      class={`se-status-item se-status-btn se-git-branch${store.changesOnly.value ? ' se-git-filtering' : ''}`}
+      class={`se-status-item se-status-btn se-git-branch${store.changesOnly.value ? ' se-git-filtering' : ''}${store.busy.value ? ' se-git-busy' : ''}`}
       data-testid="git-branch"
-      title={branchTitle(b, count)}
+      title={branchTitle(b, count) + via}
       aria-label={`Git: ${b.detached ? 'detached at ' : 'branch '}${label}${count ? `, ${count} changed` : ''}`}
       aria-haspopup="menu"
       onClick={(e) => openBranchMenu(store, e.currentTarget)}
     >
       <Icon name="gitBranch" size={12} />
       <span class="se-git-branch-name">{label}</span>
+      <span class="se-git-spin" aria-hidden="true" />
       {count > 0 && <span class="se-git-branch-dirty" aria-hidden="true" />}
       {b.ahead > 0 && <span class="se-git-ab">↑{b.ahead}</span>}
       {b.behind > 0 && <span class="se-git-ab">↓{b.behind}</span>}

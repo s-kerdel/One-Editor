@@ -6,7 +6,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { GitService } from '../../../src/backend/git';
 import { BackendService } from '../../../src/backend/service';
-import { parseBranches, parseLog, parseNameStatus, terminalCommand, isAuthError, gitMessage } from '../../../src/backend/git-ops';
+import { parseDetails, parseLocalBranches, parseLog, parseNameStatus, parseRemoteRefs, terminalCommand, isAuthError, gitMessage } from '../../../src/backend/git-ops';
 import type { GitStatus, GitStatusResult } from '../../../src/shared/git';
 import { BASE, git, makeRepo, testEnv, tmpDir, write } from './helpers';
 
@@ -136,9 +136,14 @@ describe('branches', () => {
     const g = svc(dir);
     const list = await g.branches();
     expect(list.remotes).toEqual(['origin']);
-    expect(list.branches.map((b) => `${b.name}${b.current ? '*' : ''}${b.remote ? '@r' : ''}`)).toEqual(['main*', 'origin/main@r', 'origin/remote-only@r']);
-    expect(list.branches[0]).toMatchObject({ upstream: 'origin/main', subject: 'init' });
-    expect(list.branches[0]).not.toHaveProperty('ahead'); // only the current branch has it (status)
+    expect(list.remoteCount).toBe(2);
+    expect(list.branches.map((b) => `${b.name}${b.current ? '*' : ''}`)).toEqual(['main*']);
+    expect(list.branches[0]).toMatchObject({ upstream: 'origin/main', remote: false });
+    expect(list.branches[0]).not.toHaveProperty('date'); // phase 1 reads no commit objects
+    expect((await g.remoteBranches({})).items.map((b) => b.name)).toEqual(['origin/main', 'origin/remote-only']);
+    const det = await g.branchDetails([list.branches[0].oid]);
+    expect(det.details).toEqual([{ oid: list.branches[0].oid, date: expect.any(Number), subject: 'init' }]);
+    await expect(g.branchDetails(['HEAD'])).rejects.toMatchObject({ code: 'EINVAL' });
     expect(await g.createBranch('feature/x')).toMatchObject({ ok: true, message: 'Created and switched to feature/x' });
     expect(ok(await g.status()).branch.head).toBe('feature/x');
     expect(await g.createBranch('bad..name')).toMatchObject({ ok: false });
@@ -295,6 +300,78 @@ describe('history', () => {
   });
 });
 
+describe('branches with ~50k remote refs', () => {
+  /** A repo with a few hundred commits, 30 local branches and `n` remote-tracking refs in packed-refs. */
+  async function manyRefs(n: number): Promise<string> {
+    const dir = await makeRepo('refs', { 'f.txt': '0\n' });
+    for (let k = 1; k <= 40; k++) {
+      write(dir, 'f.txt', `${k}\n`);
+      git(dir, 'commit', '-qam', `Commit ${k}`);
+    }
+    const shas = git(dir, 'rev-list', 'main').trim().split('\n');
+    for (let b = 0; b < 30; b++) git(dir, 'branch', `topic/local-${String(b).padStart(2, '0')}`, shas[b]);
+    git(dir, 'pack-refs', '--all');
+    const packed = fs.readFileSync(path.join(dir, '.git/packed-refs'), 'utf8').trimEnd().split('\n');
+    const header = packed.filter((l) => l.startsWith('#'));
+    const refs = packed.filter((l) => !l.startsWith('#') && !l.startsWith('^'));
+    for (let i = 0; i < n; i++) refs.push(`${shas[i % shas.length]} refs/remotes/origin/feature/team-${String(i % 40).padStart(2, '0')}/branch-${String(i).padStart(5, '0')}`);
+    refs.sort((a, b) => (a.split(' ')[1] < b.split(' ')[1] ? -1 : 1));
+    fs.writeFileSync(path.join(dir, '.git/packed-refs'), [...header, ...refs].join('\n') + '\n');
+    git(dir, 'remote', 'add', 'origin', '/nonexistent');
+    return dir;
+  }
+
+  it('phase 1 (local + remote count) is instant; remote windows and dates come on demand', async () => {
+    const dir = await manyRefs(50_000);
+    const g = svc(dir);
+    await g.status(); // discovery
+    let t = Date.now();
+    const list = await g.branches();
+    const phase1 = Date.now() - t;
+    expect(list.branches).toHaveLength(31);
+    expect(list.branches[0]).toMatchObject({ name: 'main', current: true });
+    expect(list.remoteCount).toBe(50_000);
+    t = Date.now();
+    const local = await g.branchDetails(list.branches.map((b) => b.oid));
+    const localDates = Date.now() - t;
+    expect(local.details.length).toBeGreaterThan(20); // shared commits are listed once
+    t = Date.now();
+    const page = await g.remoteBranches({ offset: 25_000, limit: 40 });
+    const window = Date.now() - t;
+    expect(page.total).toBe(50_000);
+    expect(page.items).toHaveLength(40);
+    expect(page.items[0].name < page.items[1].name).toBe(true); // name-sorted
+    const filtered = await g.remoteBranches({ filter: 'TEAM-07/branch-0', limit: 1000 });
+    expect(filtered.total).toBe(250); // case-insensitive substring
+    t = Date.now();
+    const remoteDates = await g.branchDetails(page.items.map((b) => b.oid), 'remotes');
+    const visibleDates = Date.now() - t;
+    expect(remoteDates.details.length).toBeGreaterThan(0);
+    console.log(`[git perf] 50k remote refs: phase 1 ${phase1} ms · local dates ${localDates} ms · remote window ${window} ms · visible dates ${visibleDates} ms`);
+    expect(phase1).toBeLessThan(1500);
+    expect(window).toBeLessThan(300);
+  }, 60_000);
+
+  it('slow commit reads never delay phase 1; cancelling remote dates is immediate', async () => {
+    const dir = await manyRefs(2_000);
+    const slow = path.join(BASE, 'slow-log-git.sh');
+    fs.writeFileSync(slow, '#!/bin/sh\nfor a in "$@"; do [ "$a" = "log" ] && sleep 4 && break; done\nexec git "$@"\n', { mode: 0o755 });
+    const g = new GitService(dir, { env: testEnv(), gitPath: slow });
+    services.push(g);
+    await g.status();
+    const list = await g.branches();
+    const details = g.branchDetails(list.branches.map((b) => b.oid)); // sleeps 4 s
+    const t = Date.now();
+    expect((await g.branches()).branches).toHaveLength(31); // not queued behind the slow dates
+    expect((await g.remoteBranches({ limit: 10 })).items).toHaveLength(10);
+    expect(Date.now() - t).toBeLessThan(1500);
+    const remote = g.branchDetails((await g.remoteBranches({ limit: 10 })).items.map((b) => b.oid), 'remotes');
+    g.cancel('remotes');
+    expect(await remote).toMatchObject({ details: [], error: 'cancelled' });
+    expect((await details).details.length).toBeGreaterThan(0); // the local dates were not cancelled
+  }, 30_000);
+});
+
 describe('background lists (low-priority queue)', () => {
   /** A git that takes `secs` before every `log`: a stand-in for history on a huge repository. */
   function slowGit(secs: number): string {
@@ -388,10 +465,20 @@ describe('BackendService.git dispatcher', () => {
 describe('parsers', () => {
   it('branches, log, name-status, errors, terminal commands', () => {
     const rec = (...f: string[]) => f.join('\x00');
-    const b = parseBranches([rec('refs/heads/main', 'main', 'abc1234', 'origin/main', '*', '100', 'Subject one'), rec('refs/remotes/origin/HEAD', 'origin', 'abc', '', ' ', '100', 'x'), rec('refs/remotes/origin/main', 'origin/main', 'def', '', ' ', '90', 'two')].join('\n'));
-    expect(b.map((x) => [x.name, x.current, x.remote, x.upstream, x.date])).toEqual([
-      ['main', true, false, 'origin/main', 100],
-      ['origin/main', false, true, null, 90],
+    const H1 = '1'.repeat(40);
+    const local = parseLocalBranches([rec('refs/heads/zeta', H1, '', ' '), rec('refs/heads/main', H1, 'refs/remotes/origin/main', '*'), rec('refs/heads/alpha', H1, '', ' ')].join('\n'));
+    expect(local.map((b) => [b.name, b.current, b.upstream])).toEqual([
+      ['main', true, 'origin/main'],
+      ['alpha', false, null],
+      ['zeta', false, null],
+    ]);
+    expect(parseRemoteRefs([rec('refs/remotes/origin/HEAD', H1), rec('refs/remotes/origin/a', H1), rec('refs/remotes/up/b', H1)].join('\n'))).toEqual([
+      { name: 'origin/a', oid: H1 },
+      { name: 'up/b', oid: H1 },
+    ]);
+    expect(parseDetails(`${H1}\x1f100\x1fSubject\0\n${'2'.repeat(40)}\x1f5\x1f\0`)).toEqual([
+      { oid: H1, date: 100, subject: 'Subject' },
+      { oid: '2'.repeat(40), date: 5, subject: '' },
     ]);
     const H = 'a'.repeat(40);
     expect(parseLog(`${H}\x1faaaaaaa\x1f\x1fMe\x1fme@x\x1f5\x1fFirst\0`)).toEqual([{ oid: H, short: 'aaaaaaa', parents: [], author: 'Me', email: 'me@x', date: 5, subject: 'First' }]);

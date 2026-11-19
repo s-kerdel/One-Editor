@@ -23,6 +23,7 @@ let store: GitStore | null = null;
 export const getGitStore = () => store;
 
 import { gitCall } from './rpc';
+import { logActivity } from '../app/activity';
 
 const HINT_KEY = 'sec-edit.git.hintShown';
 
@@ -45,14 +46,25 @@ export function gutterSource(s: GitStore): GitGutterSource {
 }
 
 /** `.git` changed (commit / checkout in a terminal): Electron IPC, or the server's git event stream. */
-function onGitChanged(cb: () => void): () => void {
-  const bridge = (globalThis as { secEditBridge?: { on(ch: string, cb: () => void): () => void } }).secEditBridge;
-  if (bridge) return bridge.on('git:changed', cb);
+type GitPush = { version?: number; running?: boolean; ran?: { trigger: string; ms: number; repo: string; engine: string; ok: boolean; skipped?: string } };
+/** Backend notices: a new status version (pull the delta) or a run started / ended. */
+function onGitChanged(cb: (e: GitPush) => void): () => void {
+  const bridge = (globalThis as { secEditBridge?: { on(ch: string, cb: (p: unknown) => void): () => void } }).secEditBridge;
+  if (bridge) return bridge.on('git:changed', (p) => cb((p ?? {}) as GitPush));
   if (typeof EventSource === 'undefined') return () => {};
   const es = new EventSource(new URL(`./api/events?git=1&token=${encodeURIComponent(webToken())}`, location.href).toString());
-  es.addEventListener('git', cb);
+  es.addEventListener('git', (ev) => {
+    try {
+      cb(JSON.parse((ev as MessageEvent).data) as GitPush);
+    } catch {
+      cb({});
+    }
+  });
   return () => es.close();
 }
+
+/** This window, for the backend's "is anyone looking?" (several browser tabs share one server). */
+const CLIENT = Math.random().toString(36).slice(2, 10);
 
 type EditorViewT = import('@codemirror/view').EditorView;
 const view = () => app.editor?.getView?.() as EditorViewT | undefined;
@@ -72,20 +84,38 @@ export function installGit(): GitStore | null {
   if (store) return store;
   const call = gitCall();
   if (!call) return null; // backend without git: everything stays hidden
-  const backend: GitBackend = { gitStatus: () => call('status'), gitHeadFile: (p, rev) => call('headFile', p, rev) };
+  const backend: GitBackend = { gitStatus: (o) => call('status', o), gitHeadFile: (p, rev) => call('headFile', p, rev) };
   const s = new GitStore(backend, { foldCase: app.backend.os === 'win32' || app.backend.os === 'darwin', onHint: hintOnce });
   store = s;
   const enabled = () => app.settings.value['git.enabled'] !== false;
   s.setEnabled(enabled());
-  app.events.on('settings:changed', () => s.setEnabled(enabled()));
+  let routing = app.settings.value['git.wslRouting'];
+  app.events.on('settings:changed', (st) => {
+    s.setEnabled(enabled());
+    if (st['git.wslRouting'] !== routing) {
+      routing = st['git.wslRouting'];
+      s.reset(); // the backend rebuilt its git monitor: start from a full status
+    }
+  });
   app.events.on('workspace:opened', () => s.reset());
-  app.events.on('doc:saved', () => s.refresh());
-  app.events.on('file:updated', () => s.refresh());
-  app.events.on('file:renamed', () => s.refresh());
-  app.backend.onFsEvents(() => s.refresh());
-  onGitChanged(() => s.refresh());
-  window.addEventListener('focus', () => s.refresh(true));
-  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && s.refresh(true));
+  // Saves, fs events and .git changes are seen by the backend itself (it decides when git runs); the
+  // window only reports what the backend cannot see: focus and whether anyone is looking.
+  onGitChanged((e) => {
+    if (e.ran) {
+      // Shared activity log ("Developer: Show activity log"): every git status run, why, how long.
+      const r = e.ran;
+      const what = r.trigger === 'index-refresh' ? 'index refresh' : 'status';
+      const outcome = r.skipped === 'locked' ? ' · skipped (index.lock: another git is writing)' : r.ok ? '' : ' · failed';
+      return logActivity({ kind: 'git', trigger: r.trigger, ms: r.ms, detail: `${what}${r.repo ? ` · ${r.repo}` : ''}${r.engine === 'wsl' ? ' · in WSL' : ''}${outcome}` });
+    }
+    if (typeof e.running === 'boolean') return void (s.busy.value = e.running);
+    if (e.version === undefined || e.version !== (s.status.peek() as { version?: number } | null)?.version) s.refresh();
+  });
+  const nudge = (k: 'focus' | 'open') => void call('nudge', k).catch(() => {});
+  const visible = () => void call('visibility', CLIENT, document.visibilityState !== 'hidden').catch(() => {});
+  window.addEventListener('focus', () => nudge('focus'));
+  document.addEventListener('visibilitychange', visible);
+  visible();
   if (app.workspace.value) s.refresh(true);
 
   // "Show changes" tree, memoised so the virtualised tree only re-flattens when something changed.

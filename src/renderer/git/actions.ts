@@ -45,8 +45,9 @@ export async function runGit(store: GitStore, label: string, fn: () => Promise<G
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 
-export const stage = (s: GitStore, paths: string[] | null) => runGit(s, 'Staging', () => git('stage', paths), { quiet: true });
-export const unstage = (s: GitStore, paths: string[] | null) => runGit(s, 'Unstaging', () => git('unstage', paths), { quiet: true });
+/** `repo`: with `paths` = null, the repository to stage / unstage everything in. */
+export const stage = (s: GitStore, paths: string[] | null, repo?: string) => runGit(s, 'Staging', () => git('stage', paths, repo), { quiet: true });
+export const unstage = (s: GitStore, paths: string[] | null, repo?: string) => runGit(s, 'Unstaging', () => git('unstage', paths, repo), { quiet: true });
 
 /** Conflicts: staging = "resolved". Asks first when the file still has conflict markers. */
 export async function markResolved(s: GitStore, path: string): Promise<void> {
