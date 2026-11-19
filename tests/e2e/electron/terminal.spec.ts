@@ -107,28 +107,69 @@ test('Run in terminal from a note pastes without pressing Enter (editor + previe
   await expect.poll(async () => count(await termText(page), 'echo RUN-OK')).toBe(2);
 });
 
+/** Viewport row (0-based) whose rendered text starts with `prefix`; -1 until the DOM renderer shows it. */
+const rowStarting = async (page: Page, prefix: string) => (await rows(page)).findIndex((r) => r.startsWith(prefix));
+
+/** Centre of cell `col` on viewport row `row` (+ the cell width). */
+async function cellPoint(page: Page, row: number, col: number) {
+  const box = (await page.locator('.se-term-view .xterm-rows > div').nth(row).boundingBox())!;
+  const cell = (await page.locator('.se-term-view .xterm-screen').boundingBox())!.width / (await active(page))!.cols;
+  return { x: box.x + cell * (col + 0.5), y: box.y + box.height / 2, cell };
+}
+
+const linkHint = (page: Page) => page.locator('.se-term-view[title="Ctrl+click to open"]');
+
+/**
+ * Hover a link until xterm reports it (the "Ctrl+click to open" hint). Enters from the next cell each try:
+ * with parallel Electron windows on one X display, stray mouseleave events can drop a hover.
+ */
+async function hoverLink(page: Page, p: { x: number; y: number; cell: number }) {
+  await page.mouse.move(p.x - p.cell, p.y);
+  await page.mouse.move(p.x, p.y);
+  await expect(linkHint(page)).toHaveCount(1, { timeout: 1000 });
+}
+
 test('file paths in the output open the file at that line (Ctrl+click)', async ({ el }) => {
   const { page } = await launch(el);
   await openTerminal(page);
   await page.keyboard.type('clear; echo "error at code/app.ts:2:7 here"\n');
-  await expect.poll(() => termText(page)).toContain('error at code/app.ts:2:7 here');
-  const i = (await rows(page)).findIndex((r) => r.startsWith('error at'));
-  const row = page.locator('.se-term-view .xterm-rows > div').nth(i);
-  const box = (await row.boundingBox())!;
-  const a = (await active(page))!;
-  const cell = (await page.locator('.se-term-view .xterm-screen').boundingBox())!.width / a.cols;
-  const x = box.x + cell * ('error at '.length + 3.5);
-  // Hovering a detected link shows the "Ctrl+click to open" hint: wait for it (link detection is async).
+  // Wait for the OUTPUT row followed by the next prompt: the echoed command line holds the same text
+  // until `clear` runs (matching that gave row -1 → nth(-1) = the last, empty row).
+  const settled = async () => {
+    const r = await rows(page);
+    const i = r.findIndex((t) => t.startsWith('error at'));
+    return i >= 0 && r[i + 1]?.startsWith('term$') ? i : -1;
+  };
+  await expect.poll(settled).toBeGreaterThanOrEqual(0);
+  const p = await cellPoint(page, await settled(), 'error at '.length + 3);
   await expect(async () => {
-    await page.mouse.move(x - 4, box.y + box.height / 2);
-    await page.mouse.move(x, box.y + box.height / 2);
-    await expect(page.locator('.se-term-view[title="Ctrl+click to open"]')).toHaveCount(1, { timeout: 500 });
-  }).toPass({ timeout: 10000 });
-  await page.keyboard.down('Control');
-  await page.mouse.click(x, box.y + box.height / 2);
-  await page.keyboard.up('Control');
-  await expect(page.locator('.se-tab.active')).toContainText('app.ts');
+    await hoverLink(page, p);
+    await page.keyboard.down('Control');
+    await page.mouse.click(p.x, p.y);
+    await page.keyboard.up('Control');
+    await expect(page.locator('.se-tab.active')).toContainText('app.ts', { timeout: 1000 });
+  }).toPass({ timeout: 15000 });
   await expect.poll(() => page.evaluate(() => (window as any).__secEdit.editor.getCursor())).toMatchObject({ line: 1, col: 6 }); // 0-based
+});
+
+test('a path printed under a resting mouse becomes a link without leaving the row', async ({ el }) => {
+  const { page } = await launch(el);
+  await openTerminal(page);
+  await page.keyboard.type('clear\n');
+  await expect.poll(() => rowStarting(page, 'term$')).toBe(0);
+  // Rest the mouse on row 0 while it holds no link: xterm caches that answer for the row.
+  const p = await cellPoint(page, 0, 'see '.length + 3);
+  await page.mouse.move(p.x, p.y);
+  await expect(linkHint(page)).toHaveCount(0);
+  // The path lands on exactly that row.
+  await page.keyboard.type('clear; echo "see code/app.ts:2:7"\n');
+  await expect.poll(() => rowStarting(page, 'see code/app.ts')).toBe(0);
+  // Nudge inside the same cell only (xterm alone would keep its stale "no link" for this row).
+  await expect(async () => {
+    await page.mouse.move(p.x + 1, p.y);
+    await page.mouse.move(p.x, p.y);
+    await expect(linkHint(page)).toHaveCount(1, { timeout: 1000 });
+  }).toPass({ timeout: 10000 });
 });
 
 test('Claude: preset in the shell picker + "Ask about selection" pre-fills a prompt, never submits', async ({ el }) => {

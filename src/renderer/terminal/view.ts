@@ -98,7 +98,11 @@ export function createXtermView(o: TerminalViewOptions): TerminalView {
   term.loadAddon(fitAddon);
   term.loadAddon(search);
   let theme = o.theme;
-  const hint = (show: boolean) => (element.title = show ? `${o.os === 'darwin' ? 'Cmd' : 'Ctrl'}+click to open` : '');
+  let linkShown = false;
+  const hint = (show: boolean) => {
+    linkShown = show;
+    element.title = show ? `${o.os === 'darwin' ? 'Cmd' : 'Ctrl'}+click to open` : '';
+  };
   term.loadAddon(new WebLinksAddon((e, uri) => modClick(e, o.os) && o.openUrl(uri), { hover: () => hint(true), leave: () => hint(false) }));
 
   // Workspace files named in the output: `src/a.ts:12:3` → Ctrl+click opens it at that line.
@@ -124,6 +128,8 @@ export function createXtermView(o: TerminalViewOptions): TerminalView {
       cb(links.length ? links : undefined);
     },
   });
+
+  const cleanups: Array<() => void> = [];
 
   // WebGL renderer: switched on after the terminal is up (never on the open path), off again on context loss.
   let gpu: GpuMode = o.gpu ?? 'auto';
@@ -237,6 +243,7 @@ export function createXtermView(o: TerminalViewOptions): TerminalView {
     onTitle: (cb) => sub(term.onTitleChange(cb)),
     dispose() {
       disposed = true;
+      cleanups.splice(0).forEach((f) => f());
       webgl = null; // disposed with the terminal
       ro?.disconnect();
       cancelAnimationFrame(raf);
@@ -286,7 +293,43 @@ export function createXtermView(o: TerminalViewOptions): TerminalView {
     if (opened || !element.isConnected) return;
     opened = true;
     term.open(element);
+    watchRestingMouse();
     idle(() => void applyGpu());
+  }
+
+  /**
+   * xterm caches link-provider answers per row and asks again only when the mouse changes rows (or a link
+   * was already shown there). So a path printed under a resting mouse, or while the mouse was outside,
+   * stayed unlinked until you left the row and came back. Replay that row change when the row under the
+   * mouse re-renders, and on re-entry. Not bubbling: only the screen's own listeners (link detection,
+   * cursor style) see it, never mouse reporting or drag selection.
+   */
+  function watchRestingMouse() {
+    const screen = element.querySelector<HTMLElement>('.xterm-screen');
+    if (!screen) return;
+    let at: { x: number; y: number } | null = null;
+    const rowAt = (y: number) => {
+      const r = screen.getBoundingClientRect();
+      return Math.floor((y - r.top) / (r.height / term.rows));
+    };
+    const reask = (row: number) => {
+      if (!at || linkShown || disposed || row < 0 || row >= term.rows || term.modes.mouseTrackingMode !== 'none') return;
+      const h = screen.getBoundingClientRect().height / term.rows;
+      for (const y of [at.y + (row > 0 ? -h : h), at.y]) screen.dispatchEvent(new MouseEvent('mousemove', { clientX: at.x, clientY: y }));
+    };
+    screen.addEventListener('mousemove', (e) => {
+      if (!e.isTrusted) return;
+      const back = !at;
+      at = { x: e.clientX, y: e.clientY };
+      if (back) reask(rowAt(at.y)); // runs after xterm's own handler: only acts if that found no link
+    });
+    screen.addEventListener('mouseleave', () => (at = null));
+    const sub = term.onRender(({ start, end }) => {
+      if (!at) return;
+      const row = rowAt(at.y);
+      if (row >= start && row <= end) reask(row);
+    });
+    cleanups.push(() => sub.dispose());
   }
 
   let raf = 0;
