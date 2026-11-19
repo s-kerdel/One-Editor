@@ -17,6 +17,7 @@ import { registerProcessSource } from '../backend/processes';
 import { electronProcessSource } from './process-rows';
 import { APP_ORIGIN, SCHEME, isAppNavigation, isExternalUrl, pathsFromArgs, routeAppUrl } from './protocol';
 import { renderPdf } from './pdf-window';
+import { PDF_WORKER_CSP, isPdfWorkerAsset } from '../shared/pdf';
 import { TerminalService, loadNodePty, registerTerminalIpc } from './terminal';
 import { VaultService, registerVaultIpc } from './vault';
 import { registerGpuIpc } from './gpu';
@@ -446,7 +447,11 @@ function main() {
           return new Response('not found', { status: 404 });
         }
       }
-      return net.fetch(pathToFileURL(route.file).toString());
+      const res = await net.fetch(pathToFileURL(route.file).toString());
+      if (!isPdfWorkerAsset(route.file)) return res;
+      const headers = new Headers(res.headers);
+      headers.set('content-security-policy', PDF_WORKER_CSP);
+      return new Response(res.body, { status: res.status, headers });
     });
   }
 

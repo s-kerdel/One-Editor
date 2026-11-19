@@ -120,6 +120,13 @@ export function isAltGrText(e: KeyboardEvent): boolean {
 /** false → the key goes to the focused widget, not to a global command (the terminal's shell gets Ctrl+W/E/N…). */
 let keyFilter: ((e: KeyboardEvent, key: string) => boolean) | null = null;
 export const setGlobalKeyFilter = (fn: typeof keyFilter) => void (keyFilter = fn);
+/** More widgets that keep keys while focused (the PDF viewer's zoom / find): any false wins. Returns a remover. */
+type KeyFilter = (e: KeyboardEvent, key: string) => boolean;
+const keyFilters = new Set<KeyFilter>();
+export function addGlobalKeyFilter(fn: KeyFilter): () => void {
+  keyFilters.add(fn);
+  return () => void keyFilters.delete(fn);
+}
 
 /** Global keybinding dispatcher. Runs in capture phase only for Mod-chords so the editor keeps its own keys. */
 export function installGlobalKeymap(target: Window = window) {
@@ -130,6 +137,7 @@ export function installGlobalKeymap(target: Window = window) {
       if (isAltGrText(e)) return;
       const key = eventToKey(e);
       if (keyFilter && !keyFilter(e, key)) return;
+      for (const f of keyFilters) if (!f(e, key)) return;
       for (const c of registry.values()) {
         if (c.keys?.some((k) => normalizeKey(k) === key) && (!c.when || c.when())) {
           e.preventDefault();

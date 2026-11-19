@@ -112,3 +112,10 @@ export function printToPdfOptions(l: PdfLayout) {
     generateTaggedPDF: true,
   };
 }
+
+// ---- PDF viewer (pdf.js) ----------------------------------------------------------------------
+/** The pdf.js worker script as the renderer build emits it (`assets/pdf.worker.min-<hash>.mjs`). */
+export const isPdfWorkerAsset = (file: string): boolean => /(^|[\\/])pdf\.worker[^\\/]*\.m?js$/.test(file);
+/** A worker gets its CSP from its own response, not from index.html: served with this one, so pdf.js
+ *  runs without eval (wasm image decoders only) and can reach nothing but the app's own origin. */
+export const PDF_WORKER_CSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'";

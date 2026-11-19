@@ -14,6 +14,8 @@ export interface RevealTarget {
   line: number; // 0-based
   col?: number; // 0-based column within line
   length?: number; // select this many chars from col
+  /** PDF viewer: 1-based page to show (`[[doc.pdf#page=3]]`). */
+  page?: number;
 }
 
 export interface EditorController {
@@ -87,6 +89,8 @@ export interface DocState {
   encoding?: TextEncoding;
   /** Binary/image file: shown in a viewer, never written back. */
   binary?: boolean;
+  /** Viewer docs (PDF): where to go once the viewer is ready (openFile's reveal), consumed by the viewer. */
+  reveal?: RevealTarget;
 }
 
 export interface Toast {
@@ -134,6 +138,10 @@ export type AppEvents = {
   'variables:changed': () => void;
   /** Files changed on disk that are not open (no content: indexers re-read them, coalesced, off the UI thread). */
   'files:changed': (paths: string[]) => void;
+  /** An open viewer doc (PDF) changed on disk: its viewer reloads the bytes (never read as text). */
+  'binary:changed': (path: string) => void;
+  /** openFile(path, reveal) on a viewer doc (PDF page), for a viewer that is already showing it. */
+  'viewer:reveal': (path: string, target: RevealTarget) => void;
 };
 
 class App {

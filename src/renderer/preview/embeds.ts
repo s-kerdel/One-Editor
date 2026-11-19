@@ -3,6 +3,7 @@
 // with cycle detection and a depth limit.
 import { isMarkdown } from '@shared/paths';
 import { slugify } from './markdown';
+import { isPdfPath, pageFromFragment } from '../pdf/model';
 
 export interface EmbedContext {
   /** Text of a workspace file, or null when it cannot be read. */
@@ -75,6 +76,7 @@ export async function expandEmbeds(root: ParentNode, ctx: EmbedContext, stack: r
       (async () => {
         const frag = el.dataset.embedFrag;
         let html: string;
+        if (isPdfPath(path)) return pdfCard(el, path, frag);
         if (BINARY_RE.test(path)) return;
         const src = await ctx.read(path);
         if (src === null) {
@@ -106,6 +108,29 @@ export async function expandEmbeds(root: ParentNode, ctx: EmbedContext, stack: r
     );
   }
   await Promise.all(jobs);
+}
+
+/** `![[doc.pdf]]` / `![[doc.pdf#page=3]]`: a compact card; its link opens the PDF viewer (at that page). */
+function pdfCard(el: HTMLElement, path: string, frag: string | undefined): void {
+  const link = el.querySelector<HTMLAnchorElement>(':scope > a');
+  if (!link) return;
+  const page = pageFromFragment(frag);
+  const name = document.createElement('span');
+  name.className = 'se-embed-pdf-name';
+  name.textContent = path.slice(path.lastIndexOf('/') + 1);
+  const meta = document.createElement('span');
+  meta.className = 'se-embed-pdf-meta';
+  meta.textContent = page ? `PDF · page ${page}` : 'PDF';
+  const badge = document.createElement('span');
+  badge.className = 'se-embed-pdf-icon';
+  badge.textContent = 'PDF';
+  const text = document.createElement('span');
+  text.className = 'se-embed-pdf-text';
+  text.append(name, meta);
+  link.replaceChildren(badge, text);
+  link.classList.add('se-embed-pdf-card');
+  link.title = `Open ${path}${page ? ` at page ${page}` : ''}`;
+  el.classList.add('se-embed-pdf', 'is-loaded');
 }
 
 /** Puts loaded embeds of `path` back into placeholder state so the next expandEmbeds() refreshes them. */

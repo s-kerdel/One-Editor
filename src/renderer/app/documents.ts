@@ -82,10 +82,17 @@ function touchMru(path: string) {
 
 // ---- open -----------------------------------------------------------------------------------
 const opening = new Map<string, Promise<DocState | null>>();
+const PDF_RE = /\.pdf$/i;
 
 async function loadDoc(path: string): Promise<DocState | null> {
   const existing = app.docs.get(path);
   if (existing) return existing;
+  if (PDF_RE.test(path)) {
+    // A PDF is never read as text (it may be 50 MB): its viewer fetches the bytes itself.
+    const doc = docFromFile(path, { path, content: '', mtime: 0, eol: 'lf', binary: true });
+    app.docs.set(path, doc);
+    return doc;
+  }
   if (!opening.has(path)) {
     opening.set(
       path,
@@ -118,6 +125,7 @@ function docFromFile(path: string, f: FileData): DocState {
 export async function openFile(path: string, reveal?: RevealTarget) {
   const doc = await loadDoc(path);
   if (!doc) return;
+  if (doc.binary && reveal) doc.reveal = reveal; // the viewer consumes it (PDF page)
   if (!app.tabs.value.some((t) => t.path === path)) {
     // New tabs open right of the active one (like every browser / VS Code).
     const tabs = [...app.tabs.value];
@@ -137,6 +145,7 @@ export async function openFile(path: string, reveal?: RevealTarget) {
   }
   app.events.emit('doc:opened', path);
   app.events.emit('active:changed', path);
+  if (doc.binary && reveal) app.events.emit('viewer:reveal', path, reveal);
   if (reveal && !doc.binary) requestAnimationFrame(() => app.editor?.reveal(reveal));
   persistSession();
 }

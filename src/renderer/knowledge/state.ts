@@ -12,6 +12,7 @@ import { logActivity } from '../app/activity';
 import { extractor } from './extractor';
 import { createRenameRewriter } from '../../knowledge/rename';
 import { applyTemplate, dailyNotePath, sanitizeNoteName } from '../../knowledge/templates';
+import { isPdfPath, pageFromFragment } from '../pdf/model';
 
 // No note texts here: metadata + link snippets come from the search workers, which hold the text.
 // Link data derives in slices between tasks (10k notes: ~1 s of work that must not freeze the UI).
@@ -311,6 +312,9 @@ export async function openLink(target: string, fromPath: string, _opts?: { newTa
     await app.openFile(path, { line: 2 });
     return;
   }
+  // [[doc.pdf#page=3]]: the PDF viewer opens at that page.
+  const pdfPage = isPdfPath(path) ? pageFromFragment(link.heading) : null;
+  if (pdfPage) return app.openFile(path, { line: 0, page: pdfPage });
   const line = await anchorLine(path, link);
   await app.openFile(path, line === null ? undefined : { line });
 }

@@ -82,6 +82,12 @@ export async function handleFsEvents(events: FsEvent[]) {
 async function reconcileFile(path: string) {
   const doc = app.docs.get(path);
   if (!doc && isImagePath(path)) return; // nothing to tell listeners about an image's bytes
+  if (doc?.binary && /\.pdf$/i.test(path)) {
+    // Never read as text (size cap, a full read per save): the open viewer reloads the bytes itself.
+    ui.setIn(ui.deletedOnDisk, path, false);
+    app.events.emit('binary:changed', path);
+    return;
+  }
   let f: FileData;
   try {
     f = await app.backend.readFile(path);

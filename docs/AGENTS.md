@@ -25,6 +25,7 @@ browser mode served by a local Node server. Both share one renderer.
 | `src/renderer/variables/`, `src/main/vault*.ts`, `src/shared/vault.ts` ({{variables}}, environments / targets, secrets vault, smart paste; the editor chunk holds only `variables/cm.ts`, the rest is the lazy `variables` chunk; `variables/slot.ts` is the status-bar slot) | **variables** |
 | `src/main/web-server*.ts`, `src/shared/web-server.ts`, `src/renderer/webserver/` ("Start web server": browser mode for the open folder as a child process, desktop only; `webserver/slot.ts` is the status-bar slot, the rest is the lazy `web-server-ui` chunk; Settings → Browser mode) | **shell** |
 | `src/renderer/whitespace/` (trailing whitespace: paste trim via CodeMirror's `clipboardInputFilter`, trim on save through format's `beforeSave` hook in `src/format/install.ts`, the `editor.trimWhitespace` command; editor chunk only) | **variables** |
+| `src/renderer/pdf/` (PDF viewer: lazy chunk `PdfView` on pdf.js's `PDFViewer`; `engine.ts` is the only place documents are opened — security options live there; `model.ts` pure helpers; pdf.js data assets copied by `vite.config.ts` → `pdfjs/`; the worker gets `PDF_WORKER_CSP` from `src/shared/pdf.ts` in `main.ts` / `server.ts`) | **pdf** |
 | `tests/unit/<area>/`, `tests/e2e/<area>*.spec.ts` | the area's owner |
 
 ### Shared files (integration points)
@@ -71,6 +72,12 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   `extractSection`) through the preview pipeline (`renderOptionsFor`: sanitised, `{{variables}}` resolved), lazy chunk
   `knowledge/hover-render.ts`. A new link surface: report hovers the same way instead of drawing its own tooltip.
 - Global `window.__secEdit` = `app` (for E2E introspection). `html[data-ready="true"]` once booted.
+- Viewer docs (PDF, pdf area): a `.pdf` is never read as text — `loadDoc` makes a `binary` doc without a read,
+  the shell's lazy `Viewer` mounts `pdf/PdfView` per path, unmount = `loadingTask.destroy()` (document + worker).
+  `openFile(path, { line: 0, page })` → `doc.reveal` / event `viewer:reveal`; a disk change of an open PDF emits
+  `binary:changed` (no read). Bytes come through the workspace file URL (`fileUrl`), never an RPC. Keys a focused
+  widget must keep from the global keymap can also use `addGlobalKeyFilter()` (stackable; the viewer's `Ctrl+±/F/G/0`).
+  PDF text is **not** indexed (no search / OCR) — by decision.
 - Terminal (desktop only): `app.runInTerminal?.(code, { lang })` pastes a shell code block into the terminal
   (never presses Enter by default) — feature-detect it, it is unset in the browser. `isRunnableFence(lang)` from
   `src/renderer/terminal/run.ts` (dependency-free) says which fences get a "Run in terminal" button.
@@ -114,6 +121,7 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
 | knowledge | `Mod-Alt-o` outline, `Mod-Alt-l` backlinks, `Mod-Alt-g` graph |
 | git | `Mod-Shift-g` Source control panel, `Alt-F5` / `Shift-Alt-F5` next / previous change; pane-local `Mod-Enter` commit; diff view `F7` / `Shift-F7`, `Esc` |
 | overview | `Mod-Alt-b` toggle file overview (right sidebar) |
+| pdf (viewer-local, focus inside `.se-pdf` only; beats shell's UI zoom via `addGlobalKeyFilter`) | `Mod-f` find, `Mod-=`/`Mod--`/`Mod-0` + `Ctrl`-wheel zoom, `Mod-g` page box |
 | terminal | ``Mod-` `` toggle / focus / hide panel, ``Mod-Shift-` `` (+ `Mod-Shift-~`) new terminal |
 | terminal (xterm-local, focused terminal only) | `Mod-Shift-c`/`Mod-Shift-v` copy/paste, `Mod-f` find, `Shift-Insert`/`Ctrl-Insert`; Windows also `Ctrl-c` (with a selection) / `Ctrl-v`; macOS `Cmd-c/v/f/a/k` |
 

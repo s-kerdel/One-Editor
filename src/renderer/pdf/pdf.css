@@ -1,0 +1,37 @@
+/* PDF viewer chrome (theme tokens from styles/app.css); the pages themselves use pdf_viewer.css. */
+.se-pdf { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg-sunken); color: var(--text); }
+.se-pdf-bar { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 3px 10px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12.5px; flex: none; }
+.se-pdf-name { color: var(--text-muted); max-width: 32%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-pdf-group { display: inline-flex; align-items: center; gap: 4px; }
+.se-pdf-spacer { flex: 1; }
+.se-pdf-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); }
+.se-pdf-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.se-pdf-btn:disabled { opacity: 0.4; }
+.se-pdf-btn.on { background: var(--accent-soft); color: var(--accent); }
+.se-pdf-page { width: 44px; height: 24px; padding: 0 6px; text-align: right; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text); font: inherit; font-variant-numeric: tabular-nums; }
+.se-pdf-count { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 3.5em; }
+.se-pdf-zoom { height: 24px; padding: 0 4px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text); font: inherit; }
+.se-pdf-page:focus-visible, .se-pdf-zoom:focus-visible, .se-pdf-find-input:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.se-pdf-find { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid var(--border); background: var(--bg); color: var(--text-muted); flex: none; }
+.se-pdf-find-input { width: min(320px, 50%); height: 26px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text); font: inherit; font-size: 13px; }
+.se-pdf-find-count { min-width: 6em; font-size: 12px; font-variant-numeric: tabular-nums; }
+.se-pdf-find-count.none { color: var(--danger); }
+
+.se-pdf-body { position: relative; flex: 1; min-height: 0; }
+.se-pdf-scroll { position: absolute; inset: 0; overflow: auto; outline: none; }
+.se-pdf-scroll::-webkit-scrollbar { width: 12px; height: 12px; }
+.se-pdf-scroll::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: var(--radius-pill); border: 3px solid transparent; background-clip: content-box; }
+.se-pdf-scroll::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-hover); }
+.se-pdf .pdfViewer { --page-margin: 2px auto 0; padding: 8px 0 24px; }
+.se-pdf .pdfViewer .page { box-sizing: content-box; outline: 1px solid var(--border); outline-offset: -9px; } /* pdf.js sizes the content box (app.css: border-box) */
+.se-pdf .pdfViewer .page .canvasWrapper { box-shadow: var(--shadow-sm); }
+/* pdf.js highlight colours, tuned to the accent */
+.se-pdf .textLayer { --highlight-bg-color: color-mix(in srgb, var(--accent) 35%, transparent); --highlight-selected-bg-color: color-mix(in srgb, var(--accent) 70%, transparent); }
+.se-pdf .textLayer ::selection { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* "Dark pages": invert the rendered page (hue-rotate keeps images' colours roughly right). */
+.se-pdf-dark .pdfViewer .page { background-color: #181a1f; }
+.se-pdf-dark .pdfViewer .page .canvasWrapper { filter: invert(0.9) hue-rotate(180deg); }
+
+.se-pdf-error { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elev); color: var(--text); box-shadow: var(--shadow); max-width: calc(100% - 32px); }

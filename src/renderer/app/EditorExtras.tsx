@@ -8,6 +8,10 @@ import { reloadFromDisk } from './disk-sync';
 import { addIcons, Icon, isImagePath } from './icons';
 import { fileUrl } from '../platform';
 import { revealInOs, revealLabel } from './fileops';
+import { lazyComponent } from './lazy';
+
+// pdf.js + its viewer: their own chunk, fetched when the first PDF opens.
+const PdfView = lazyComponent<{ path: string }>(() => import('../pdf/PdfView').then((m) => m.PdfView));
 
 // Icons only this lazily loaded chunk draws (see addIcons).
 addIcons({ trash: 'M3 6h18|M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6|M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2|M10 11v6|M14 11v6' });
@@ -89,6 +93,7 @@ export function Banner() {
 }
 
 export function Viewer({ path }: { path: string }) {
+  if (/\.pdf$/i.test(path)) return <PdfView key={path} path={path} />;
   if (isImagePath(path)) {
     return (
       <div class="se-viewer">

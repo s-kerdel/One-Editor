@@ -5,6 +5,7 @@
 | I want to… | Go to |
 |---|---|
 | Open folders and files | [1. Folders and files](#1-folders-and-files) |
+| Read a PDF | [PDF files](#pdf-files) |
 | Write notes faster | [2. Writing notes](#2-writing-notes) |
 | Link notes together | [3. Links and knowledge](#3-links-and-knowledge) |
 | Find something | [4. Search](#4-search) |
@@ -103,6 +104,25 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 - Files go to the **Recycle Bin**, not gone forever.
 - If the bin is unavailable, sec-edit asks before deleting permanently.
 
+### PDF files
+
+**Click a `.pdf`** (tree, `Ctrl+P`, a `[[doc.pdf]]` link) → it opens in a **viewer tab**. Same in browser mode.
+
+| Do this | How |
+|---|---|
+| **Go to a page** | Type it in the **page box** (`Ctrl+G`), `Enter` · or ▲ / ▼ |
+| **Zoom** | `Ctrl+=` / `Ctrl+-` / **`Ctrl`+wheel** · `Ctrl+0` = fit width · the zoom list (Fit width, Fit page, %) |
+| **Find in the PDF** | `Ctrl+F`, type · `Enter` / `Shift+Enter` = next / previous · `Esc` closes |
+| **Copy text** | Select it with the mouse, `Ctrl+C` |
+| **Dark pages** | ☾ button (top right) inverts the pages. Remembered |
+| **Scroll** | Wheel, arrows, `PgUp` / `PgDn`, `Home` / `End` (click the page first) |
+| **Link to a page** | `[[doc.pdf#page=3]]` opens at page 3 |
+
+- **Links inside the PDF:** page links jump; web links open in your browser **only when you click them**.
+- **Changed on disk?** It reloads and stays on the same page.
+- **Not searched:** PDF text is not in **Find in files** (no OCR). `Ctrl+F` inside the open PDF works.
+- **Safe by design:** no PDF JavaScript, no forms, nothing sent anywhere.
+
 ---
 
 ## 2. Writing notes
@@ -192,6 +212,7 @@ Numbered lists **renumber themselves** as you edit.
 ![[Other note#Section]]    one section
 ![[Other note#^block-id]]  one block
 ![[diagram.png]]           image
+![[manual.pdf#page=3]]     PDF card → opens the viewer at page 3
 ```
 
 Embeds render in live preview and in the preview. They are read-only there.

@@ -14,6 +14,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { MAX_BINARY_BYTES, RPC_METHODS, type FsEvent } from '../shared/api';
 import { isTerminalMethod } from '../shared/terminal';
+import { PDF_WORKER_CSP, isPdfWorkerAsset } from '../shared/pdf';
 import { BackendService, type ServiceHooks } from '../backend/service';
 import { BackendFailure, type WorkspaceOptions } from '../backend/workspace';
 
@@ -306,6 +307,10 @@ async function serveStatic(dir: string, url: URL, token: string, req: http.Incom
     res.end(html);
     return;
   }
-  res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', 'cache-control': 'max-age=31536000, immutable' });
+  res.writeHead(200, {
+    'content-type': MIME[ext] || 'application/octet-stream',
+    'cache-control': 'max-age=31536000, immutable',
+    ...(isPdfWorkerAsset(rel) ? { 'content-security-policy': PDF_WORKER_CSP } : {}),
+  });
   res.end(data);
 }

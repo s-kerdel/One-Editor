@@ -193,6 +193,14 @@ html[data-theme='light'] .se-preview .se-code code span { color: var(--shiki-lig
 .se-preview.markdown-body .se-embed-title a { color: var(--text-muted); }
 .se-preview .se-embed-body { display: block; }
 .se-preview .se-embed-body > :first-child { margin-top: 0; }
+/* ![[doc.pdf]]: a compact card that opens the PDF viewer */
+.se-preview .se-embed.se-embed-pdf.is-loaded { display: block; margin: 0.9em 0; padding: 0; border: 0; }
+.se-preview.markdown-body a.se-embed-pdf-card { display: inline-flex; align-items: center; gap: 12px; max-width: 100%; padding: 10px 16px 10px 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elev); color: var(--text); text-decoration: none; box-shadow: var(--shadow-sm); }
+.se-preview.markdown-body a.se-embed-pdf-card:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+.se-preview .se-embed-pdf-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 42px; border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; }
+.se-preview .se-embed-pdf-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.se-preview .se-embed-pdf-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-preview .se-embed-pdf-meta { font-size: 0.8em; color: var(--text-muted); }
 .se-preview .se-embed-body > :last-child { margin-bottom: 0; }
 .se-preview .se-embed.is-cycle > a, .se-preview .se-embed.is-missing-section > a { text-decoration: underline wavy var(--warning); }
 .se-preview .footnotes-sep { margin: 2.6em 0 1em; }
