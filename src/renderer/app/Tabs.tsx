@@ -213,6 +213,8 @@ export function TabBar() {
             </div>
           );
         })}
+        {/* Empty end of the strip: drags the window with the integrated frame (styles/app.css). */}
+        <div class="se-tabs-end" aria-hidden="true" />
       </div>
       <div class="se-tabbar-tools">
         {ui.isMarkdownView(active) && (

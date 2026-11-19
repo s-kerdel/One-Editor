@@ -9,6 +9,7 @@ import os from 'node:os';
 import type { ElectronApplication, Page } from '@playwright/test';
 import { test, expect, fs, path, type ElectronFixture } from './fixture';
 import { connectXTest, type XPointer } from './xtest';
+import { appRegionReport, manyNotes, openTabs as openPaths, scrollTabs } from '../frame-regions';
 
 const XVFB = path.join(os.homedir(), '.local/xvfb/start-xvfb.sh');
 const hasImport = (() => {
@@ -102,8 +103,11 @@ test('integrated by default: frameless window, controls overlay, the tab strip i
   // Drag regions: the strip (and the band above the workspace switcher) drag; everything clickable is no-drag.
   expect(await region(page, '.se-topline')).toBe('drag');
   expect(await region(page, '.se-shelf-head')).toBe('drag');
-  for (const sel of ['.se-tab', '.se-tab-close', '.se-modes', '.se-mode', '.se-width-btn', '.se-ws', '.se-shelf-head .se-icon-btn', '.se-sash']) expect(await region(page, sel), sel).toBe('no-drag');
-  expect(await region(page, '.se-tabs')).toBe('drag'); // app-region inherits: the tab list's empty end drags
+  for (const sel of ['.se-tabs', '.se-modes', '.se-mode', '.se-width-btn', '.se-ws', '.se-shelf-head .se-icon-btn', '.se-sash']) expect(await region(page, sel), sel).toBe('no-drag');
+  // The tab list's box is the strip's one no-drag region (tabs scroll; Chromium never clips their boxes),
+  // its empty end drags.
+  for (const sel of ['.se-tab', '.se-tab-close']) expect(await region(page, sel), sel).toBe('none');
+  expect(await region(page, '.se-tabs-end')).toBe('drag');
   // Nothing of ours sits under the controls: the view modes end left of them.
   const ctl = w.rect!.x + w.rect!.width; // the controls start here
   const innerW = await page.evaluate(() => innerWidth);
@@ -147,10 +151,9 @@ test('real pointer input: tabs and buttons click, empty strip space drags, drops
     await expect.poll(() => page.evaluate(() => (window as any).__secEdit.activePath.value)).toBe('README.md');
     expect((await presses()).join()).toContain('se-tab');
     // The strip's empty end is a drag region: the OS takes the press (window move), the page never sees it.
-    const tabs = await rect(page, '.se-tabs');
-    const last = await rect(page, '.se-tab:last-child');
-    const empty = { x: (last.right + tabs.right) / 2, y: tabs.y + tabs.h / 2 };
-    expect(tabs.right - last.right).toBeGreaterThan(40);
+    const end = await rect(page, '.se-tabs-end');
+    const empty = { x: end.x + end.w / 2, y: end.y + end.h / 2 };
+    expect(end.w).toBeGreaterThan(40);
     await x!.click(empty.x, empty.y);
     expect(await presses()).toEqual([]);
     // Double-click there is the OS's (maximize); it must never reach our tab double-click-to-close.
@@ -162,8 +165,8 @@ test('real pointer input: tabs and buttons click, empty strip space drags, drops
     await x!.click(p.x, p.y);
     await expect.poll(() => page.evaluate(() => (window as any).__secEdit.settings.value.viewMode)).toBe('source');
     expect((await presses()).length).toBe(1);
-    // The band above the workspace switcher drags too.
-    await x!.click(60, 3);
+    // The band above the workspace switcher drags too (below the window's ~5px top resize border).
+    await x!.click(60, 7);
     expect(await presses()).toEqual([]);
     // Overlays above the strip take their clicks (backdrop click closes the palette).
     await page.keyboard.press('Control+Shift+P');
@@ -194,6 +197,64 @@ test('real pointer input: tabs and buttons click, empty strip space drags, drops
   }
   void app;
 });
+
+// User report: with many files open the window no longer dragged from above the project selector — tabs
+// scrolled out of the strip still sent their full boxes as no-drag (Chromium never clips app-regions).
+test('many tabs: hidden tabs cut no holes into the drag areas (emulated region + real presses)', async ({ el }) => {
+  const display = privateDisplay();
+  const notes = manyNotes(60);
+  await fsp.mkdir(path.join(el.ws, 'many'), { recursive: true });
+  for (const n of notes) await fsp.writeFile(path.join(el.ws, n), `# ${n}\n`);
+  for (const style of ['shelf', 'classic'] as const) {
+    await prepare(el, { sidebarStyle: style });
+    const { app, page } = await el.launch([el.ws], display ? { env: { DISPLAY: display } } : {});
+    await openPaths(page, notes);
+    await expect(page.locator('.se-tab')).toHaveCount(60);
+    for (const at of [1, 0.5, 0]) {
+      expect((await scrollTabs(page, at)).overflow).toBeGreaterThan(2000);
+      const r = await appRegionReport(page);
+      expect(r.regions.drag, `${style} at ${at}`).toBeGreaterThan(2);
+      // Soft: the real presses below still run, so a failure shows both the model and the OS's verdict.
+      expect.soft(r.mismatches, `${style} at ${at}`).toEqual([]);
+      expect.soft(r.leaks, `${style} at ${at}`).toEqual([]);
+    }
+    // Real presses go through the window's hit-testing: the band above the workspace switcher (shelf) /
+    // the Files header and the activity bar (classic) drag — the page never sees the press — while the
+    // strip's tabs still take theirs.
+    const x = await realPointer(display);
+    if (x) {
+      try {
+        await scrollTabs(page, 1);
+        const presses = await trackPresses(page);
+        // y ≥ 6: the window's top ~5px are its resize border, which takes every press anyway.
+        const spots = style === 'shelf' ? [{ x: 60, y: 7 }, { x: 150, y: 7 }] : [{ x: 24, y: 7 }, await emptyOf(page, '.se-panel-head')];
+        for (const p of spots) {
+          await x.click(p.x, p.y);
+          expect.soft(await presses(), `${style}: press at ${p.x},${p.y}`).toEqual([]);
+        }
+        const tab = page.locator('.se-tab').nth(-3);
+        const b = (await tab.boundingBox())!;
+        await x.click(b.x + b.width / 2, b.y + b.height / 2);
+        await expect.poll(() => page.evaluate(() => (window as any).__secEdit.activePath.value)).toBe(await tab.getAttribute('data-path'));
+        expect((await presses()).join()).toContain('se-tab');
+      } finally {
+        x.close();
+      }
+    }
+    await app.close();
+  }
+});
+
+/** A point in `sel` that no child covers (empty header space). */
+const emptyOf = (page: Page, sel: string) =>
+  page.locator(sel).first().evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    for (let x = r.right - 2; x > r.left; x -= 2) {
+      const y = r.top + r.height / 2;
+      if (document.elementFromPoint(x, y) === el) return { x, y };
+    }
+    throw new Error('no empty spot');
+  });
 
 test('the overlay’s own close button goes through the unsaved-changes flow', async ({ el }) => {
   const display = privateDisplay();
@@ -288,7 +349,7 @@ test('classic style: strip reserved and draggable, activity bar + Files header d
   await openTabs(page);
   expect((await wco(page)).visible).toBe(true);
   for (const sel of ['.se-topline', '.se-activity', '.se-panel-head']) expect(await region(page, sel), sel).toBe('drag');
-  for (const sel of ['.se-activity-btn', '.se-classic-ws', '.se-panel-head .se-icon-btn', '.se-tab', '.se-mode']) expect(await region(page, sel), sel).toBe('no-drag');
+  for (const sel of ['.se-activity-btn', '.se-classic-ws', '.se-panel-head .se-icon-btn', '.se-tabs', '.se-mode']) expect(await region(page, sel), sel).toBe('no-drag');
   const w = await wco(page);
   const modes = await rect(page, '.se-modes');
   expect(modes.right).toBeLessThanOrEqual(w.rect!.x + w.rect!.width - 4);

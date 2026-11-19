@@ -354,6 +354,7 @@ html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220)
 .se-tabbar { display: flex; align-items: stretch; height: var(--tab-h); flex: none; background: var(--bg-sunken); border-bottom: 1px solid var(--border); }
 .se-tabs { flex: 1; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .se-tabs::-webkit-scrollbar { display: none; }
+.se-tabs-end { flex: 1; } /* the strip's empty end (drags the window with the integrated frame) */
 .se-tab { position: relative; display: flex; align-items: center; gap: 7px; max-width: 240px; min-width: 0; padding: 0 6px 0 12px; border-right: 1px solid var(--border); color: var(--text-muted); cursor: pointer; white-space: nowrap; user-select: none; flex: none; transition: background 0.1s, color 0.1s; }
 .se-tab:hover { background: var(--bg-hover); color: var(--text); }
 .se-tab.active { background: var(--bg); color: var(--text); }
@@ -551,14 +552,22 @@ html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220)
 .frame-integrated.ui-shelf .se-shelf-head,
 .frame-integrated.ui-classic .se-panel-head,
 .frame-integrated .se-activity,
-.frame-integrated .se-ov-head { -webkit-app-region: drag; app-region: drag; }
-.frame-integrated :is(.se-topline, .se-shelf-head, .se-panel-head, .se-activity) :is(button, a, input, select, textarea, [role='button'], [role='tab'], [tabindex], .se-modes, .se-no-drag),
+.frame-integrated .se-ov-head,
+/* The tab list's empty end (zero wide once the tabs overflow); not while something is dragged (see below). */
+html:not(.se-dragging) .frame-integrated .se-tabs .se-tabs-end { -webkit-app-region: drag; app-region: drag; }
+/* Anything clickable in a drag area (incl. the file overview's top band, which can hold the window controls). */
+.frame-integrated :is(.se-topline, .se-shelf-head, .se-panel-head, .se-activity, .se-ov-head) :is(button, a, input, select, textarea, [role='button'], [role='tab'], [tabindex], .se-modes, .se-no-drag),
 /* Anything floating above a drag area — every overlay / popup renders as a sibling of .se-main (palette,
    settings, dialogs, menus, graph, drop target, toasts), plus editor tooltips — and the sidebar sash. */
 .frame-integrated > :not(.se-main),
-.frame-integrated :is(.se-menu, .se-sash, .cm-tooltip, [role='dialog'], [role='menu'], [role='listbox']) { -webkit-app-region: no-drag; app-region: no-drag; }
-/* The file overview's top band drags (it can hold the window controls); anything clickable in it doesn't. */
-.frame-integrated .se-ov-head :is(button, a, input, [role='button'], [tabindex], .se-no-drag) { -webkit-app-region: no-drag; app-region: no-drag; }
+.frame-integrated :is(.se-menu, .se-sash, .cm-tooltip, [role='dialog'], [role='menu'], [role='listbox']),
+.frame-integrated .se-tabs { -webkit-app-region: no-drag; app-region: no-drag; }
+/* The tab list scrolls, and Chromium sends every box's FULL border box as a region, never clipped by
+   overflow: a tab scrolled out of view would still punch a no-drag hole wherever it lies (behind the
+   shelf head / Files header / activity bar, the tools, the overview band). So the list's own box — just
+   what is visible — is its one no-drag region and nothing inside sends one. Keep this after the rule
+   above (same specificity). `initial`, not `none`: Chromium applies a declared `none` as no-drag. */
+.frame-integrated .se-topline .se-tabs * { -webkit-app-region: initial; app-region: initial; }
 /* Drag regions take no drops: while a tab / file is dragged (app/titlebar.ts), the strip's empty end must. */
 html.se-dragging .frame-integrated .se-topline { -webkit-app-region: no-drag; app-region: no-drag; }
 .frame-integrated .se-tabbar { padding-right: var(--wco-right); }
