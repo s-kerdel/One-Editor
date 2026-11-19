@@ -20,6 +20,9 @@ let registered = false;
 export function registerShellCommands() {
   if (registered) return;
   registered = true;
+  // The process explorer dock's chunk registers ui.processDock when it loads: load it whenever the
+  // dock is (or was restored from the session as) open. Startup code only renders the signal.
+  ui.processesOpen.subscribe((open) => void (open && !ui.processDock.peek() && import('./process-explorer/ProcessExplorer')));
   registerCommands([
     { id: 'file.saveAll', title: 'File: Save all', run: () => void saveAll() },
     { id: 'tabs.closeOthers', title: 'Tabs: Close others', when: hasActive, run: () => void closeTabs(app.tabs.value.map((t) => t.path).filter((p) => p !== app.activePath.value)) },

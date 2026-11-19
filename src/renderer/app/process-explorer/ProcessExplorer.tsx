@@ -1,10 +1,15 @@
 // "Developer: Process explorer" — what runs in the editor and what it costs (Chrome-task-manager
-// style), refreshed every 2 s while open. Closed: no timer, no observer, no backend helper.
+// style). A non-modal dock under the editor (Layout renders it while ui.processesOpen): the editor
+// stays usable, opening never takes focus, Escape hands focus back to the editor. Refreshed every 2 s
+// while open and the window is shown; closed: no timer, no observer, no backend helper.
 // Backend rows: shared/processes.ts + backend/processes.ts; UI rows: here + ./sources.ts.
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import type { VNode } from 'preact';
 import { app } from '../app';
+import * as ui from '../ui';
 import { activityNow, confirmDialog } from '../ui';
+import { persistSession } from '../documents';
+import { Icon } from '../icons';
 import { activityLog } from '../activity';
 import { copyText } from '../fileops';
 import { searchClient } from '../../search/client';
@@ -18,8 +23,9 @@ export const REFRESH_MS = 2000;
 /** Window not focused (the user is elsewhere, e.g. reproducing the load): refresh less often. */
 export const REFRESH_UNFOCUSED_MS = 5000;
 
-/** Test hook: what the explorer keeps alive (all 0 once it is closed). */
+/** Test hook: what the explorer keeps alive (all 0 once it is closed); `polls` counts refreshes. */
 export const explorerLive = { timers: 0, observers: 0, polls: 0 };
+(globalThis as { __secEditExplorerLive?: typeof explorerLive }).__secEditExplorerLive = explorerLive;
 
 const ACTION_LABEL: Record<ProcAction, string> = { stopGit: 'Stop', stopForeground: 'Stop', kill: 'End', restartIndexer: 'Restart' };
 
@@ -95,7 +101,7 @@ function cell(v: number | null | undefined, digits = 1) {
 
 function Row({ r, depth, doing, act }: { r: ProcRow; depth: number; doing: string; act: (r: ProcRow, a: ProcAction) => void }) {
   return (
-    <tr data-row={r.id} data-kind={r.kind}>
+    <tr data-row={r.id} data-kind={r.kind} tabIndex={-1}>
       <td class="se-procx-name" style={{ paddingLeft: `${8 + depth * 14}px` }} title={r.detail}>
         {r.name}
       </td>
@@ -122,7 +128,53 @@ function Row({ r, depth, doing, act }: { r: ProcRow; depth: number; doing: strin
   );
 }
 
-function ProcessExplorer() {
+const MIN_HEIGHT = 120;
+
+/** Top edge of the dock: drag to resize (as the terminal panel), double-click resets; saved in the session. */
+function Sash() {
+  return (
+    <div
+      class="se-procx-sash"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize process explorer"
+      title="Drag to resize · double-click to reset"
+      onDblClick={() => {
+        ui.processesHeight.value = ui.PROCESSES_DEFAULT;
+        persistSession();
+      }}
+      onPointerDown={(e) => {
+        e.preventDefault(); // keep focus where it is (the editor)
+        const y0 = e.clientY;
+        const h0 = ui.processesHeight.value;
+        document.body.classList.add('se-resizing-y');
+        const move = (ev: PointerEvent) => (ui.processesHeight.value = Math.round(Math.min(Math.max(MIN_HEIGHT, h0 + y0 - ev.clientY), Math.max(MIN_HEIGHT, innerHeight - 160))));
+        const up = () => {
+          document.body.classList.remove('se-resizing-y');
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+          persistSession();
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      }}
+    />
+  );
+}
+
+/** Arrow keys / Home / End move between rows (buttons in a row are reachable with Tab). */
+function moveRow(list: HTMLElement, key: string): boolean {
+  const rows = [...list.querySelectorAll<HTMLElement>('tr[data-row]')];
+  if (!rows.length) return false;
+  const at = rows.indexOf((document.activeElement as HTMLElement | null)?.closest<HTMLElement>('tr[data-row]') ?? (null as unknown as HTMLElement));
+  const next = key === 'Home' ? 0 : key === 'End' ? rows.length - 1 : key === 'ArrowDown' ? Math.min(rows.length - 1, at + 1) : key === 'ArrowUp' ? Math.max(0, at === -1 ? 0 : at - 1) : -1;
+  if (next === -1) return false;
+  rows[next].focus();
+  rows[next].scrollIntoView({ block: 'nearest' });
+  return true;
+}
+
+export function ProcessDock() {
   const [snap, setSnap] = useState<ProcSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const longTasks = useRef(0);
@@ -131,10 +183,14 @@ function ProcessExplorer() {
   const rowCache = useRef(new Map<string, { sig: string; vnode: VNode }>());
   const actRef = useRef<(r: ProcRow, a: ProcAction) => Promise<void>>(async () => {});
   const stableAct = useRef((r: ProcRow, a: ProcAction) => void actRef.current(r, a)).current;
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLElement>(null);
   const t0 = performance.now();
-  const close = () => (app.overlay.value = null);
-  useEffect(() => dialogRef.current?.focus(), []);
+  // Never takes focus on open (the editor keeps it); closing hands it back if it was in here.
+  const close = () => {
+    const inside = !!dockRef.current?.contains(document.activeElement);
+    ui.processesOpen.value = false;
+    if (inside) app.editor?.focus();
+  };
 
   useEffect(() => {
     let alive = true;
@@ -229,20 +285,36 @@ function ProcessExplorer() {
   };
 
   return (
-    <div class="se-overlay se-dialog-backdrop" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div class="se-dialog se-procx" role="dialog" aria-modal="true" aria-label="Process explorer" tabIndex={-1} ref={dialogRef} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), close())}>
-        <div class="se-procx-head">
-          <h2 class="se-dialog-title">Process explorer</h2>
-          <button class="se-btn" onClick={copy} disabled={!snap}>
-            Copy as text
-          </button>
-        </div>
-        <p class="se-dialog-msg">What runs in the editor and what it costs. Refreshes every 2 s while open; nothing is measured when closed.</p>
-        {error && <p class="se-dialog-msg se-procx-error">{error}</p>}
-        <div class="se-procx-list">
-          {!snap ? (
-            <p class="se-dialog-msg">Measuring…</p>
-          ) : (
+    <section
+      ref={dockRef}
+      class="se-procx se-procx-dock"
+      style={{ height: `min(${ui.processesHeight.value}px, calc(100% - 120px))` }}
+      aria-label="Process explorer"
+      data-testid="process-dock"
+      onKeyDown={(e) => {
+        if (e.key !== 'Escape') return;
+        // Back to the editor; the dock stays open (close: the × or the palette command).
+        e.preventDefault();
+        e.stopPropagation();
+        app.editor?.focus();
+      }}
+    >
+      <Sash />
+      <header class="se-procx-bar">
+        <span class="se-procx-label">Processes</span>
+        <span class="se-procx-sub">What runs in the editor and what it costs · refreshes every 2 s while shown, nothing when closed</span>
+        {error && <span class="se-procx-error">{error}</span>}
+        <button class="se-btn" onClick={copy} disabled={!snap}>
+          Copy as text
+        </button>
+        <button class="se-procx-x" type="button" title="Close" aria-label="Close process explorer" onClick={close}>
+          <Icon name="close" size={13} />
+        </button>
+      </header>
+      <div class="se-procx-list" tabIndex={0} aria-label="Processes — arrow keys move between rows" onKeyDown={(e) => moveRow(e.currentTarget, e.key) && e.preventDefault()}>
+        {!snap ? (
+          <p class="se-procx-msg">Measuring…</p>
+        ) : (
             <table>
               <thead>
                 <tr>
@@ -257,16 +329,23 @@ function ProcessExplorer() {
                 </tr>
               </thead>
               <tbody>{rowNodes}</tbody>
-
             </table>
           )}
-        </div>
-        {snap?.notes?.length ? <p class="se-dialog-msg se-procx-notes">{snap.notes.join(' · ')}</p> : null}
+        {snap?.notes?.length ? <p class="se-procx-msg se-procx-notes">{snap.notes.join(' · ')}</p> : null}
       </div>
-    </div>
+    </section>
   );
 }
 
+/** Show the dock (focus stays where it is). */
 export function openProcessExplorer() {
-  app.overlay.value = ProcessExplorer;
+  ui.processesOpen.value = true;
 }
+
+/** Palette command: show / hide the dock. */
+export function toggleProcessExplorer() {
+  ui.processesOpen.value = !ui.processesOpen.value;
+}
+
+// Layout renders the dock from this signal (no import of this chunk in startup code).
+ui.processDock.value = ProcessDock;

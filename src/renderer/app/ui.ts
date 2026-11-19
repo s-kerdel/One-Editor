@@ -1,5 +1,6 @@
 // Shell-only UI state (kept out of app.ts so the shared singleton stays small and stable).
 import { signal } from '@preact/signals';
+import type { ComponentType } from 'preact';
 import type { Settings } from '@shared/api';
 import { isMarkdown } from '@shared/paths';
 
@@ -11,6 +12,12 @@ export const OVERVIEW_MIN = 220;
 export const OVERVIEW_MAX = 560;
 export const overviewVisible = signal(false);
 export const overviewWidth = signal(OVERVIEW_DEFAULT);
+/** Process explorer dock (bottom of the editor card, app/process-explorer): shown + height, in the session. */
+export const PROCESSES_DEFAULT = 240;
+export const processesOpen = signal(false);
+export const processesHeight = signal(PROCESSES_DEFAULT);
+/** Set by the explorer's chunk when it loads (keeps its import out of startup code). */
+export const processDock = signal<ComponentType | null>(null);
 /** Editor share of the split view. */
 export const splitRatio = signal(0.5);
 /** Expanded folders in the file tree. */

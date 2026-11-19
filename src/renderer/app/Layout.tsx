@@ -101,6 +101,7 @@ function Sidebar({ classic }: { classic: boolean }) {
 
 export function Layout() {
   const Overlay = app.overlay.value;
+  const ProcessDock = ui.processDock.value;
   const classic = isClassic();
   return (
     // frame-integrated: the desktop window has no OS title bar; the tab strip is the title bar (styles/app.css).
@@ -114,6 +115,8 @@ export function Layout() {
             <TabBar />
           </div>
           <EditorArea />
+          {/* "Developer: Process explorer", docked (non-modal); its chunk fills ui.processDock when loaded. */}
+          {ui.processesOpen.value && ProcessDock && <ProcessDock />}
           {/* Integrated terminal (Ctrl+`): bottom of the editor card, both sidebar styles. Starts closed. */}
           {terminalOpen.value && <TerminalPanelSlot />}
           {!classic && <StatusBar />}

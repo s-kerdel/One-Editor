@@ -74,7 +74,8 @@ export function installSearchImpl() {
     id: 'developer.processExplorer',
     title: 'Developer: Process explorer',
     keywords: ['task manager', 'cpu', 'memory', 'ram', 'processes', 'threads', 'workers', 'performance', 'git', 'terminal'],
-    run: () => void import('../app/process-explorer/ProcessExplorer').then((m) => m.openProcessExplorer()),
+    // Toggles the (non-modal) dock under the editor; focus stays in the editor.
+    run: () => void import('../app/process-explorer/ProcessExplorer').then((m) => m.toggleProcessExplorer()),
   });
 }
 

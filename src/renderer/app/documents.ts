@@ -49,6 +49,8 @@ export function sessionSnapshot(): SessionState {
     sidebarPanel: app.sidebarPanel.value,
     overviewVisible: ui.overviewVisible.value,
     overviewWidth: Math.round(ui.overviewWidth.value),
+    processesOpen: ui.processesOpen.value,
+    processesHeight: Math.round(ui.processesHeight.value),
     splitRatio: Math.round(ui.splitRatio.value * 1000) / 1000,
     expanded: [...ui.expanded.value].slice(0, 2000),
     languageOverrides: ui.languageOverrides.value,
@@ -231,6 +233,8 @@ export function applySessionLayout(s: SessionState | null) {
     if (typeof s.sidebarVisible === 'boolean') app.sidebarVisible.value = s.sidebarVisible;
     if (typeof s.overviewWidth === 'number') ui.overviewWidth.value = Math.min(ui.OVERVIEW_MAX, Math.max(ui.OVERVIEW_MIN, s.overviewWidth));
     if (typeof s.overviewVisible === 'boolean') ui.overviewVisible.value = s.overviewVisible;
+    if (typeof s.processesHeight === 'number') ui.processesHeight.value = Math.max(120, s.processesHeight);
+    if (typeof s.processesOpen === 'boolean') ui.processesOpen.value = s.processesOpen;
     if (typeof s.sidebarPanel === 'string' && app.panels.value.some((p) => p.id === s.sidebarPanel)) app.sidebarPanel.value = s.sidebarPanel;
     if (Array.isArray(s.expanded)) ui.expanded.value = new Set(s.expanded.filter((x) => typeof x === 'string'));
     const langs = s.languageOverrides;
@@ -259,6 +263,7 @@ export function installDocuments() {
   // Every way of showing / hiding the sidebar (shortcut, buttons, sash) is remembered across launches.
   app.sidebarVisible.subscribe(persistSession);
   ui.overviewVisible.subscribe(persistSession);
+  ui.processesOpen.subscribe(persistSession);
   // Reconciling external changes is not needed to paint: its code arrives with the first fs event.
   app.backend.onFsEvents(
     (e) =>
