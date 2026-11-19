@@ -245,6 +245,8 @@ export interface BackendApi {
   /** Batched filesystem change notifications (debounced by the backend). External changes only. */
   onFsEvents(cb: (events: FsEvent[]) => void): () => void;
   openExternal(url: string): Promise<void>;
+  /** "Developer: Process explorer" (shared/processes.ts): a snapshot while open, 'close' when closed. */
+  processes?(req: import('./processes').ProcRequest): Promise<import('./processes').ProcSnapshot | boolean>;
   /** Paths the app was asked to open by a second instance (Electron). Launch-time paths come via bootstrap(). */
   onOpenRequest(cb: (absPaths: string[]) => void): () => void;
 
@@ -318,5 +320,6 @@ export const RPC_METHODS = [
   'exportPdf',
   'showExportedFile',
   'git',
+  'processes',
 ] as const;
 export type RpcMethod = (typeof RPC_METHODS)[number];

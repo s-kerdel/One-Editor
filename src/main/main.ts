@@ -13,6 +13,8 @@ import { BackendService, readJson, writeJson } from '../backend/service';
 import { BackendFailure } from '../backend/workspace';
 import { isInsideDir } from '../backend/pathsafe';
 import { isBridgeRoot } from '../backend/readpool';
+import { registerProcessSource } from '../backend/processes';
+import { electronProcessSource } from './process-rows';
 import { APP_ORIGIN, SCHEME, isAppNavigation, isExternalUrl, pathsFromArgs, routeAppUrl } from './protocol';
 import { renderPdf } from './pdf-window';
 import { TerminalService, loadNodePty, registerTerminalIpc } from './terminal';
@@ -135,6 +137,8 @@ function main() {
     getWorkspaceRoot: () => service.workspace?.root ?? null,
     appVersion: app.getVersion(),
   });
+  // Process explorer rows (read only while it is open): Chromium processes + which children are shells.
+  registerProcessSource(electronProcessSource({ shellPids: () => terminals.pids(), uiPid: () => (win && !win.isDestroyed() ? win.webContents.getOSProcessId() : 0) }));
 
   const rendererDir = path.resolve(process.env.SEC_EDIT_RENDERER_DIR || path.join(__dirname, '../renderer'));
   const stateFile = path.join(app.getPath('userData'), 'window-state.json');

@@ -868,6 +868,7 @@ After a paste a small **"Paste as…"** chip appears for a few seconds. Ignore i
 | **App is slow to start** | Do not run it from `\\wsl$`. Copy the folder to a Windows drive |
 | **A folder is missing in the tree** | Settings → Files → **Excluded folders**, or turn on **Show hidden files** |
 | **Search misses a new file** | Run the command **"Rebuild search index"** |
+| **The app uses CPU or memory and I don't know why** | Command **"Developer: Process explorer"**: every process, thread and worker with CPU, memory and what it is doing. Stop a stuck git or terminal command there. **Copy as text** for a bug report |
 | **Formatting fails** | The message names the syntax error. File types without a formatter say so |
 | **Formatting ignores my settings** | A `.prettierrc` or `.editorconfig` in the folder wins |
 | **Zoom keys do nothing** | Browser mode uses the browser's zoom |

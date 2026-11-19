@@ -39,6 +39,12 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
 - Commands: `registerCommand({ id, title, keys?, displayKeys?, keywords?, when?, run })` in `src/renderer/app/commands.ts`.
   `keys` are **global** (capture phase, beat the editor). Editor-local shortcuts belong in CodeMirror keymaps — list them via `displayKeys`.
 - Module bootstrap: each area exports an `installX()` called from `main.tsx`.
+- Process explorer ("Developer: Process explorer", shell: `src/shared/processes.ts`, `src/backend/processes.ts`,
+  `src/main/process-rows.ts`, `src/renderer/app/process-explorer/`): if your feature runs a process, thread or worker,
+  give it a row. Backend / main: `registerProcessSource({ id, rows(), shellPids?(), ownPids?() })` (`backend/processes.ts`);
+  renderer: `registerUiProcessSource({ id, rows() })` (`app/process-explorer/sources.ts`) **from your lazy chunk**.
+  Rows (`ProcRow`) are read only while the explorer is open (every 2 s): keep `rows()` cheap, never spawn or wake a
+  stopped thread for it. Child processes (git, terminals, watchers) are found automatically from the OS process tree.
 - Indexing (search + knowledge read the same paged text stream, `app/workspace-text.ts`): the backend skips
   git-ignored files, lockfiles, `*.min.*` / `*.map` and files over `search.maxFileSizeKB` (`Workspace.textPaths()`;
   the tree still lists them), reads in worker threads and keeps a text cache in the app's data folder (never the workspace).

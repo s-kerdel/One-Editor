@@ -69,6 +69,13 @@ export function installSearchImpl() {
     keywords: ['indexing', 'background', 'git', 'performance', 'debug'],
     run: () => void import('../app/ActivityLog').then((m) => m.openActivityLog()),
   });
+  // Lives in this idle-loaded chunk like the activity log: zero launch bytes for a developer tool.
+  registerCommand({
+    id: 'developer.processExplorer',
+    title: 'Developer: Process explorer',
+    keywords: ['task manager', 'cpu', 'memory', 'ram', 'processes', 'threads', 'workers', 'performance', 'git', 'terminal'],
+    run: () => void import('../app/process-explorer/ProcessExplorer').then((m) => m.openProcessExplorer()),
+  });
 }
 
 /** "Rebuild search index". */

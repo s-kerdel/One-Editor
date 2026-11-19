@@ -2,7 +2,8 @@
 // server bundles embed it; see scripts/build-node.mjs), otherwise in this thread (unit tests).
 import fs from 'node:fs';
 import { Worker } from 'node:worker_threads';
-import { Indexer, type IndexOptions, type IndexPage, type IndexerConfig, type PathSnapshot, type ReadFilesResult, type Stamp } from './indexer';
+import type { EventLoopUtilization } from 'node:perf_hooks';
+import { Indexer, type IndexOptions, type IndexPage, type IndexerConfig, type PathSnapshot, type PoolStats, type ReadFilesResult, type Stamp } from './indexer';
 import type { IgnoreSet } from './gitignore';
 import { decodeTextFrame, encodeTextFrame, type FrameFile } from '../shared/textframe';
 
@@ -33,6 +34,19 @@ export interface Raw {
   stamps: Stamp[];
 }
 
+export interface IndexerStats {
+  running: boolean;
+  inWorker: boolean;
+  /** Event-loop utilisation 0..1 since the previous call (worker thread). */
+  busy?: number | null;
+  heapBytes?: number | null;
+  pool?: PoolStats | null;
+  passOpen: boolean;
+  lastPass: { read: number; cached: number } | null;
+  /** Date.now() when an idle thread was stopped (it restarts on the next request). */
+  stoppedIdleAt?: number | null;
+}
+
 export interface IndexerHost {
   readonly inWorker: boolean;
   setPaths(s: PathSnapshot): void;
@@ -43,6 +57,8 @@ export interface IndexerHost {
   readFilesRaw(paths: string[]): Promise<Raw>;
   ignoreRules(): Promise<IgnoreSet[]> | IgnoreSet[];
   readonly lastPass: { read: number; cached: number; written?: Promise<void> } | null;
+  /** Process explorer: state, load and memory (never wakes a stopped thread). */
+  stats?(): Promise<IndexerStats>;
   onPassStart(cb: () => void): void;
   warm(): void;
   dispose(): void;
@@ -62,6 +78,9 @@ export class LocalIndexerHost implements IndexerHost {
   }
   setOptions(o: Required<IndexOptions>) {
     this.ix.setOptions(o);
+  }
+  async stats(): Promise<IndexerStats> {
+    return { running: true, inWorker: false, pool: this.ix.poolStats(), passOpen: false, lastPass: this.ix.lastPass };
   }
   async page(cursor: string | null, maxBytes?: number): Promise<IndexPage> {
     const p = await this.ix.page(cursor, maxBytes);
@@ -104,9 +123,12 @@ export class WorkerIndexerHost implements IndexerHost {
   readonly inWorker = true;
   private w: Worker | null = null;
   private seq = 0;
-  private waiting = new Map<number, { resolve: (r: Reply) => void; reject: (e: unknown) => void }>();
+  /** passive: a process-explorer peek — it neither keeps the thread alive nor counts as work. */
+  private waiting = new Map<number, { resolve: (r: Reply) => void; reject: (e: unknown) => void; passive?: boolean }>();
   private passCbs = new Set<() => void>();
   private idle: NodeJS.Timeout | null = null;
+  private stoppedIdleAt = 0;
+  private elu: { w: Worker; v: EventLoopUtilization } | null = null;
   /** Re-sent to a restarted thread. */
   private snap: PathSnapshot | null = null;
   private opts: Required<IndexOptions> | null = null;
@@ -123,6 +145,7 @@ export class WorkerIndexerHost implements IndexerHost {
   private worker(): Worker {
     if (this.w) return this.w;
     const w = new Worker(this.src, { eval: true, workerData: this.opts ? { ...this.cfg, index: this.opts } : this.cfg });
+    this.stoppedIdleAt = 0;
     w.unref();
     w.on('message', (m: Reply & { type?: string }) => {
       if (m.type === 'passStart') return this.passCbs.forEach((f) => f());
@@ -133,7 +156,7 @@ export class WorkerIndexerHost implements IndexerHost {
       if (m.passOpen !== undefined) this.passOpen = m.passOpen;
       if (m.error) p.reject(new Error(m.error));
       else p.resolve(m);
-      this.armIdle();
+      if (!p.passive) this.armIdle();
     });
     w.on('error', (err) => this.fail(w, err));
     w.on('exit', () => this.fail(w, new Error('indexer stopped')));
@@ -150,15 +173,22 @@ export class WorkerIndexerHost implements IndexerHost {
     for (const p of all) p.reject(err);
   }
 
+  private get working() {
+    for (const p of this.waiting.values()) if (!p.passive) return true;
+    return false;
+  }
+
   private armIdle() {
     if (this.idle) clearTimeout(this.idle);
     this.idle = null;
-    if (this.waiting.size || this.disposed || this.passOpen) return;
+    if (this.working || this.disposed || this.passOpen) return;
     this.idle = setTimeout(() => {
       this.idle = null;
       const w = this.w;
-      if (!w || this.waiting.size) return;
+      if (!w || this.working) return;
       this.w = null;
+      this.stoppedIdleAt = Date.now();
+      for (const [id, p] of this.waiting) if (p.passive) this.waiting.delete(id), p.reject(new Error('stopped'));
       void w.terminate();
     }, IDLE_MS);
     this.idle.unref?.();
@@ -178,6 +208,22 @@ export class WorkerIndexerHost implements IndexerHost {
   setPaths(snap: PathSnapshot) {
     this.snap = snap;
     this.w?.postMessage({ op: 'paths', snap });
+  }
+
+  async stats(): Promise<IndexerStats> {
+    const w = this.w;
+    const base = { inWorker: true, passOpen: this.passOpen, lastPass: this.lastPass };
+    if (!w) return { ...base, running: false, stoppedIdleAt: this.stoppedIdleAt || null };
+    const v = w.performance.eventLoopUtilization();
+    const busy = this.elu?.w === w ? w.performance.eventLoopUtilization(v, this.elu.v).utilization : null;
+    this.elu = { w, v };
+    const peek = new Promise<Reply>((resolve, reject) => {
+      const id = ++this.seq;
+      this.waiting.set(id, { resolve, reject, passive: true });
+      w.postMessage({ id, op: 'stats' });
+    });
+    const [heap, pool] = await Promise.all([w.getHeapStatistics().catch(() => null), peek.then((r) => r.result as PoolStats).catch(() => null)]);
+    return { ...base, running: true, busy, heapBytes: heap?.used_heap_size ?? null, pool };
   }
   setOptions(opts: Required<IndexOptions>) {
     this.opts = opts;

@@ -1,0 +1,16 @@
+.se-procx { width: min(1240px, 96vw); max-width: none; }
+.se-procx-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.se-procx-list { max-height: 64vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.se-procx table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.se-procx th, .se-procx td { padding: 3px 8px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.se-procx th { position: sticky; top: 0; background: var(--bg-elevated, var(--bg)); color: var(--text-muted); font-weight: 600; }
+.se-procx .n { text-align: right; }
+.se-procx-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+/* Long states / commands are cut (full text in the tooltip and in "Copy as text"): the action buttons stay visible. */
+.se-procx-state, .se-procx-doing { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
+.se-procx tr[data-kind='app'] .se-procx-name { font-weight: 600; }
+.se-procx tr[data-kind='self'] td { color: var(--text-muted); font-style: italic; }
+.se-procx-act { width: 1%; white-space: nowrap; }
+.se-procx-act .se-btn { padding: 1px 8px; }
+.se-procx-error { color: var(--danger, var(--text)); }
+.se-procx-notes { font-size: 11px; }

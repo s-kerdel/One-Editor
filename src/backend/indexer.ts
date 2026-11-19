@@ -76,6 +76,12 @@ function readSmallText(abs: string): string | null {
   }
 }
 
+export interface PoolStats {
+  max: number;
+  running: number;
+  busy: number;
+}
+
 export class Indexer {
   private opts: Required<IndexOptions>;
   private snap: PathSnapshot = { version: '', files: [], ignoreDirs: [], repoDirs: [] };
@@ -98,6 +104,11 @@ export class Indexer {
   /** Boot the reader threads now (the renderer's first page request is moments away). */
   warm() {
     this.pool?.warm();
+  }
+
+  /** Reader threads: allowed / running / reading now (process explorer). */
+  poolStats(): PoolStats {
+    return { max: this.pool?.threadCount ?? 0, running: this.pool?.running ?? 0, busy: this.pool?.busy ?? 0 };
   }
 
   onPassStart(cb: () => void) {

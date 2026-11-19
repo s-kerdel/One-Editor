@@ -92,6 +92,11 @@ export class ReadPool {
     return this.workers.length;
   }
 
+  /** Threads reading right now (process explorer). */
+  get busy() {
+    return this.load.filter((n) => n > 0).length;
+  }
+
   /** False when threads are off (0) or could not start: callers read in-thread instead. */
   get available() {
     return this.threads > 0 && !this.broken;

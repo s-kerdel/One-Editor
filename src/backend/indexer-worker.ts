@@ -29,6 +29,8 @@ port.on('message', async (m: { id?: number; op: string; [k: string]: any }) => {
       }
       case 'ignore':
         return port.postMessage({ id: m.id, result: ix.ignoreRules() });
+      case 'stats': // process explorer: a peek, not activity (it never keeps this thread from idling)
+        return port.postMessage({ id: m.id, result: ix.poolStats() });
       case 'warm':
         return ix.warm();
       case 'dispose':

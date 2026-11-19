@@ -24,6 +24,7 @@ import { cacheFileFor } from './indexcache';
 import { DEFAULT_INDEX, MAX_INDEX_BYTES, type IndexOptions, type Stamp } from './indexer';
 import { LocalIndexerHost, WorkerIndexerHost, indexerSource, type IndexerHost, type Raw } from './indexer-host';
 import { fsDelayAsync } from './fsdelay';
+import type { ProcRow } from '../shared/processes';
 
 export { detectEol } from './textcodec';
 export { MAX_INDEX_BYTES, type IndexOptions } from './indexer';
@@ -781,6 +782,35 @@ export class Workspace {
     }
     this.syncIndexPaths();
     return this.host;
+  }
+
+  /** Process explorer: the indexer thread and its reader threads, with their state and why. */
+  async processRows(): Promise<ProcRow[]> {
+    const host = this.host;
+    const row: ProcRow = { id: 'indexer', parent: 'main', kind: 'thread', name: 'Indexer', activity: ['index', 'index-update'], actions: ['restartIndexer'] };
+    if (!host) {
+      const why = !this.indexed ? 'folder not listed yet' : this.warmIndexer ? 'nothing asked for text yet' : 'index built on demand — not asked for yet';
+      return [{ ...row, state: 'not started', detail: why }];
+    }
+    const st = await host.stats?.().catch(() => null);
+    if (!st) return [{ ...row, state: 'running' }];
+    const pass = st.lastPass ? `last pass: ${st.lastPass.read.toLocaleString()} read, ${st.lastPass.cached.toLocaleString()} from cache` : '';
+    if (!st.running) {
+      const since = st.stoppedIdleAt ? ` ${Math.round((Date.now() - st.stoppedIdleAt) / 1000)} s ago` : '';
+      return [{ ...row, state: 'stopped', detail: [`idle${since} — restarts when text is needed`, pass].filter(Boolean).join(' · ') }];
+    }
+    const rows: ProcRow[] = [{ ...row, name: st.inWorker ? 'Indexer (thread)' : 'Indexer (in this process)', state: st.passOpen ? 'indexing' : 'idle', busy: st.busy == null ? null : st.busy * 100, mem: st.heapBytes == null ? null : Math.round((st.heapBytes / 1048576) * 10) / 10, memKind: 'JS heap', detail: pass || undefined }];
+    if (st.pool && st.pool.max > 0)
+      rows.push({ id: 'readers', parent: 'indexer', kind: 'thread', name: 'Reader threads', state: st.pool.running ? (st.pool.busy ? 'reading' : 'idle') : 'stopped', detail: `${st.pool.running} of up to ${st.pool.max} running, ${st.pool.busy} reading${st.pool.running ? '' : ' — start with the next pass'}` });
+    return rows;
+  }
+
+  /** Process explorer → "Restart indexer": a fresh thread on the next request (the UI rebuilds). */
+  restartIndexer() {
+    const host = this.host;
+    this.host = null;
+    this.sentVersion = '';
+    host?.dispose();
   }
 
   /** Sends the file list to the indexer when it changed (one array; it does all filtering and I/O). */

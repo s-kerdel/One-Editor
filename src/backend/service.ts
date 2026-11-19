@@ -27,6 +27,8 @@ import { GitService, gitEnv, locateGit, type GitServiceOptions } from './git';
 import { GitMonitor, type GitMonitorEvent } from './git-monitor';
 import { diffTexts } from './git-compare';
 import { GIT_OPS } from '../shared/git';
+import { ProcessExplorer, registerProcessSource } from './processes';
+import type { ProcRequest, ProcSnapshot } from '../shared/processes';
 
 export function defaultConfigDir(): string {
   if (process.env.SEC_EDIT_CONFIG_DIR) return process.env.SEC_EDIT_CONFIG_DIR;
@@ -465,6 +467,27 @@ export class BackendService {
   /** Our own edits count as git triggers (the watcher never echoes them). */
   private gitTouched(kind: 'save' | 'fs', paths: string[]) {
     this.monitor?.trigger(kind, paths);
+  }
+
+  private explorer: ProcessExplorer | null = null;
+
+  /**
+   * "Developer: Process explorer": a snapshot per request while it is open, `close` when it closes.
+   * Created on the first request; nothing of it runs before (or after close).
+   */
+  async processes(req: ProcRequest): Promise<ProcSnapshot | boolean> {
+    const op = (req as { op?: unknown } | null)?.op;
+    if (op === 'snapshot') {
+      if (!this.explorer) {
+        this.explorer = new ProcessExplorer({ root: () => this.workspace?.root ?? null });
+        registerProcessSource({ id: 'indexer', rows: () => this.workspace?.processRows() ?? [] });
+      }
+      return this.explorer.snapshot();
+    }
+    if (op === 'close') return void this.explorer?.close(), true;
+    if (op === 'kill') return this.explorer?.kill(Number((req as { pid: unknown }).pid), !!(req as { group?: unknown }).group) ?? false;
+    if (op === 'restartIndexer') return void this.workspace?.restartIndexer(), true;
+    throw new BackendFailure('EINVAL', `Unknown process explorer request: ${String(op)}`);
   }
 
   /** Every git operation (see GitOps in shared/git.ts); arguments are validated by GitService. */
