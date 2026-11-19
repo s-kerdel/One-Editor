@@ -1,6 +1,7 @@
 // Sandboxed preload: exposes a minimal, typed bridge. No Node APIs leak into the page.
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 import { terminalBridge } from './terminal-bridge';
+import { vaultBridge } from './vault-bridge';
 
 const CHANNELS = new Set(['fs:events', 'app:openRequest', 'app:closeRequest', 'git:changed']);
 // The frame main created this window with (webPreferences.additionalArguments): the renderer styles
@@ -38,4 +39,6 @@ contextBridge.exposeInMainWorld('secEditBridge', {
   relaunch: () => ipcRenderer.invoke('app:relaunch'),
   // Integrated terminal (term:* channels, validated in main/terminal.ts).
   terminal: terminalBridge(ipcRenderer),
+  // Secrets vault for {{variables}} (vault:* channels, validated in main/vault.ts).
+  vault: vaultBridge(ipcRenderer),
 });

@@ -4,7 +4,7 @@ import { DEFAULT_SETTINGS } from '@shared/api';
 import { normalizeKey } from './commands';
 import { TERMINAL_SECTION, TERMINAL_SETTING_DEFS } from '../terminal/settings';
 
-export type SectionId = 'appearance' | 'editor' | 'files' | 'search' | 'formatting' | 'links' | 'attachments' | 'preview' | 'export' | 'terminal' | 'shortcuts';
+export type SectionId = 'appearance' | 'editor' | 'files' | 'search' | 'formatting' | 'links' | 'attachments' | 'preview' | 'export' | 'variables' | 'terminal' | 'shortcuts';
 
 export interface SectionDef {
   id: SectionId;
@@ -23,6 +23,7 @@ export const SECTIONS: SectionDef[] = [
   { id: 'attachments', title: 'Attachments', icon: 'image' },
   { id: 'preview', title: 'Preview', icon: 'eye' },
   { id: 'export', title: 'Export', icon: 'printer', blurb: 'Paper settings for “Export note to PDF…”.' },
+  { id: 'variables', title: 'Variables & targets', icon: 'database', blurb: '{{name}} placeholders, environments and targets from the nearest variables.md.' },
   { ...TERMINAL_SECTION },
   { id: 'shortcuts', title: 'Keyboard shortcuts', icon: 'keyboard' },
 ];
@@ -294,6 +295,15 @@ const defs: Draft[] = [
     label: 'Typewriter scrolling',
     description: 'Keep the line you are typing on in the middle of the screen (Markdown).',
     keywords: ['center', 'centre', 'scroll', 'writing', 'cursor'],
+    default: false,
+    control: { type: 'toggle' },
+  },
+  {
+    key: 'editor.smartPaste',
+    section: 'editor',
+    label: 'Smart paste',
+    description: 'After a paste, offer “Paste as…”: JSON, curl, stack traces, tables, SQL, code, secrets.',
+    keywords: ['paste', 'json', 'curl', 'csv', 'sql', 'stack trace', 'format'],
     default: false,
     control: { type: 'toggle' },
   },
@@ -609,6 +619,43 @@ const defs: Draft[] = [
     default: true,
     control: { type: 'toggle' },
     desktopOnly: true,
+  },
+  // ---- Variables (src/renderer/variables) ----
+  {
+    key: 'variables.showValues',
+    section: 'variables',
+    label: 'Show values',
+    description: 'Live mode and preview show {{placeholders}} as their values (source mode stays raw).',
+    keywords: ['placeholders', 'chips', 'resolve', 'targets', 'env'],
+    default: true,
+    control: { type: 'toggle' },
+  },
+  {
+    key: 'variables.fileName',
+    section: 'variables',
+    label: 'Variables file name',
+    description: 'The nearest file with this name, walking up from the note’s folder, holds the values.',
+    keywords: ['variables.md', 'yaml', 'targets', 'environments'],
+    default: 'variables.md',
+    control: { type: 'text', placeholder: 'variables.md', mono: true },
+  },
+  {
+    key: 'variables.dangerEnvs',
+    section: 'variables',
+    label: 'Production environments',
+    description: 'Environment names (regex alternatives) that tint the status-bar pill red.',
+    keywords: ['prod', 'production', 'live', 'danger', 'warning'],
+    default: 'prod|production|live',
+    control: { type: 'text', placeholder: 'prod|production|live', mono: true },
+  },
+  {
+    key: 'variables.resolveOnExport',
+    section: 'variables',
+    label: 'Fill in values on export',
+    description: 'PDF / HTML export and Copy as HTML use the values (secrets are always masked).',
+    keywords: ['pdf', 'html', 'export', 'placeholders'],
+    default: true,
+    control: { type: 'toggle' },
   },
   // ---- Terminal (src/renderer/terminal/settings.ts) ----
   ...TERMINAL_SETTING_DEFS,

@@ -26,9 +26,12 @@ const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
  *  `prepare` runs while media still carry their workspace path (data-ws-src): the PDF export inlines them. */
 export async function renderStandalone(path: string, src: string, prepare?: (box: HTMLElement) => Promise<void>): Promise<HTMLElement> {
   const box = document.createElement('div');
+  // {{variables}} resolve on export unless switched off (secrets are always masked): load their data first.
+  await app.variables?.prepare(path).catch(() => {});
   // No resolveUrl: images keep their relative paths, which stay valid next to the note.
-  box.innerHTML = renderMarkdown(src, { ...renderOptionsFor(path), resolveUrl: undefined, sourceLines: false });
-  await expandEmbeds(box, { ...embedContext, render: (s, p) => renderMarkdown(s, { ...renderOptionsFor(p), resolveUrl: undefined, sourceLines: false, frontmatter: false }) }, [path]);
+  box.innerHTML = renderMarkdown(src, { ...renderOptionsFor(path, { export: true }), resolveUrl: undefined, sourceLines: false });
+  await expandEmbeds(box, { ...embedContext, render: (s, p) => renderMarkdown(s, { ...renderOptionsFor(p, { export: true }), resolveUrl: undefined, sourceLines: false, frontmatter: false }) }, [path]);
+  box.querySelectorAll('[data-raw]').forEach((n) => (n.removeAttribute('data-raw'), n.removeAttribute('data-info')));
   // MathML needs no stylesheet or fonts; mermaid is rendered with the light theme on a white card.
   await enhanceAll(box, { mathOutput: 'mathml', dark: false });
   box.querySelectorAll('.se-code-copy').forEach((n) => n.remove());

@@ -5,8 +5,11 @@ import { toggleTaskAt } from './lists';
 import { splitRow, isDelimiterRow, cellRanges } from './tables';
 import { renderInline } from './inline-render';
 import { followLinkElement } from './links';
+import { docPath } from './host';
 import { app } from '../app/app';
 import { isRunnableFence } from '../terminal/run';
+import { codeAction } from '../variables/cm';
+import type { CodeHeaderVars } from '../variables/api';
 
 const SVG: Record<string, string> = {
   pencil: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
@@ -23,6 +26,7 @@ const SVG: Record<string, string> = {
   list: '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
   quote: '<path d="M16 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/><path d="M5 3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2 1 1 0 0 1 1 1v1a2 2 0 0 1-2 2 1 1 0 0 0-1 1v2a1 1 0 0 0 1 1 6 6 0 0 0 6-6V5a2 2 0 0 0-2-2z"/>',
   chevron: '<path d="m6 9 6 6 6-6"/>',
+  crosshair: '<circle cx="12" cy="12" r="8"/><path d="M12 2v5"/><path d="M12 17v5"/><path d="M2 12h5"/><path d="M17 12h5"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
   image: '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
   // Slash menu / properties (lucide)
@@ -254,39 +258,57 @@ export class MathWidget extends WidgetType {
   }
 }
 
-/** Language label + copy button (+ "Run in terminal" for shell code in the desktop app) pinned to the top-right of a fenced code block. */
+/** Language label + copy button (+ "Run in terminal" for shell code in the desktop app) pinned to the top-right of a fenced code block.
+ *  With {{variables}}: copy / run use the resolved text, an OS hint and "Copy / Run for targets…" (../variables). */
 export class CodeHeaderWidget extends WidgetType {
-  constructor(readonly lang: string) {
+  constructor(
+    readonly lang: string,
+    readonly info = '',
+    readonly vars: CodeHeaderVars | null = null,
+  ) {
     super();
   }
   eq(o: CodeHeaderWidget) {
-    return o.lang === this.lang;
+    return o.lang === this.lang && o.info === this.info && o.vars?.os === this.vars?.os && o.vars?.multi === this.vars?.multi;
   }
   toDOM(view: EditorView) {
     const wrap = document.createElement('span');
     wrap.className = 'se-cb-header';
     wrap.contentEditable = 'false';
+    if (this.vars?.os) {
+      const os = document.createElement('span');
+      os.className = 'se-cb-os';
+      os.title = `${this.vars.os}: check the command fits the target's OS`;
+      os.append(icon('warning'), document.createTextNode(this.vars.os));
+      wrap.appendChild(os);
+    }
     if (this.lang) {
       const label = document.createElement('span');
       label.className = 'se-cb-lang';
       label.textContent = this.lang;
       wrap.appendChild(label);
     }
-    const btn = document.createElement('button');
-    btn.className = 'se-cb-copy';
-    btn.type = 'button';
-    btn.title = 'Copy code';
-    btn.setAttribute('aria-label', 'Copy code');
-    btn.appendChild(icon('copy'));
-    btn.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    });
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const code = codeAt(view, view.posAtDOM(wrap));
-      if (code == null) return;
+    const button = (cls: string, title: string, ic: string, onClick: (pos: number, code: string) => void) => {
+      const b = document.createElement('button');
+      b.className = cls;
+      b.type = 'button';
+      b.title = title;
+      b.setAttribute('aria-label', title);
+      b.appendChild(icon(ic));
+      b.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      b.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const pos = view.posAtDOM(wrap);
+        const code = codeAt(view, pos);
+        if (code != null) onClick(pos, code);
+      });
+      return b;
+    };
+    const btn = button('se-cb-copy', 'Copy code', 'copy', (pos, code) => {
       const done = () => {
         btn.classList.add('se-copied');
         btn.replaceChildren(icon('check'));
@@ -295,31 +317,29 @@ export class CodeHeaderWidget extends WidgetType {
           btn.replaceChildren(icon('copy'));
         }, 1200);
       };
-      navigator.clipboard?.writeText(code).then(done, () => {
-        fallbackCopy(code);
-        done();
-      }) ?? (fallbackCopy(code), done());
+      // Placeholders are resolved first (may ask for missing values); null = nothing to resolve.
+      void codeAction('copy', view, pos, code).then((r) => {
+        if (r === null)
+          navigator.clipboard?.writeText(code).then(done, () => {
+            fallbackCopy(code);
+            done();
+          }) ?? (fallbackCopy(code), done());
+        else if (r) done();
+      });
     });
+    if (this.vars?.multi) {
+      wrap.appendChild(
+        button('se-cb-multi', 'Copy / Run for targets…', 'crosshair', (pos, code) => void app.variables?.forTargets(code, { path: view.state.facet(docPath), info: this.info || this.lang })),
+      );
+    }
     const run = app.runInTerminal;
     if (run && isRunnableFence(this.lang)) {
       // Pastes into the terminal; never presses Enter unless the user's setting says so.
-      const r = document.createElement('button');
-      r.className = 'se-cb-run';
-      r.type = 'button';
-      r.title = 'Run in terminal';
-      r.setAttribute('aria-label', 'Run in terminal');
-      r.appendChild(icon('terminal'));
-      r.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      });
-      r.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const code = codeAt(view, view.posAtDOM(wrap));
-        if (code) void run(code, { lang: this.lang });
-      });
-      wrap.appendChild(r);
+      wrap.appendChild(
+        button('se-cb-run', 'Run in terminal', 'terminal', (pos, code) => {
+          if (code) void codeAction('run', view, pos, code).then((r) => r === null && run(code, { lang: this.lang }));
+        }),
+      );
     }
     wrap.appendChild(btn);
     return wrap;

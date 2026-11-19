@@ -13,6 +13,7 @@ import { openWorkspaceMenu } from './Shelf';
 import { isMarkdown } from '@shared/paths';
 import { countWords } from './wordcount';
 import { gitUi } from '../git/install';
+import { varsStatus } from '../variables/slot';
 
 export { countWords };
 
@@ -146,6 +147,7 @@ export function StatusBar() {
   const dirty = !!doc?.dirty.value;
   const ws = app.workspace.value;
   const GitBranch = gitUi.value?.Branch; // lazy git chunk; after the save state so nothing shifts when it appears
+  const Vars = varsStatus.value; // env / target pills (lazy variables chunk), before the spacer: nothing shifts
 
   let state: { label: string; cls: string; icon?: string } | null = null;
   if (doc && !doc.binary) {
@@ -190,6 +192,7 @@ export function StatusBar() {
         </span>
       )}
       {GitBranch && <GitBranch />}
+      {Vars && <Vars />}
       <span class="se-status-spacer" />
       {cur && doc && !doc.binary && (
         <span class="se-status-item" title="Line, column">

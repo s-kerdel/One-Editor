@@ -23,6 +23,9 @@ export interface RenderOptions {
   frontmatter?: boolean;
   /** Obsidian-style: single newlines become <br>. */
   breaks?: boolean;
+  /** {{variables}} (../variables): values for placeholders in prose, inline code and code blocks
+   *  (`info` = the fence's info string, for `{target=…}` attributes). Secrets arrive masked. */
+  vars?: ((text: string, info: string | null) => string) | null;
 }
 
 interface Env {
@@ -456,6 +459,24 @@ md.core.ruler.push('task_lists', taskListRule);
 md.core.ruler.push('block_ids', blockIdRule);
 md.core.ruler.push('heading_ids', headingRule);
 md.core.ruler.push('source_lines', sourceLinesRule);
+
+/** {{variables}}: substitutes after parsing (values can never become markup) and after heading ids
+ *  (anchors stay stable across environments). Code blocks keep their raw text in data-raw for copy / run. */
+function variablesRule(state: StateCore): void {
+  const vars = (state.env as unknown as Env).opts.vars;
+  if (!vars) return;
+  for (const t of state.tokens) {
+    if (t.type === 'fence' || t.type === 'code_block') {
+      if (!t.content.includes('{{')) continue;
+      t.attrSet('data-raw', t.content.replace(/\n$/, ''));
+      t.attrSet('data-info', t.info ?? '');
+      t.content = vars(t.content, t.info ?? '');
+    } else if (t.type === 'inline') {
+      for (const c of t.children ?? []) if ((c.type === 'text' || c.type === 'code_inline') && c.content.includes('{{')) c.content = vars(c.content, null);
+    }
+  }
+}
+md.core.ruler.push('variables', variablesRule);
 
 // ---------------------------------------------------------------- renderers
 

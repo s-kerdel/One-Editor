@@ -2,7 +2,7 @@
 //  - settings/window-state/workspace open start *before* app 'ready' and run in parallel with Chromium boot;
 //  - the renderer is served from a privileged app:// scheme so V8 code cache works (file:// gets none);
 //  - no default application menu (saves startup time and stray accelerators like Ctrl+R / Ctrl+W).
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, screen, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, session, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -14,6 +14,7 @@ import { isInsideDir } from '../backend/pathsafe';
 import { APP_ORIGIN, SCHEME, isAppNavigation, isExternalUrl, pathsFromArgs, routeAppUrl } from './protocol';
 import { renderPdf } from './pdf-window';
 import { TerminalService, loadNodePty, registerTerminalIpc } from './terminal';
+import { VaultService, registerVaultIpc } from './vault';
 import { createRelaunch, frameOf, frameWindowOptions, initialOverlay, isDarkColor, parseOverlay, rememberOverlay, type TitleBarCache, type WindowFrame } from './frame';
 
 const tMainStart = performance.now(); // ms since process start (Node's timeOrigin)
@@ -167,6 +168,17 @@ function main() {
     });
   }
   registerTerminalIpc(ipcMain, terminals, { isTrusted: (e) => trustedSender(e as Electron.IpcMainEvent) });
+  // Secrets of {{variables}}: safeStorage ciphertext in user data (read on first use, never at launch).
+  // Without an OS keyring (Linux) safeStorage refuses and the renderer keeps secrets for the session only;
+  // tests (no keyring under Xvfb) opt into the basic_text backend so the real code path still runs.
+  if (isTest && process.platform === 'linux') safeStorage.setUsePlainTextEncryption(true);
+  const vault = new VaultService(path.join(app.getPath('userData'), 'vault.json'), {
+    isAvailable: () => safeStorage.isEncryptionAvailable(),
+    encrypt: (s) => safeStorage.encryptString(s),
+    decrypt: (b) => safeStorage.decryptString(b),
+    backend: () => (process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os'),
+  });
+  registerVaultIpc(ipcMain, vault, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   ipcMain.handle('app:toggleDevTools', (e) => trustedSender(e) && win?.webContents.toggleDevTools());
   // Settings → Window frame → "Restart now": through the normal close flow (never loses edits).
   ipcMain.handle('app:relaunch', (e) => {

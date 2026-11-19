@@ -1,0 +1,93 @@
+/* {{variables}} — lazy chunk styles. Tokens only (both themes, user accent, square corners). */
+
+/* Chips: inline, no vertical padding / margin / border — CodeMirror's height map must stay exact
+   (a taller inline box shifts every click below it). The underline is an inset shadow. */
+.se-var {
+  padding: 0 0.22em;
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 -1.5px 0 color-mix(in srgb, var(--accent) 60%, transparent);
+  cursor: pointer;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.se-var:hover { box-shadow: inset 0 -1.5px 0 var(--accent); }
+.se-var-default { color: var(--text-muted); background: transparent; box-shadow: inset 0 -1px 0 var(--border-strong); }
+.se-var-secret { letter-spacing: 0.06em; }
+.se-var-missing,
+.se-var-secret-missing { color: var(--warning); background: var(--warning-soft); box-shadow: inset 0 -1.5px 0 color-mix(in srgb, var(--warning) 70%, transparent); }
+
+.se-var-tip {
+  position: fixed; z-index: 400; max-width: min(460px, 90vw);
+  padding: 6px 9px; border-radius: var(--radius); border: 1px solid var(--border-strong);
+  background: var(--bg-elev); box-shadow: var(--shadow); color: var(--text);
+  font: 12px/1.45 var(--font-ui); pointer-events: none; animation: se-fade 0.08s ease-out both;
+}
+.se-var-tip-val { font-family: var(--font-mono); word-break: break-all; }
+.se-var-tip-src { color: var(--text-muted); }
+
+/* Code block header extras (live mode). */
+.se-cb-os {
+  display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px;
+  border-radius: var(--radius-pill); background: var(--warning-soft); color: var(--warning); font-size: 10.5px;
+}
+.se-cb-os .se-icon { width: 11px; height: 11px; }
+
+/* Status bar pills. */
+.se-vars-pill { gap: 4px; }
+.se-vars-pill .se-icon { opacity: 0.8; }
+.se-vars-pill.is-note { font-style: italic; }
+.se-vars-pill.is-danger { color: var(--danger); background: var(--danger-soft); font-weight: 600; }
+.se-vars-pill.is-danger:hover { color: var(--danger); background: var(--danger-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent); }
+
+/* "Copy / Run for targets…" — live header button (like copy / run) and the preview's tools button. */
+.se-cb-multi, .se-code-multi {
+  display: inline-flex; align-items: center; justify-content: center; padding: 0;
+  border: 1px solid transparent; border-radius: var(--radius); background: transparent; cursor: pointer;
+  transition: opacity 0.12s, background-color 0.12s, color 0.12s;
+}
+.se-cb-multi { width: 24px; height: 24px; color: var(--text-faint); opacity: 0.7; }
+.se-cb-multi .se-icon { width: 14px; height: 14px; }
+.se-code-multi { width: 26px; height: 26px; border: 0; color: var(--text-muted); opacity: 0; }
+.se-code:hover .se-code-multi, .se-code-multi:focus-visible { opacity: 1; } /* like the preview's copy button */
+.se-code-multi::before {
+  content: ''; display: block; width: 14px; height: 14px; background: currentColor;
+  -webkit-mask: var(--se-i-crosshair) center / contain no-repeat; mask: var(--se-i-crosshair) center / contain no-repeat;
+}
+.se-cb-multi:hover, .se-code-multi:hover { opacity: 1; background: var(--bg-hover); border-color: var(--border); color: var(--text); }
+.se-code-multi { --se-i-crosshair: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3Cpath d='M12 2v5M12 17v5M2 12h5M17 12h5'/%3E%3C/svg%3E"); }
+
+/* Chip editor popover. */
+.se-var-editor {
+  position: fixed; z-index: 300; width: 320px; padding: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow);
+  font-size: 12.5px; animation: se-pop 0.1s ease-out both;
+}
+.se-var-editor form { display: flex; flex-direction: column; gap: 8px; }
+.se-var-editor-head { display: flex; align-items: center; gap: 8px; }
+.se-var-editor-head code { font-family: var(--font-mono); color: var(--accent); }
+.se-var-badge { padding: 1px 6px; border-radius: var(--radius-pill); background: var(--warning-soft); color: var(--warning); font-size: 10.5px; }
+.se-var-editor-row { display: flex; align-items: center; gap: 8px; color: var(--text-muted); }
+.se-var-editor-row select { flex: 1; min-width: 0; height: 28px; }
+.se-var-editor-where { font-size: 11.5px; }
+.se-var-editor-check { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
+.se-var-editor .se-dialog-buttons { margin-top: 2px; }
+
+/* Missing values form. */
+.se-vars-fields { display: grid; grid-template-columns: max-content 1fr; gap: 8px 10px; align-items: center; }
+.se-vars-field { display: contents; }
+.se-vars-field-name { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 12.5px; color: var(--text); }
+.se-vars-check { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12.5px; }
+.se-vars-check-hint { color: var(--text-faint); }
+
+/* Multi-target dialog. */
+.se-vars-targets { width: min(520px, 92vw); }
+.se-vars-target-tools { display: flex; gap: 6px; }
+.se-vars-target-list { max-height: min(320px, 46vh); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); padding: 4px; }
+.se-vars-target-row { display: flex; align-items: center; gap: 8px; height: var(--row-h); padding: 0 8px; border-radius: var(--radius-sm); cursor: pointer; }
+.se-vars-target-row:hover { background: var(--bg-hover); }
+.se-vars-target-name { font-weight: 600; }
+.se-vars-target-detail { color: var(--text-muted); font-family: var(--font-mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.se-var-os { display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--warning-soft); color: var(--warning); font-size: 10.5px; white-space: nowrap; }

@@ -14,7 +14,9 @@
 | Run commands / use Claude Code | [7. Terminal and Claude Code](#7-terminal-and-claude-code) |
 | See changes, commit, push | [8. Git](#8-git) |
 | Change how it behaves | [9. Settings](#9-settings) |
-| Fix a problem | [10. Troubleshooting](#10-troubleshooting) |
+| Put `{{host}}`, `{{user}}`… in commands | [10. Variables & targets](#10-variables--targets) |
+| Turn a pasted curl / JSON / log into a clean block | [11. Smart paste](#11-smart-paste) |
+| Fix a problem | [12. Troubleshooting](#12-troubleshooting) |
 
 > `Ctrl` = `Cmd` on macOS. **Forgot a shortcut?** `Ctrl+Shift+P` lists every command.
 
@@ -600,6 +602,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | Line numbers in Markdown source & split mode | On |
 | | Word wrap | On |
 | | Spellcheck | Off |
+| | Smart paste | Off |
 | **Files** | Autosave | On |
 | | Autosave delay | 800 ms |
 | | Show hidden files | Off |
@@ -624,6 +627,10 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | **Export** | PDF page size | A4 |
 | | PDF margins | Normal |
 | | Page numbers (desktop only) | On |
+| **Variables & targets** | Show values | On |
+| | Variables file name | `variables.md` |
+| | Production environments | `prod\|production\|live` |
+| | Fill in values on export | On |
 | **Terminal** (desktop only) | Default shell | Automatic |
 | | Terminal font size | 13 px |
 | | Scrollback (per terminal) | 2000 lines |
@@ -667,7 +674,152 @@ Settings are **global**, not per folder.
 
 ---
 
-## 10. Troubleshooting
+## 10. Variables & targets
+
+**Write `{{name}}` in a note. The value comes from the nearest `variables.md`.** The file on disk keeps `{{name}}`; only the display, copy and run use the value.
+
+```bash
+ssh {{user}}@{{ip}}          # shows:  ssh administrator@10.0.0.10
+Get-ADUser -Server {{WS01.ip}}
+```
+
+### Quick start
+
+1. Create **`variables.md`** in your project folder (palette → **"Variables: Open variables.md"** makes one).
+2. Put a **```yaml block** in it (example below). Text around it is fine.
+3. Pick an **environment** and a **target** in the status bar: **`env: lab ▾`** and **`⌖ DC01 ▾`**.
+4. In **live mode** every `{{…}}` shows its value as a **chip**. Copy / ▶ Run use the values.
+
+### Example `variables.md`
+
+````markdown
+# Lab variables
+
+Only the **first** yaml code block is read. Comments are kept when the app writes values.
+
+```yaml
+# Values for every environment
+vars:
+  domain: corp.local        # AD domain
+  share: ADMIN$
+  ns: default
+  port: 8080
+
+# Values that live in the encrypted vault, never in this file
+secrets: [db_pass, password]
+
+# One row per machine: any fields you like
+targets:
+  DC01:     { ip: 10.0.0.10, user: administrator, os: windows, domain: corp.local }
+  WS01:     { ip: 10.0.0.21, user: alice,         os: windows, domain: corp.local }
+  Linux-WS: { ip: 10.0.0.30, user: root,          os: ubuntu,  password: vault }
+
+envs:
+  lab:
+    vars:
+      ns: lab
+  prod:
+    vars:
+      ns: prod
+      db_pass: vault:prod-db   # explicit vault key
+    targets:
+      DC01: { ip: 192.168.1.10 }   # overrides DC01's ip in prod only
+```
+````
+
+### Placeholders
+
+| Write | You get |
+|---|---|
+| `{{ns}}` | The value for the active environment |
+| `{{ip}}`, `{{user}}`, `{{os}}`… | A field of the **active target** |
+| `{{WS01.ip}}` | That target's field, **whatever target is active** |
+| `{{port:22}}` | `22` when `port` is not defined |
+| `{{date}}` `{{time}}` `{{title}}` | Today, now, the note's name (`{{date:DD.MM.YYYY}}` picks a format) |
+| `{{target}}` `{{env}}` | The active target / environment name |
+
+### Which value wins?
+
+1. **Code block attribute** — ```` ```bash {target=Linux-WS env=lab} ```` (that block only).
+2. **The note's frontmatter** — `vars:`, `target:`, `env:`. **The note always beats variables.md.**
+3. **variables.md** (nearest one, walking up from the note's folder) — target field → environment `vars` → top-level `vars`.
+
+Built-ins (`{{date}}`…) only fill names nobody defined. **Hover a chip** to see where its value came from, e.g. *"overridden in this note (variables.md has ADMIN$)"*.
+
+```markdown
+---
+target: WS01          # this note always uses WS01
+vars:
+  share: C$           # beats variables.md for this note
+---
+```
+
+### Chips (live mode)
+
+| Do this | How |
+|---|---|
+| See the source | **Hover** the chip |
+| Change a value | **Click** it → type → `Enter`. Written into variables.md (or the note) — comments stay |
+| Add a missing one | Click the yellow **`{{name}}?`** chip, pick where to save it |
+| See a secret | Hold **`Alt`** while hovering `••••` |
+| Show raw placeholders | Palette → **"Variables: Show values / Show placeholders"** |
+
+- **Source mode** and split's left pane always show the raw `{{…}}`.
+- **Reading view** and **exports** show values. Secrets are **always** `••••` there.
+- Typing **`{{`** suggests every defined name with its value.
+
+### Environments and targets
+
+- **Status bar:** `env: lab ▾` and `⌖ DC01 ▾`. Click → search → pick. Remembered per folder.
+- **Red pill = production.** Names matching `prod|production|live` (Settings → Variables & targets).
+- **⚠ OS hint** on a code block: `powershell` on a linux target, `bash` on a windows target.
+
+### Copy, run, many targets
+
+| Action | Result |
+|---|---|
+| **Copy** button | The command **with values**, real secrets included |
+| **▶ Run in terminal** | Same, typed into the terminal — **you press Enter** |
+| **⌖ Copy / Run for targets…** | Tick targets → one command per target (`# --- DC01 ---` between them), or **one terminal tab per target** (pre-filled, never run) |
+| Something missing | A small form asks for it. Remembered for this folder. Tick **Save to variables.md** to keep it there |
+
+### Secrets
+
+| | Desktop app | Browser mode |
+|---|---|---|
+| Where the value lives | **Encrypted vault** in the app's data folder (Windows DPAPI / macOS Keychain / Linux keyring) | **Memory only**, until the tab closes |
+| In variables.md / notes | Never — only `vault`, `vault:key` or the name in `secrets:` | Never |
+| Preview, PDF, HTML, Copy as HTML | `••••` | `••••` |
+
+- **Mark a secret:** list it under `secrets:`, or write `vault` / `vault:<key>` as its value.
+- **Set it:** click its `🔒 name` chip, or copy the command once and type it in the form.
+- **Browser mode keeps secrets in memory** on purpose: they never reach the server or a file. Linux without a keyring does the same.
+
+### Problems
+
+| Problem | Fix |
+|---|---|
+| Chip shows `{{name}}?` | Not defined: click it to add it, or check the name |
+| Red squiggle in variables.md | YAML error — hover it. Until it is fixed, **the last good version is used** |
+| Wrong value | Hover the chip: it says where the value came from |
+
+## 11. Smart paste
+
+**Off by default.** Turn on: Settings → Editor → **Smart paste**.
+
+After a paste a small **"Paste as…"** chip appears for a few seconds. Ignore it and **your paste stays as it is**. `Esc` or typing hides it. One `Ctrl+Z` undoes either way.
+
+| You paste | Offered |
+|---|---|
+| **JSON** | Pretty ```` ```json ```` block |
+| **curl …** | Formatted ```` ```bash ```` with `\` line breaks, **or "as template"**: host, ids → `{{host}}`, `{{id}}` (into variables.md); tokens, passwords, cookies, API keys → `{{token}}`… (into the vault) |
+| **Stack trace / compiler output** | ```` ```log ```` block — **`Ctrl+click`** a `file:line` to open it |
+| **CSV / TSV / Excel cells** | Markdown table |
+| **SQL** | Formatted ```` ```sql ```` |
+| **Code from VS Code** | Fenced block in its language |
+| **Something that looks like a secret** | ⚠ **Replace with `{{variable}}`** — the value goes to the vault, not the note |
+
+## 12. Troubleshooting
 
 | Problem | Fix |
 |---|---|

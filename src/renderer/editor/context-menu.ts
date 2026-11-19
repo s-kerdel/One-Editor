@@ -19,6 +19,7 @@ import { parseWikiLink } from '@shared/wikilinks';
 import { addIcons } from '../app/icons';
 import { codeAt } from './widgets';
 import { isRunnableFence } from '../terminal/run';
+import { codeAction, fenceInfoAt } from '../variables/cm';
 import { compareMenuItems } from '../git/compare-menu';
 
 // Menu-only icons, registered from this lazy chunk so they cost nothing at startup.
@@ -216,10 +217,18 @@ export function buildEditorMenu(view: EditorView, opts: { markdown: boolean; tar
   }
 
   // Shell code block (desktop): paste it into the terminal — never presses Enter by itself.
+  // {{variables}} in the block are resolved first (missing ones are asked for).
   const lang = opts.markdown && app.runInTerminal ? fenceLangAt(view, head) : null;
   if (lang && isRunnableFence(lang)) {
     sep();
-    items.push({ label: 'Run in terminal', icon: 'terminal', run: () => void app.runInTerminal?.(codeAt(view, head) ?? '', { lang }) });
+    const code = () => codeAt(view, head) ?? '';
+    items.push({ label: 'Run in terminal', icon: 'terminal', run: () => void codeAction('run', view, head, code()).then((r) => r === null && app.runInTerminal?.(code(), { lang })) });
+  }
+  const block = opts.markdown && fenceLangAt(view, head) !== null ? codeAt(view, head) : null;
+  if (block && /\{\{\s*[A-Za-z_]/.test(block)) {
+    if (!(lang && isRunnableFence(lang))) sep();
+    items.push({ label: 'Copy code with values', icon: 'copy', run: () => void codeAction('copy', view, head, block) });
+    if (app.variables?.hasTargets(view.state.facet(docPath))) items.push({ label: 'Copy / Run for targets…', icon: 'terminal', run: () => void app.variables?.forTargets(block, { path: view.state.facet(docPath), info: fenceInfoAt(view.state, head) }) });
   }
   // Claude Code (terminal module, desktop): pre-fills a prompt about the file / the selected lines.
   const ask = [getCommand(hasSel ? 'claude.askSelection' : 'claude.askFile')].filter((c) => c && (!c.when || c.when()));

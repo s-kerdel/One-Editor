@@ -22,6 +22,7 @@ browser mode served by a local Node server. Both share one renderer.
 | `src/renderer/overview/` (file overview, right column; shell's `Layout` hosts it, state in `ui.overviewVisible` / `ui.overviewWidth`) | **overview** |
 | `src/renderer/terminal/`, `src/main/terminal*.ts`, `src/shared/terminal.ts` (integrated terminal + Claude glue; shell's `Layout` hosts the bottom panel while `panelOpen`) | **terminal** |
 | `src/backend/git*.ts`, `src/shared/git.ts`, `src/renderer/git/` (status, tree marks, change bars, diff view, Source control pane; one `git(op, …)` RPC; the startup stub `git/install.ts` fills `gitUi` slots that FileTree / StatusBar / Popups / the editor read) | **git** |
+| `src/renderer/variables/`, `src/main/vault*.ts`, `src/shared/vault.ts` ({{variables}}, environments / targets, secrets vault, smart paste; the editor chunk holds only `variables/cm.ts`, the rest is the lazy `variables` chunk; `variables/slot.ts` is the status-bar slot) | **variables** |
 | `tests/unit/<area>/`, `tests/e2e/<area>*.spec.ts` | the area's owner |
 
 ### Shared files (integration points)
@@ -50,6 +51,12 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   `src/renderer/terminal/run.ts` (dependency-free) says which fences get a "Run in terminal" button.
   Keys a focused widget must keep from the global keymap: `setGlobalKeyFilter()` in `commands.ts` (the terminal uses it).
   Terminals use their own `term:*` IPC channels (`src/shared/terminal.ts`), not `RPC_METHODS`: they need the sender's identity.
+- Variables: `app.variables` (`VariablesApi` in `src/renderer/variables/api.ts`) — `renderHook(path)` for markdown-it
+  (`RenderOptions.vars`; export passes `{ export: true }`), `copyCode` / `runCode` / `forTargets` for code-block buttons
+  (resolve placeholders, ask for missing values), `prepare(path)` before an export. Event `variables:changed` = re-render.
+  Precedence lives in ONE function: `lookup()` in `variables/resolve.ts`. Secrets: `vault:*` IPC (`src/shared/vault.ts`,
+  safeStorage in `src/main/vault.ts`); browser mode keeps them in memory only. Per-folder env / target / remembered
+  values: localStorage `sec-edit-vars:<root>` (not settings: the registry test guards every dotted key that is read).
 
 ### Global keybinding allocation (avoid conflicts)
 | Owner | Keys |

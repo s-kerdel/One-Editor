@@ -8,7 +8,11 @@ test('renderer is isolated: no Node, minimal bridge, hardened webPreferences', a
   const g = await page.evaluate(() => ({ require: typeof (window as any).require, process: typeof (window as any).process, module: typeof (window as any).module }));
   expect(g).toEqual({ require: 'undefined', process: 'undefined', module: 'undefined' });
   expect((await page.evaluate(() => Object.keys((window as any).secEditBridge))).sort()).toEqual(
-    ['approveClose', 'frame', 'getPathForFile', 'invoke', 'on', 'os', 'ready', 'relaunch', 'setTitleBarOverlay', 'setZoom', 'terminal', 'toggleDevTools'].sort(),
+    ['approveClose', 'frame', 'getPathForFile', 'invoke', 'on', 'os', 'ready', 'relaunch', 'setTitleBarOverlay', 'setZoom', 'terminal', 'toggleDevTools', 'vault'].sort(),
+  );
+  // The secrets vault ({{variables}}): fixed vault:* calls only (validated again in main, src/main/vault.ts).
+  expect(await page.evaluate(() => Object.entries((window as any).secEditBridge.vault).map(([k, v]) => `${k}:${typeof v}`).sort())).toEqual(
+    ['get', 'has', 'remove', 'set', 'status'].map((k) => `${k}:function`),
   );
   // The integrated terminal's bridge: fixed term:* calls only (arguments re-validated in main, src/main/terminal.ts).
   expect(await page.evaluate(() => Object.entries((window as any).secEditBridge.terminal).map(([k, v]) => `${k}:${typeof v}`).sort())).toEqual(

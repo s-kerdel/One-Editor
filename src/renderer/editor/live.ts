@@ -10,6 +10,7 @@ import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common';
 import { docPath, getEditorHost } from './host';
 import { BulletWidget, CheckboxWidget, HrWidget, ImageWidget, MathWidget, CodeHeaderWidget, CalloutIconWidget, CalloutFoldWidget, TableWidget, HeadingFoldWidget, MermaidWidget, calloutInfo, mermaidRetheme } from './widgets';
 import { PropertiesWidget } from './properties';
+import { codeHeaderVars, varsRefresh } from '../variables/cm';
 import { NoteEmbedWidget } from './note-embed';
 import { parseProps } from './frontmatter';
 
@@ -392,7 +393,8 @@ function buildInline(view: EditorView): DecorationSet {
         });
         if (visible.some((v) => v.from <= first.to && v.to >= first.from)) {
           if (!revealed && marks[0]) out.push(hide.range(marks[0].from, first.to));
-          out.push(Decoration.widget({ widget: new CodeHeaderWidget(lang), side: 1 }).range(first.to));
+          const infoText = info ? doc.sliceString(info.from, info.to) : '';
+          out.push(Decoration.widget({ widget: new CodeHeaderWidget(lang, infoText, codeHeaderVars(state, infoText, from, to)), side: 1 }).range(first.to));
         }
         if (!revealed && closed) {
           const cm = marks[marks.length - 1];
@@ -451,7 +453,7 @@ const inlinePlugin = ViewPlugin.fromClass(
       this.decorations = safeBuild(view);
     }
     update(u: ViewUpdate) {
-      if (u.docChanged || u.viewportChanged || u.selectionSet || u.focusChanged || syntaxTree(u.startState) !== syntaxTree(u.state) || u.transactions.some((t) => t.effects.some((e) => e.is(refreshLive) || e.is(toggleCallout) || e.is(foldEffect) || e.is(unfoldEffect))))
+      if (u.docChanged || u.viewportChanged || u.selectionSet || u.focusChanged || syntaxTree(u.startState) !== syntaxTree(u.state) || u.transactions.some((t) => t.effects.some((e) => e.is(refreshLive) || e.is(varsRefresh) || e.is(toggleCallout) || e.is(foldEffect) || e.is(unfoldEffect))))
         this.decorations = safeBuild(u.view);
     }
   },

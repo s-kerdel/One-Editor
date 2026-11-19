@@ -35,6 +35,7 @@ import { FORMAT_TOOLBAR } from './toolbar';
 import { editorContextMenu } from './context-menu';
 import { focusMode, typewriter } from './focus';
 import { gitEditor } from '../git/gutter';
+import { variableChips, variableCompletion, variablesEditor } from '../variables/cm';
 // Git change navigation for the palette (../git/index loads them from this chunk: no extra gutter chunk).
 export { nextChange, previousChange, peekChangeAtCursor, revertChangeAtCursor } from '../git/gutter';
 
@@ -131,7 +132,8 @@ export function createEditor(parent: HTMLElement): EditorController {
   const GIT_MD = gitEditor({ path: docPathOf, whenBase: true });
   const GIT_CODE = gitEditor({ path: docPathOf });
   const gitExt = (md: boolean) => (settings?.['git.enabled'] === false || settings?.['git.changeBars'] === false ? NONE : md ? GIT_MD : GIT_CODE);
-  const LIVE = livePreview();
+  // {{variables}} chips are live-only: source mode / split's source pane show the raw placeholders.
+  const LIVE = [livePreview(), variableChips()];
   const SOURCE = sourceMode();
   const attrCache = new Map<string, Extension>();
   const attrs = (spell: boolean) => {
@@ -216,7 +218,7 @@ export function createEditor(parent: HTMLElement): EditorController {
       autoRenumber,
       // Before autocompletion: both keymaps are Prec.highest and the menu must win Enter/Escape/arrows.
       slashMenu(),
-      autocompletion({ override: markdownCompletionSources(completionHost), icons: false, maxRenderedOptions: 60 }),
+      autocompletion({ override: [...markdownCompletionSources(completionHost), variableCompletion], icons: false, maxRenderedOptions: 60 }),
       of(modeComp, mode === 'live' ? LIVE : SOURCE),
       of(gutterComp, mdGutter()),
       of(gitComp, gitExt(true)),
@@ -226,6 +228,7 @@ export function createEditor(parent: HTMLElement): EditorController {
       linkHandlers,
       pagePreview,
       pasteAndDrop(),
+      variablesEditor(),
       placeholder('Start writing…'),
       EditorView.editorAttributes.of({ class: 'se-md' }),
     ];

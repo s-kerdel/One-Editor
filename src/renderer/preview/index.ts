@@ -15,7 +15,19 @@ import { isRunnableFence } from '../terminal/run';
 
 /** Desktop app: a "Run in terminal" button on shell code blocks (live preview only — exports render
  *  fresh markdown, so they never carry it). */
-function addRunButtons(root: ParentNode): void {
+function addRunButtons(root: ParentNode, path: string | null): void {
+  // {{variables}} blocks (data-raw): "Copy / Run for targets…" when the note has targets.
+  if (path && app.variables?.hasTargets(path)) {
+    for (const tools of root.querySelectorAll<HTMLElement>('.se-code[data-raw] > .se-code-tools')) {
+      if (tools.querySelector('.se-code-multi')) continue;
+      const b = document.createElement('button');
+      b.className = 'se-code-multi';
+      b.type = 'button';
+      b.title = 'Copy / Run for targets…';
+      b.setAttribute('aria-label', 'Copy / Run for targets…');
+      tools.insertBefore(b, tools.querySelector('.se-code-copy'));
+    }
+  }
   if (!app.runInTerminal) return;
   for (const tools of root.querySelectorAll<HTMLElement>('.se-code[data-fence] > .se-code-tools')) {
     const block = tools.parentElement!;
@@ -59,7 +71,7 @@ const SYNC_BUDGET_MS = 45;
 const PUMP_SLICE_MS = 20;
 const HUGE_SECTIONS = 120;
 
-export function renderOptionsFor(path: string): RenderOptions {
+export function renderOptionsFor(path: string, o: { export?: boolean } = {}): RenderOptions {
   return {
     path,
     files: app.files.value,
@@ -68,6 +80,7 @@ export function renderOptionsFor(path: string): RenderOptions {
       return ws && app.backend ? fileUrl(app.backend, ws.root, p) : encodeURI(p);
     },
     breaks: app.settings.value['preview.lineBreaks'] === true,
+    vars: app.variables?.renderHook(path, o),
   };
 }
 
@@ -156,7 +169,10 @@ export function createPreview(el: HTMLElement): PreviewController {
     for (const child of Array.from(frag.children) as Sigged[]) {
       const l = child.getAttribute('data-line');
       const e = child.getAttribute('data-end');
-      if (l !== null && e !== null) child[SIG] = `${child.tagName}\n${lines.slice(Number(l), Number(e)).join('\n')}`;
+      if (l === null || e === null) continue;
+      const block = lines.slice(Number(l), Number(e)).join('\n');
+      // Blocks with {{placeholders}} also depend on the variables (epoch bumps when they change).
+      child[SIG] = `${child.tagName}\n${block}${block.includes('{{') ? `\n\u0000${epoch}` : ''}`;
     }
     const diffable = !NO_DIFF_RE.test(src);
     if (sec.rendered && sec.diffable && diffable) patchChildren(sec.el, frag);
@@ -169,7 +185,7 @@ export function createPreview(el: HTMLElement): PreviewController {
     sec.el.style.containIntrinsicBlockSize = `auto ${Math.max(1, sec.lines) * 24}px`;
     anchorCache.delete(sec);
     enhancer.scan(sec.el, interactive);
-    addRunButtons(sec.el);
+    addRunButtons(sec.el, curPath);
     if (sec.el.querySelector('.se-embed[data-embed]:not([data-done])')) void runEmbeds(sec.el);
   }
 
@@ -540,6 +556,10 @@ export function createPreview(el: HTMLElement): PreviewController {
       document.execCommand('copy');
       ta.remove();
     }
+    flashCopied(btn);
+  }
+
+  function flashCopied(btn: HTMLElement): void {
     btn.classList.add('is-copied');
     btn.setAttribute('aria-label', 'Copied');
     setTimeout(() => {
@@ -631,6 +651,16 @@ export function createPreview(el: HTMLElement): PreviewController {
     if (!target?.closest) return;
     if (target.matches('input.se-task')) return toggleTask(target as HTMLInputElement);
     const copy = target.closest<HTMLElement>('.se-code-copy');
+    // {{variables}}: copy / run resolve the block's raw text (real secret values, missing ones asked for).
+    const raw = target.closest<HTMLElement>('.se-code[data-raw]');
+    if (raw && curPath && app.variables && target.closest('.se-code-copy, .se-code-run, .se-code-multi')) {
+      const ctx = { path: curPath, info: raw.dataset.info ?? raw.dataset.fence ?? '' };
+      const code = raw.dataset.raw ?? '';
+      if (target.closest('.se-code-multi')) return void app.variables.forTargets(code, ctx);
+      if (target.closest('.se-code-run')) return void app.variables.runCode(code, ctx);
+      const btn = target.closest<HTMLElement>('.se-code-copy')!;
+      return void app.variables.copyCode(code, ctx).then((ok) => ok && flashCopied(btn));
+    }
     if (copy) return void copyCode(copy);
     const run = target.closest<HTMLElement>('.se-code-run')?.closest<HTMLElement>('.se-code');
     if (run) return void app.runInTerminal?.(codeText(run), { lang: run.dataset.fence });
@@ -708,6 +738,10 @@ export function createPreview(el: HTMLElement): PreviewController {
       if (sig === filesSig) return;
       filesSig = sig;
       epoch++; // link resolution may have changed
+      schedule(true);
+    }),
+    app.events.on('variables:changed', () => {
+      epoch++; // values / env / target changed: every section re-renders
       schedule(true);
     }),
     app.events.on('settings:changed', () => {

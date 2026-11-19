@@ -130,6 +130,8 @@ export type AppEvents = {
   'settings:changed': (s: Settings) => void;
   /** What the indexers read changed (ignore rules, size cap, excluded folders): search + knowledge rebuild. */
   'index:stale': () => void;
+  /** {{variables}} data, active env / target or display setting changed (preview re-renders). */
+  'variables:changed': () => void;
 };
 
 class App {
@@ -191,6 +193,10 @@ class App {
   /** Desktop only (set by terminal/install): paste a shell code block into the active / a new terminal,
    *  without pressing Enter unless asked. Editor / preview draw "Run in terminal" when this exists. */
   runInTerminal?: (code: string, opts?: { lang?: string | null; pressEnter?: boolean }) => Promise<boolean>;
+
+  /** {{variables}} (../variables): render hook + copy / run with resolved values. Set by the editor chunk
+   *  (actions load the variables chunk on demand); feature-detect. */
+  variables?: import('../variables/api').VariablesApi;
 
   // Implemented in ./documents.ts (assigned at startup to avoid import cycles).
   openFile!: (path: string, reveal?: RevealTarget) => Promise<void>;
