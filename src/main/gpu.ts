@@ -19,10 +19,14 @@ interface GpuDevice {
 export async function gpuStatus(): Promise<GpuStatus> {
   const info = (await app.getGPUInfo('basic').catch(() => null)) as { gpuDevice?: GpuDevice[] } | null;
   const hex = (n?: number) => (n ? '0x' + n.toString(16).padStart(4, '0') : '?');
+  const list = info?.gpuDevice ?? [];
+  // 'basic' info often omits `active` (Windows): only label in use / not in use when Chromium says so,
+  // otherwise "present" — the WebGL renderer line shows which one draws.
+  const known = list.some((d) => d.active === true);
   return {
     features: { ...(app.getGPUFeatureStatus() as unknown as Record<string, string>) },
-    devices: (info?.gpuDevice ?? []).map(
-      (d) => `${d.active ? 'active' : 'inactive'}: ${d.deviceString || d.vendorString || `vendor ${hex(d.vendorId)} device ${hex(d.deviceId)}`}${d.driverVersion ? ` (driver ${d.driverVersion})` : ''}`,
+    devices: list.map(
+      (d) => `${known ? (d.active ? 'in use' : 'not in use') : 'present'}: ${d.deviceString || d.vendorString || `vendor ${hex(d.vendorId)} device ${hex(d.deviceId)}`}${d.driverVersion ? ` (driver ${d.driverVersion})` : ''}`,
     ),
     switches: SWITCHES.filter((s) => app.commandLine.hasSwitch(s)).map((s) => {
       const v = app.commandLine.getSwitchValue(s);
