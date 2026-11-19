@@ -8,6 +8,7 @@ import { getCommand } from '../app/commands';
 import * as searchModule from '../search';
 import { extractHeadings, type Backlink, type Mention, type Snippet, type TagNode } from '../../knowledge/index';
 import { building, index, kv, linkMention, openLink, tagLineOf, unlinkedMentionsOf } from './state';
+import { notesWithoutIncoming, orphanNotes } from '../../knowledge/connections';
 import { searchClient } from '../search/client';
 
 /** These panels read the index: opening one builds it when it is built on demand (search.indexing). */
@@ -20,7 +21,7 @@ function indexingText() {
 import { Chevron, IconCollapse, IconExpand, IconFile, IconFilePlus, IconGraph, IconHash, IconLink, IconSearch } from './icons';
 
 // Section open/closed state survives switching sidebar tabs.
-const sectionState = signal<Record<string, boolean>>({ linked: true, unlinked: true, outgoing: false, unresolved: false });
+const sectionState = signal<Record<string, boolean>>({ linked: true, unlinked: true, outgoing: false, unresolved: false, orphans: false, noIncoming: false });
 export function openSection(id: string) {
   sectionState.value = { ...sectionState.value, [id]: true };
 }
@@ -291,6 +292,26 @@ function MentionRow({ m, target }: { m: Mention; target: string }) {
   );
 }
 
+/** Folder-wide note lists (orphans, no incoming links): capped, the count says how many there are. */
+const MAX_NOTE_ROWS = 300;
+function NoteList({ paths, empty }: { paths: string[]; empty: string }) {
+  if (!paths.length) return <Empty>{building.value ? indexingText() : empty}</Empty>;
+  return (
+    <div class="se-kn-items flat">
+      {paths.slice(0, MAX_NOTE_ROWS).map((p) => (
+        <div key={p} class={`se-kn-out${p === app.activePath.value ? ' current' : ''}`} title={p} data-path={p} onClick={() => void app.openFile(p)}>
+          <span class="se-kn-ico">
+            <IconFile />
+          </span>
+          <span class="se-kn-out-name">{stem(p)}</span>
+          {dirname(p) && <span class="se-kn-file-dir">{dirname(p)}</span>}
+        </div>
+      ))}
+      {paths.length > MAX_NOTE_ROWS && <Empty>{(paths.length - MAX_NOTE_ROWS).toLocaleString()} more…</Empty>}
+    </div>
+  );
+}
+
 export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
   useIndexBuild();
   const path = app.activePath.value;
@@ -312,6 +333,11 @@ export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
   }, [path, version, sections.outgoing]);
   const outgoingCount = useMemo(() => (path ? new Set(index.outgoing(path).filter((o) => o.path !== path).map((o) => o.path ?? `?${o.link.target.toLowerCase()}`)).size : 0), [path, version]);
   const unresolved = useMemo(() => index.unresolvedLinks(), [version]);
+  // O(notes) once per index change, cheap per note (adjacency is cached in the index).
+  const unlinkedNotes = useMemo(() => {
+    const notes = index.notes().map((n) => n.path);
+    return { orphans: orphanNotes(index, notes), noIncoming: notesWithoutIncoming(index, notes) };
+  }, [version]);
 
   // Unlinked mentions scan every note's text (in the search workers) — keep it off the keystroke path.
   const [mentions, setMentions] = useState<{ path: string; list: Mention[] } | null>(null);
@@ -367,12 +393,24 @@ export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
     </Section>
   );
 
+  const folderSections = (
+    <>
+      {unresolvedSection}
+      <Section id="orphans" title="Orphan notes" count={building.value && !unlinkedNotes.orphans.length ? null : unlinkedNotes.orphans.length}>
+        <NoteList paths={unlinkedNotes.orphans} empty="Every note links somewhere or is linked from somewhere." />
+      </Section>
+      <Section id="noIncoming" title="Notes without incoming links" count={building.value && !unlinkedNotes.noIncoming.length ? null : unlinkedNotes.noIncoming.length}>
+        <NoteList paths={unlinkedNotes.noIncoming} empty="Every note is linked from another note." />
+      </Section>
+    </>
+  );
+
   if (!path)
     return (
       <div class="se-kn se-kn-backlinks">
         {head}
         <Empty>Open a note to see what links to it.</Empty>
-        {unresolvedSection}
+        {folderSections}
       </div>
     );
 
@@ -427,7 +465,7 @@ export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
           </div>
         )}
       </Section>
-      {unresolvedSection}
+      {folderSections}
     </div>
   );
 }

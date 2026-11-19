@@ -120,7 +120,12 @@ interface Derived {
   incoming: Map<string, Set<string>>;
   /** lower-case unresolved target → notes containing it (lets a new alias re-resolve just those). */
   unresolvedBy: Map<string, Set<string>>;
+  /** Unique notes each note links to (filled on demand, dropped whenever that note is re-linked). */
+  outNotes: Map<string, readonly string[]>;
 }
+
+const NO_PATHS: readonly string[] = Object.freeze([]);
+const NO_SET: ReadonlySet<string> = new Set();
 
 export function mentionNamesOf(n: Pick<NoteInfo, 'title' | 'aliases'>): string[] {
   return [...new Set([n.title, ...n.aliases].map((s) => s.trim()).filter((s) => s.length >= 2))].sort((a, b) => b.length - a.length);
@@ -201,7 +206,8 @@ export class KnowledgeIndex implements KnowledgeApi {
   private fileSet = new Set<string>();
   private derived: Derived | null = null;
   private unresolvedCache: { version: number; list: UnresolvedLink[] } | null = null;
-  private tagCache: { version: number; map: Map<string, { tag: string; notes: Set<string> }> } | null = null;
+  /** lower-case tag → notes, kept in step with `infos` (a note switch or an edit never rescans all notes). */
+  private readonly tagIdx = new Map<string, { tag: string; notes: Set<string> }>();
   private readonly listeners = new Set<() => void>();
   version = 0;
 
@@ -228,7 +234,7 @@ export class KnowledgeIndex implements KnowledgeApi {
     let changed = false;
     for (const p of [...this.infos.keys()])
       if (!keep.has(p)) {
-        this.infos.delete(p);
+        this.dropInfo(p);
         this.texts.delete(p);
         this.snippets.delete(p);
         this.hashes.delete(p);
@@ -272,7 +278,7 @@ export class KnowledgeIndex implements KnowledgeApi {
       else this.hashes.set(path, textHash(text));
     } else this.hashes.delete(path);
     this.snippets.set(path, snippets ?? (text !== null ? linkSnippets(text, info.links) : []));
-    this.infos.set(path, info);
+    this.setInfo(path, info);
     this.fileSet.add(path);
     // A new file can change how any link resolves → full re-derive (lazy). Content edits only
     // affect this note's links (plus alias users), so patch in place: typing stays O(note).
@@ -284,7 +290,7 @@ export class KnowledgeIndex implements KnowledgeApi {
 
   remove(path: string): void {
     const had = this.fileSet.delete(path);
-    const hadNote = this.infos.delete(path);
+    const hadNote = this.dropInfo(path);
     this.texts.delete(path);
     this.snippets.delete(path);
     this.hashes.delete(path);
@@ -310,7 +316,7 @@ export class KnowledgeIndex implements KnowledgeApi {
       const sn = this.snippets.get(a);
       const hash = this.hashes.get(a);
       this.texts.delete(a);
-      this.infos.delete(a);
+      this.dropInfo(a);
       this.snippets.delete(a);
       this.hashes.delete(a);
       if ((text !== undefined || info) && isMarkdown(b)) {
@@ -318,7 +324,7 @@ export class KnowledgeIndex implements KnowledgeApi {
         if (hash !== undefined) this.hashes.set(b, hash);
         if (sn) this.snippets.set(b, sn);
         // Extraction depends on the text only (plus path/title): a folder move needn't re-parse every note.
-        this.infos.set(b, info ? { ...info, path: b, title: stem(b) } : extractNote(b, text!));
+        this.setInfo(b, info ? { ...info, path: b, title: stem(b) } : extractNote(b, text!));
       }
     }
     if (moved.size) {
@@ -330,6 +336,7 @@ export class KnowledgeIndex implements KnowledgeApi {
 
   clear(): void {
     this.infos.clear();
+    this.tagIdx.clear();
     this.texts.clear();
     this.snippets.clear();
     this.hashes.clear();
@@ -384,12 +391,13 @@ export class KnowledgeIndex implements KnowledgeApi {
         if (l) l.push(n.path);
         else aliases.set(k, [n.path]);
       }
-    const d: Derived = { aliases, resolver: createLinkResolver([...this.fileSet], aliases), resolved: new Map(), incoming: new Map(), unresolvedBy: new Map() };
+    const d: Derived = { aliases, resolver: createLinkResolver([...this.fileSet], aliases), resolved: new Map(), incoming: new Map(), unresolvedBy: new Map(), outNotes: new Map() };
     for (const n of this.infos.values()) this.link(d, n);
     return (this.derived = d);
   }
 
   private link(d: Derived, n: NoteInfo) {
+    d.outNotes.delete(n.path);
     const out: Array<string | null> = new Array(n.links.length);
     for (let i = 0; i < n.links.length; i++) {
       const l = n.links[i];
@@ -404,6 +412,7 @@ export class KnowledgeIndex implements KnowledgeApi {
   }
 
   private unlink(d: Derived, path: string, links: readonly LinkRef[] | undefined) {
+    d.outNotes.delete(path);
     const res = d.resolved.get(path);
     if (!res) return;
     for (let i = 0; i < res.length; i++) {
@@ -442,6 +451,7 @@ export class KnowledgeIndex implements KnowledgeApi {
     // The edited note's own old links must be unlinked by position, but its LinkRefs are already
     // replaced — sweep the unresolved sets instead (rare + small).
     const res = d.resolved.get(path);
+    d.outNotes.delete(path);
     if (res) {
       for (const r of res) if (r) d.incoming.get(r)?.delete(path);
       if (res.includes(null)) for (const set of d.unresolvedBy.values()) set.delete(path);
@@ -506,6 +516,36 @@ export class KnowledgeIndex implements KnowledgeApi {
     return out.sort((a, b) => a.from.localeCompare(b.from) || a.line - b.line || a.col - b.col);
   }
 
+  // ---------- link graph (Connections view, local graph, orphans: ./connections) ----------
+
+  /** Notes `path` links to: resolved Markdown notes, unique, itself excluded. Don't mutate. */
+  linksFrom(path: string): readonly string[] {
+    const d = this.d();
+    const hit = d.outNotes.get(path);
+    if (hit) return hit;
+    const res = d.resolved.get(path);
+    if (!res) return NO_PATHS;
+    const seen = new Set<string>();
+    for (const r of res) if (r && r !== path && isMarkdown(r)) seen.add(r);
+    const out = seen.size ? [...seen] : NO_PATHS;
+    d.outNotes.set(path, out);
+    return out;
+  }
+
+  /** Notes linking to `path` — the live set (may contain `path` itself). Don't mutate. */
+  linksTo(path: string): ReadonlySet<string> {
+    return this.d().incoming.get(path) ?? NO_SET;
+  }
+
+  tagsOf(path: string): readonly string[] {
+    return this.infos.get(path)?.tags ?? NO_PATHS;
+  }
+
+  /** Notes carrying exactly `tag` (no nesting; case-insensitive). Don't mutate. */
+  notesTagged(tag: string): ReadonlySet<string> {
+    return this.tagNotes().get(tag.replace(/^#/, '').toLowerCase())?.notes ?? NO_SET;
+  }
+
   /** Notes linking to `path` (cheap: no context snippets). */
   backlinkSources(path: string): string[] {
     return [...(this.d().incoming.get(path) ?? [])].filter((p) => p !== path);
@@ -544,18 +584,39 @@ export class KnowledgeIndex implements KnowledgeApi {
     return list;
   }
 
-  private tagNotes(): Map<string, { tag: string; notes: Set<string> }> {
-    if (this.tagCache?.version === this.version) return this.tagCache.map;
-    const map = new Map<string, { tag: string; notes: Set<string> }>();
-    for (const n of this.infos.values())
-      for (const t of n.tags) {
-        const key = t.toLowerCase();
-        let e = map.get(key);
-        if (!e) map.set(key, (e = { tag: t, notes: new Set() }));
-        e.notes.add(n.path);
-      }
-    this.tagCache = { version: this.version, map };
-    return map;
+  private setInfo(path: string, info: NoteInfo): void {
+    const old = this.infos.get(path);
+    this.infos.set(path, info);
+    if (old && sameList(old.tags, info.tags)) return;
+    if (old) this.untag(path, old.tags);
+    for (const t of info.tags) {
+      const key = t.toLowerCase();
+      let e = this.tagIdx.get(key);
+      if (!e) this.tagIdx.set(key, (e = { tag: t, notes: new Set() }));
+      e.notes.add(path);
+    }
+  }
+
+  private dropInfo(path: string): boolean {
+    const old = this.infos.get(path);
+    if (!old) return false;
+    this.infos.delete(path);
+    this.untag(path, old.tags);
+    return true;
+  }
+
+  private untag(path: string, tags: readonly string[]): void {
+    for (const t of tags) {
+      const key = t.toLowerCase();
+      const e = this.tagIdx.get(key);
+      if (!e) continue;
+      e.notes.delete(path);
+      if (!e.notes.size) this.tagIdx.delete(key);
+    }
+  }
+
+  private tagNotes(): ReadonlyMap<string, { tag: string; notes: Set<string> }> {
+    return this.tagIdx;
   }
 
   /** Names a note is mentioned by (title + aliases), longest first. */

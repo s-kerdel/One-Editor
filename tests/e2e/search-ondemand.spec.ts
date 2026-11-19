@@ -75,7 +75,7 @@ test('the file overview explains links need the index and builds it on request',
   await boot(page);
   await page.evaluate(() => (window as any).__secEdit.openFile('README.md'));
   await page.keyboard.press('Control+Alt+b');
-  const links = page.locator('[data-section="links"]');
+  const links = page.locator('[data-section="connections"]');
   await expect(links).toContainText('built on demand');
   await links.getByRole('button', { name: 'Build now' }).click();
   await expect(links).toContainText('Daily notes', { timeout: 15000 });

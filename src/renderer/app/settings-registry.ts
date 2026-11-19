@@ -603,6 +603,22 @@ const defs: Draft[] = [
     default: true,
     control: { type: 'toggle' },
   },
+  {
+    key: 'links.hoverPreview',
+    section: 'links',
+    label: 'Link preview on hover',
+    description: 'Hovering a link shows the start of the linked note, or its #section.',
+    keywords: ['hover', 'popover', 'page preview', 'peek', 'tooltip', 'wikilinks', 'ctrl', 'cmd'],
+    default: 'mod',
+    control: {
+      type: 'segmented',
+      options: [
+        { v: 'mod', label: 'With Ctrl / Cmd' },
+        { v: 'hover', label: 'Always' },
+        { v: 'off', label: 'Off' },
+      ],
+    },
+  },
   { key: 'daily.folder', section: 'links', label: 'Daily notes folder', description: 'Where daily notes are created.', keywords: ['journal', 'today', 'diary'], default: 'daily', control: { type: 'text', mono: true, placeholder: 'daily' } },
   {
     key: 'daily.format',

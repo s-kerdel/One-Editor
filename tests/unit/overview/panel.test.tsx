@@ -131,7 +131,7 @@ describe('overview panel', () => {
 
   it('renders every section for a Markdown note', () => {
     mount();
-    expect($$('[data-section]').map((s) => s.dataset.section)).toEqual(['outline', 'code', 'tasks', 'links', 'info']);
+    expect($$('[data-section]').map((s) => s.dataset.section)).toEqual(['outline', 'code', 'tasks', 'connections', 'info']);
     expect(rowTexts('.se-ov-ol')).toEqual(['Runbook', 'Access', 'Services', 'Nginx', 'Database', 'Appendix']);
     expect(rowTexts('.se-ov-code')).toEqual(['ssh deploy@api', 'sudo nginx -t']);
     expect($$('.se-ov-code .se-ov-lang').map((b) => b.textContent)).toEqual(['bash', 'sh']);
@@ -234,23 +234,51 @@ describe('overview panel', () => {
     expect(editor.reveal).not.toHaveBeenCalled();
   });
 
-  it('links: follows outgoing links (creating missing notes via openLink) and opens backlinks at the line', () => {
+  it('connections: outgoing links (create missing via openLink), incoming links with their line, related, counts', async () => {
+    // The section is its own chunk and reads the real link index.
+    const { index } = await import('../../../src/renderer/knowledge/state');
+    index.clear();
+    const notes: Record<string, string> = {
+      'notes/Runbook.md': NOTE,
+      'notes/Deploy checklist.md': '# Deploy checklist\n#ops',
+      'notes/Incident log.md': '# Incident\n\nsee [[Runbook]] for the fix\n\n\n[[Runbook#Database]]\n',
+      'notes/Postmortem.md': '# Postmortem\n[[Deploy checklist]]',
+    };
+    index.setFiles(Object.keys(notes));
+    for (const [p, t] of Object.entries(notes)) index.update(p, t);
+    // No canvas / search workers in happy-dom: the graph and mention scan stay folded.
+    collapsedSections.value = { 'cn-graph': true, 'cn-mentions': true };
     mount();
+    await vi.waitFor(() => expect($$('.se-ov-link')).toHaveLength(2));
     const links = $$('.se-ov-link');
     expect(links.map((r) => r.querySelector('.se-ov-text')!.textContent)).toEqual(['Deploy checklist', 'Grafana']);
     expect(links[1].classList.contains('unresolved')).toBe(true);
+    expect(links[1].querySelector('.se-cn-create')).toBeTruthy();
     click(links[0]);
     expect(app.openLink).toHaveBeenLastCalledWith('Deploy checklist', 'notes/Runbook.md');
-    click(links[1]);
+    click(links[1].querySelector('.se-cn-create'));
     expect(app.openLink).toHaveBeenLastCalledWith('Grafana', 'notes/Runbook.md');
     click(links[0].querySelector('.se-ov-mini'));
     expect(editor.reveal).toHaveBeenLastCalledWith({ line: L('[[Deploy'), col: 4 });
+
     const back = $$('.se-ov-back');
     expect(back).toHaveLength(2);
     expect(back[0].querySelector('.se-ov-name')!.textContent).toBe('Incident log');
     expect(back[0].querySelector('mark')!.textContent).toBe('[[Runbook]]');
     click(back[1]);
-    expect(app.openFile).toHaveBeenLastCalledWith('notes/Incident log.md', { line: 5, col: 0, length: 14 });
+    expect(app.openFile).toHaveBeenLastCalledWith('notes/Incident log.md', { line: 5, col: 0, length: 20 });
+
+    const count = (id: string) => $(`[data-sub="${id}"] .se-cn-n`)?.textContent;
+    expect(count('cn-in')).toBe('2');
+    expect(count('cn-out')).toBe('2');
+    expect($('[data-section="connections"] .se-ov-count')!.textContent).toBe('2'); // Deploy checklist + Incident log
+    // Postmortem cites Deploy checklist too (bibliographic coupling).
+    expect($$('.se-cn-rel .se-ov-name').map((n) => n.textContent)).toEqual(['Postmortem']);
+    // Sub-sections fold and stay folded.
+    click($('[data-sub="cn-in"] .se-cn-toggle'));
+    expect($$('.se-ov-back')).toHaveLength(0);
+    expect(JSON.parse(localStorage.getItem('sec-edit-overview-sections')!)['cn-in']).toBe(true);
+    index.clear();
   });
 
   it('info: counts, size, tags (→ search) and properties', () => {

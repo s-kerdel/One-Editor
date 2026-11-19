@@ -36,9 +36,10 @@
 .se-ov-lvl-btn.on { background: var(--bg-shelf-raised); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14), inset 0 0 0 1px var(--border); }
 .se-ov-sec-actions > .se-ov-lvl-btn.on { color: var(--accent); }
 
-/* rows (shared by every list) */
+/* rows (shared by every list). Hover is paint-only and instant (like the file tree): no transitions,
+   no display / opacity toggles — those restyle or re-lay out every row the pointer crosses. */
 .se-ov-list { padding: 0 6px; outline: none; }
-.se-ov-row { position: relative; display: flex; align-items: center; gap: 6px; min-height: calc(var(--row-h) - 4px); padding: 0 6px 0 calc(6px + var(--d, 0) * 12px); border-radius: var(--radius-md); color: var(--text-muted); cursor: pointer; white-space: nowrap; transition: background 0.1s, color 0.1s; }
+.se-ov-row { position: relative; display: flex; align-items: center; gap: 6px; min-height: calc(var(--row-h) - 4px); padding: 0 6px 0 calc(6px + var(--d, 0) * 12px); border-radius: var(--radius-md); color: var(--text-muted); cursor: pointer; white-space: nowrap; }
 .se-ov-row:hover { background: var(--bg-hover); color: var(--text); }
 /* The current section is a raised card, like the open note in the file tree. */
 .se-ov-row.is-active { background: var(--bg-shelf-raised); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14), inset 0 0 0 1px var(--border); }
@@ -48,18 +49,17 @@
 .se-ov-text em, .se-ov-cmd em { color: var(--text-faint); font-style: italic; font-family: var(--font-ui); }
 .se-ov-meta { flex: none; font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .se-ov-ico { flex: none; display: inline-grid; place-items: center; width: 16px; color: var(--text-faint); }
-.se-ov-mini { flex: none; display: none; place-items: center; min-width: 20px; height: 20px; padding: 0 4px; margin-right: -2px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.se-ov-row:hover .se-ov-mini, .se-ov-row:focus-visible .se-ov-mini { display: inline-grid; }
+.se-ov-mini { flex: none; display: inline-grid; visibility: hidden; place-items: center; min-width: 20px; height: 20px; padding: 0 4px; margin-right: -2px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.se-ov-row:hover .se-ov-mini, .se-ov-row:focus-visible .se-ov-mini { visibility: visible; }
 .se-ov-mini:hover { background: var(--bg-active); color: var(--text); }
-.se-ov-row:hover .se-ov-mini ~ .se-ov-meta { display: none; }
 
 /* outline */
 .se-ov-twisty { flex: none; display: inline-grid; place-items: center; width: 14px; height: 18px; margin-right: -2px; border-radius: var(--radius-xs); color: var(--text-faint); }
 .se-ov-twisty:hover { background: var(--bg-active); color: var(--text); }
 .se-ov-ol.h1 { color: var(--text); font-weight: 600; }
 .se-ov-ol.h2 { color: var(--text); }
-.se-ov-tag { flex: none; font-size: 9.5px; font-weight: 500; color: var(--text-faint); opacity: 0; }
-.se-ov-row:hover .se-ov-tag, .se-ov-row.is-active .se-ov-tag { opacity: 1; }
+.se-ov-tag { flex: none; font-size: 9.5px; font-weight: 500; color: var(--text-faint); visibility: hidden; }
+.se-ov-row:hover .se-ov-tag, .se-ov-row.is-active .se-ov-tag { visibility: visible; }
 .se-ov-kind { flex: none; display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: var(--radius-xs); font: 700 9.5px/1 var(--font-mono); color: var(--ft-gray); background: color-mix(in srgb, currentColor 14%, transparent); }
 .se-ov-kind.k-class { color: var(--ft-orange); }
 .se-ov-kind.k-type { color: var(--ft-teal); }

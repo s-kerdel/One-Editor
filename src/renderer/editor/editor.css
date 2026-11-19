@@ -337,18 +337,6 @@ html[data-theme='light'] {
 .se-editor .se-footnote-def { color: var(--text-muted); font-weight: 600; }
 
 /* Page preview (Mod+hover over a wikilink) */
-.se-editor .cm-tooltip.cm-tooltip-hover:has(.se-hover-preview) { padding: 0; }
-.se-editor .se-hover-preview { width: 380px; max-height: 340px; overflow: hidden auto; padding: 10px 14px 12px; font: 13px/1.55 var(--font-text); }
-.se-editor .se-hp-title { font-weight: 700; font-size: 14px; color: var(--se-heading); margin-bottom: 6px; display: flex; align-items: baseline; gap: 8px; }
-.se-editor .se-hp-path { font-weight: 400; font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.se-editor .se-hp-body p { margin: 0 0 6px; }
-.se-editor .se-hp-h { font-weight: 700; color: var(--se-heading); margin: 8px 0 4px; }
-.se-editor .se-hp-h1 { font-size: 1.2em; }
-.se-editor .se-hp-h2 { font-size: 1.1em; }
-.se-editor .se-hp-li { padding-left: 14px; text-indent: -12px; margin: 2px 0; }
-.se-editor .se-hp-done { color: var(--text-muted); text-decoration: line-through; }
-.se-editor .se-hp-quote { border-left: 3px solid var(--se-quote-bar); padding-left: 10px; color: var(--text-muted); margin: 4px 0; }
-.se-editor .se-hover-preview pre { margin: 4px 0 8px; padding: 6px 8px; background: var(--code-bg); border-radius: var(--radius, 6px); font: 12px/1.45 var(--font-mono); white-space: pre-wrap; }
 
 /* ---------- slash menu ---------- */
 .se-editor .cm-tooltip:has(> .se-slash), .se-editor .cm-tooltip.se-slash { padding: 0; border-radius: var(--radius-lg, 10px); overflow: hidden; }

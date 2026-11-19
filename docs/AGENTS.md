@@ -56,6 +56,20 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   "Indexing… x / y" (`searchClient.progress`) instead of an empty state; `indexDeferred` (`search/demand.ts`) = not built yet.
 - Shared helpers: `src/shared/paths.ts` (POSIX rel paths), `src/shared/languages.ts` (ext/fence → CM/Shiki/Prettier ids),
   `src/shared/wikilinks.ts` (parse + resolve `[[links]]`).
+- Link graph (knowledge): `KnowledgeIndex` keeps adjacency patched per edit — `linksFrom(path)` (unique resolved notes),
+  `linksTo(path)` (live set), `tagsOf` / `notesTagged` (incremental tag index). Neighbourhood queries go through
+  `src/knowledge/connections.ts` (`relatedNotes` = co-citation + coupling + shared tags with a work budget, `localGraph`
+  capped, `orphanNotes`, `notesWithoutIncoming`): never scan all notes on a note switch (perf guard:
+  `tests/e2e/knowledge-connections-perf.spec.ts`, < 16 ms at 10k notes). The overview's **Connections** section is the
+  lazy chunk `knowledge/Connections.tsx` (reuses `overview/parts.tsx` + overview row classes); `knowledge/graph-canvas.ts`
+  is the canvas renderer shared with the graph view. Keyless knowledge commands register from the chunk
+  (`addCommandSource`, `registerKnowledgeCommands` in `knowledge/impl.tsx`): only key-bound ones live in the stub.
+- Link hover preview (knowledge, `knowledge/link-preview.ts`, setting `links.hoverPreview`): one popup for every surface.
+  The editor reports the link under the pointer via `EditorHost.hoverLink(link | null, from)` (`editor/hover.ts`,
+  forwarded by `editor/integration.ts` to `app.knowledge.linkPreview`); rendered Markdown (`.se-preview a`, note embeds)
+  is picked up by delegation. Content = `knowledge/excerpt.ts` (start of note / `#heading` / `#^block`, via preview's
+  `extractSection`) through the preview pipeline (`renderOptionsFor`: sanitised, `{{variables}}` resolved), lazy chunk
+  `knowledge/hover-render.ts`. A new link surface: report hovers the same way instead of drawing its own tooltip.
 - Global `window.__secEdit` = `app` (for E2E introspection). `html[data-ready="true"]` once booted.
 - Terminal (desktop only): `app.runInTerminal?.(code, { lang })` pastes a shell code block into the terminal
   (never presses Enter by default) — feature-detect it, it is unset in the browser. `isRunnableFence(lang)` from

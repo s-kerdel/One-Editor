@@ -8,6 +8,17 @@ export interface LinkTarget {
   heading?: string;
 }
 
+/** A link under the resting pointer (link hover preview). */
+export interface HoveredLink {
+  /** 'wiki' = [[target#fragment]]; 'file' = a Markdown link's (relative) destination. */
+  kind: 'wiki' | 'file';
+  target: string;
+  /** Heading, or `^block`. */
+  fragment?: string;
+  /** Viewport rect of the link text. */
+  rect: { left: number; top: number; right: number; bottom: number };
+}
+
 export interface EditorHost {
   /** Browser-loadable URL for an image reference in `fromPath` (markdown path or wiki embed). */
   imageUrl(src: string, fromPath: string, wiki: boolean): string | null;
@@ -20,6 +31,10 @@ export interface EditorHost {
   readNote?(path: string): Promise<string | null>;
   /** Changes whenever `path` changes (embeds re-render when it does). */
   noteRevision?(path: string): number;
+  /** Link hover preview: the pointer rests on `link` in `fromPath` (null: it left the link). */
+  hoverLink?(link: HoveredLink | null, fromPath: string): void;
+  /** When links preview on hover: 'mod' = with Ctrl/Cmd held (default), 'hover' = always, 'off'. */
+  hoverMode?(): 'mod' | 'hover' | 'off';
 }
 
 let host: EditorHost | null = null;

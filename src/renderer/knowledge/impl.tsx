@@ -5,12 +5,15 @@ import type { ComponentType } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { stem } from '@shared/paths';
 import { app } from '../app/app';
+import { registerCommands } from '../app/commands';
+import { holdKeys } from '../app/lazy';
 import './knowledge.css';
 import { BacklinksPanel, OutlinePanel, TagsPanel, openSection } from './panels';
 import { building, index, insertTemplate, installIndexing, kv, openDailyNote, openLink, templateFiles, whenIndexed } from './state';
 import { searchClient } from '../search/client';
 import type { GraphViewProps } from './GraphView';
 import { extractor } from './extractor';
+import { hoverLink, installLinkPreview, linkPreviewState, type HoverLink } from './link-preview';
 
 export { index as knowledgeIndex } from './state';
 
@@ -109,6 +112,40 @@ export function openTemplatePicker() {
 }
 
 export { OutlinePanel, TagsPanel, openDailyNote, openLink, openSection };
+
+function showPanel(id: string) {
+  app.sidebarVisible.value = true;
+  app.sidebarPanel.value = id;
+}
+
+/** Opens the Backlinks panel at one of its sections (unresolved links, orphans, …). */
+function showSection(id: string) {
+  showPanel('backlinks');
+  openSection(id);
+  requestAnimationFrame(() => document.querySelector(`.se-kn-backlinks [data-section="${id}"]`)?.scrollIntoView({ block: 'start' }));
+}
+
+/** Palette-only commands (no keys): a lazy command source of the startup stub (./index.tsx). */
+export function registerKnowledgeCommands() {
+  registerCommands([
+    { id: 'knowledge.tags', title: 'Open tags', category: 'Notes', keywords: ['hashtag'], run: () => showPanel('tags') },
+    { id: 'knowledge.localGraph', title: 'Open local graph (current note)', category: 'Notes', keywords: ['network', 'neighbours'], when: () => !!app.activePath.value, run: () => openGraph(true) },
+    { id: 'knowledge.dailyNote', title: "Open today's daily note", category: 'Notes', keywords: ['journal', 'today', 'diary'], when: () => !!app.workspace.value, run: () => void openDailyNote() },
+    {
+      id: 'knowledge.insertTemplate',
+      title: 'Insert template',
+      category: 'Notes',
+      keywords: ['snippet', 'boilerplate'],
+      run: () => {
+        holdKeys(Promise.resolve()); // keys typed before the picker's input has focus go into it
+        openTemplatePicker();
+      },
+    },
+    { id: 'knowledge.unresolved', title: 'Show unresolved links', category: 'Notes', keywords: ['broken', 'missing', 'dangling'], run: () => showSection('unresolved') },
+    { id: 'knowledge.orphans', title: 'Show orphan notes', category: 'Notes', keywords: ['no links', 'isolated', 'unlinked', 'lonely', 'unconnected'], run: () => showSection('orphans') },
+    { id: 'knowledge.noIncoming', title: 'Show notes without incoming links', category: 'Notes', keywords: ['no backlinks', 'unreferenced', 'dead ends', 'orphans'], run: () => showSection('noIncoming') },
+  ]);
+}
 export const BacklinksPanelWithGraph = () => <BacklinksPanel onOpenGraph={() => openGraph(true)} />;
 
 let installed = false;
@@ -119,8 +156,18 @@ export function installKnowledgeImpl() {
   installed = true;
   // Public, feature-detectable API (editor autocomplete, preview, search…): `(app as any).knowledge`.
   // ensure(): consumers that need the index (completion, overview) — builds it when on demand.
-  const api = Object.assign(index, { whenReady: whenIndexed, isBuilding: () => building.value, changed: kv, openLink, extractionMode: () => extractor.mode, ensure: () => void searchClient.start() });
+  const api = Object.assign(index, {
+    whenReady: whenIndexed,
+    isBuilding: () => building.value,
+    changed: kv,
+    openLink,
+    extractionMode: () => extractor.mode,
+    ensure: () => void searchClient.start(),
+    // Link hover preview: the editor reports hovered links here (editor/integration.ts).
+    linkPreview: { hover: (link: HoverLink | null, from: string) => hoverLink(link, from, 'editor'), state: linkPreviewState },
+  });
   (app as any).knowledge = api;
   app.openLink = openLink;
   installIndexing();
+  installLinkPreview();
 }

@@ -1,0 +1,40 @@
+/* Connections (file overview section). Lives inside the overview's .se-ov, reuses its rows; tokens
+   only, so themes / accent / corner style apply. Hover is paint-only and nothing on the rows animates. */
+
+/* sub-sections: quiet heads like the overview's own "Links to" labels */
+.se-cn-sub + .se-cn-sub { margin-top: 2px; }
+.se-cn-head { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px 0 6px; }
+.se-cn-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); font-size: 11px; font-weight: 600; text-align: left; }
+.se-cn-toggle:hover { color: var(--text-muted); }
+.se-cn-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.se-cn-chev { flex: none; color: var(--text-faint); }
+.se-cn-sub.open > .se-cn-head .se-cn-chev { transform: rotate(90deg); }
+.se-cn-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-cn-n { flex: none; font-weight: 500; font-variant-numeric: tabular-nums; }
+.se-cn-actions { display: flex; align-items: center; gap: 4px; flex: none; }
+.se-cn-actions .se-ov-lvl-btn { min-width: 18px; height: 16px; }
+.se-cn-icon { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); }
+.se-cn-icon:hover { background: var(--bg-hover); color: var(--text); }
+
+/* local graph */
+.se-cn-graph { position: relative; height: 168px; margin: 0 12px 6px; border-radius: var(--radius-md); background: var(--bg-shelf-inset); overflow: hidden; }
+.se-cn-graph.is-empty { height: 44px; }
+.se-cn-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: pan-y; }
+.se-cn-graph-hint { position: absolute; left: 8px; right: 8px; bottom: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--text-faint); pointer-events: none; }
+.se-cn-graph-empty { position: absolute; inset: 0; display: grid; place-items: center; font-size: 12px; color: var(--text-faint); pointer-events: none; }
+
+/* row actions: always visible (the row's main action), small pills */
+.se-cn-btn { flex: none; height: 18px; padding: 0 7px; border: 1px solid var(--border); border-radius: var(--radius-pill); background: transparent; color: var(--text-muted); font-size: 10.5px; font-weight: 600; line-height: 16px; }
+.se-cn-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.se-cn-btn:disabled { opacity: 0.5; }
+.se-cn-head .se-cn-btn { height: 20px; }
+.se-cn-build { margin-left: 2px; }
+
+/* tags */
+.se-cn-pill { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0 7px; border-radius: var(--radius-pill); background: var(--accent-soft); color: var(--accent); font-size: 11.5px; font-weight: 500; line-height: 18px; }
+.se-cn-tag .se-ov-text { flex: 1; }
+.se-cn-tag.is-open { color: var(--text); }
+
+/* classic sidebar style */
+.ui-classic .se-cn-graph { border-radius: var(--radius-sm); background: var(--bg-active); }
+.ui-classic .se-cn-toggle { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10.5px; }

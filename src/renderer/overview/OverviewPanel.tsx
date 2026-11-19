@@ -13,9 +13,9 @@ import { fileUrl } from '../platform';
 import './icons';
 import './overview.css';
 import { copyBlock, jumpTo, toggleTask } from './actions';
-import { indexDeferred } from '../search/demand';
-import { startIndexing } from '../search';
-import { collapsedSections, keepInView, setSectionCollapsed, useCursorDerived, useKnowledge, useLiveContent, useRoving, type Knowledge } from './hooks';
+import { lazy } from '../app/lazy';
+import { keepInView, useCursorDerived, useKnowledge, useLiveContent, useRoving } from './hooks';
+import { Hint, Section } from './parts';
 import {
   activeOutlineIndex,
   docModel,
@@ -33,40 +33,8 @@ import {
 
 // Big outlines (generated docs, 1 MB notes) stay responsive: rows beyond this are summarised.
 const MAX_ROWS = 1500;
-/** Links are re-rendered on every index change: a 1 MB note links thousands of notes. */
-const MAX_LINK_ROWS = 300;
 
 // ---------------------------------------------------------------- building blocks
-
-function Section(props: { id: string; title: string; count?: number | string | null; countTitle?: string; actions?: ComponentChildren; children: ComponentChildren }) {
-  const open = !collapsedSections.value[props.id];
-  const bodyId = `se-ov-sec-${props.id}`;
-  return (
-    <section class={`se-ov-sec${open ? ' open' : ''}`} data-section={props.id}>
-      <div class="se-ov-sec-head">
-        <button class="se-ov-sec-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => setSectionCollapsed(props.id, open)}>
-          <span class="se-ov-sec-title">{props.title}</span>
-          {props.count != null && (
-            <span class="se-ov-count" title={props.countTitle}>
-              {props.count}
-            </span>
-          )}
-          <Icon name="chevronRight" size={12} class="se-ov-chev" />
-        </button>
-        {open && props.actions && <div class="se-ov-sec-actions">{props.actions}</div>}
-      </div>
-      {open && (
-        <div class="se-ov-sec-body" id={bodyId}>
-          {props.children}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function Hint({ children }: { children: ComponentChildren }) {
-  return <div class="se-ov-hint">{children}</div>;
-}
 
 function Rows({ render }: { render: () => ComponentChildren }) {
   return <>{render()}</>;
@@ -417,155 +385,24 @@ function TasksSection({ path, model, refresh }: { path: string; model: DocModel;
   );
 }
 
-// ---------------------------------------------------------------- links
+// ---------------------------------------------------------------- connections (lazy chunk)
 
-interface OutRow {
-  key: string;
-  path: string | null;
-  label: string;
-  /** What to follow: `[[target#heading]]` text for wiki links. */
-  follow: string;
-  wiki: boolean;
-  count: number;
-  line: number;
-  col: number;
-}
+// Graph, backlinks, outgoing links, mentions, tags and related notes: ../knowledge/Connections.
+const connections = lazy(() => import('../knowledge/Connections'));
 
-function outgoingRows(kn: Knowledge, path: string): OutRow[] {
-  const seen = new Map<string, OutRow>();
-  for (const { link, path: to } of kn.outgoing(path)) {
-    if (to === path) continue; // in-note anchors
-    const key = to ?? `?${link.target.toLowerCase()}`;
-    const hit = seen.get(key);
-    if (hit) {
-      hit.count++;
-      continue;
-    }
-    const anchor = link.block ? `#^${link.block}` : link.heading ? `#${link.heading}` : '';
-    seen.set(key, {
-      key,
-      path: to,
-      label: to ? (isMarkdown(to) ? stem(to) : basename(to)) : link.target,
-      follow: `${link.target}${anchor}`,
-      wiki: link.kind === 'wiki',
-      count: 1,
-      line: link.line,
-      col: link.col,
-    });
-  }
-  // Resolved first (they're where you'd navigate), then the ones still to be written.
-  return [...seen.values()].sort((a, b) => Number(!a.path) - Number(!b.path));
-}
-
-function LinksSection({ path }: { path: string }) {
-  const kn = useKnowledge();
-  const version = kn?.changed.value ?? 0;
-  const out = useMemo(() => (kn ? outgoingRows(kn, path) : []), [kn, path, version]);
-  const back = useMemo(() => {
-    if (!kn) return [];
-    const groups = new Map<string, { from: string; items: ReturnType<Knowledge['backlinks']> }>();
-    for (const b of kn.backlinks(path)) {
-      const g = groups.get(b.from);
-      if (g) g.items.push(b);
-      else groups.set(b.from, { from: b.from, items: [b] });
-    }
-    return [...groups.values()];
-  }, [kn, path, version]);
-  const listRef = useRef<HTMLDivElement>(null);
-  const roving = useRoving(listRef);
-  const building = !kn || kn.isBuilding();
-  const unresolved = out.filter((o) => !o.path).length;
-
-  const follow = (o: OutRow) => {
-    if (o.wiki && app.openLink) void app.openLink(o.follow, path);
-    else if (o.path) void app.openFile(o.path);
-    else jumpTo(path, o.line, o.col); // a broken file link: show where it is
-  };
-
-  // Search index built on demand and not yet: say so (this column is often open at launch — it must
-  // not start the build by itself).
-  if (indexDeferred.value)
+function ConnectionsSlot({ path, model }: { path: string; model: DocModel }) {
+  const mod = connections.peek();
+  const [, bump] = useState(0);
+  useEffect(() => {
+    if (!mod) void connections.load().then(() => bump((n) => n + 1), (err) => console.warn('[overview] connections failed to load', err));
+  }, [!!mod]);
+  if (!mod)
     return (
-      <Section id="links" title="Links" count={null}>
-        <Hint>
-          Links and backlinks come from the search index, built on demand.{' '}
-          <button class="se-ov-lvl-btn" onClick={() => void startIndexing()}>
-            Build now
-          </button>
-        </Hint>
+      <Section id="connections" title="Connections" count={null}>
+        <Hint>Loading links…</Hint>
       </Section>
     );
-  return (
-    <Section id="links" title="Links" count={kn ? out.length + back.length : null} countTitle={`${out.length} outgoing${unresolved ? ` (${unresolved} not created yet)` : ''} · ${back.length} linking here`}>
-      {!kn ? (
-        <Hint>Indexing links…</Hint>
-      ) : (
-        <div class="se-ov-list" ref={listRef} role="list" aria-label="Links" onKeyDown={roving.onKeyDown} onFocusIn={roving.onFocusIn}>
-          <div class="se-ov-sub">
-            <Icon name="ov-out" size={12} /> Links to <span class="se-ov-sub-n">{out.length}</span>
-          </div>
-          {out.length === 0 && <Hint>This note doesn’t link anywhere.</Hint>}
-          {(out.length > MAX_LINK_ROWS ? out.slice(0, MAX_LINK_ROWS) : out).map((o) => (
-            <div
-              key={o.key}
-              class={`se-ov-row se-ov-link${o.path ? '' : ' unresolved'}`}
-              role="listitem"
-              tabIndex={-1}
-              data-row
-              data-key={`o${o.key}`}
-              title={o.path ? `${o.path}${o.count > 1 ? ` · linked ${o.count}×` : ''}` : o.wiki ? `“${o.label}” doesn’t exist yet — click to create it` : `${o.label} not found — click to show the link`}
-              onClick={() => follow(o)}
-            >
-              <span class="se-ov-ico">{o.path ? <FileIcon path={o.path} size={14} /> : <Icon name="filePlus" size={14} />}</span>
-              <span class="se-ov-text">{o.label}</span>
-              {o.count > 1 && <span class="se-ov-meta">{o.count}×</span>}
-              <button
-                class="se-ov-mini"
-                tabIndex={-1}
-                title={`Show the link in this note (line ${o.line + 1})`}
-                aria-label="Show the link in this note"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  jumpTo(path, o.line, o.col);
-                }}
-              >
-                L{o.line + 1}
-              </button>
-            </div>
-          ))}
-          {out.length > MAX_LINK_ROWS && <Hint>{(out.length - MAX_LINK_ROWS).toLocaleString()} more links (Ctrl+Alt+G shows them in the graph).</Hint>}
-          <div class="se-ov-sub">
-            <Icon name="ov-back" size={12} /> Linked from <span class="se-ov-sub-n">{back.length}</span>
-            {building && <span class="se-ov-busy" title="Indexing notes…" />}
-          </div>
-          {back.length === 0 && <Hint>{building ? 'Indexing…' : 'No notes link here yet.'}</Hint>}
-          {(back.length > MAX_LINK_ROWS ? back.slice(0, MAX_LINK_ROWS) : back).map((g) =>
-            g.items.slice(0, 20).map((b, j) => (
-              <div
-                key={`${g.from}:${b.line}:${b.col}`}
-                class={`se-ov-row se-ov-back${j ? ' cont' : ''}`}
-                role="listitem"
-                tabIndex={-1}
-                data-row
-                data-key={`b${g.from}:${b.line}:${b.col}`}
-                title={`${g.from} — line ${b.line + 1}\n${b.context.text}`}
-                onClick={() => void app.openFile(g.from, { line: b.line, col: b.col, length: b.length })}
-              >
-                <span class="se-ov-ico">{j === 0 ? <FileIcon path={g.from} size={14} /> : null}</span>
-                {j === 0 && <span class="se-ov-name">{isMarkdown(g.from) ? stem(g.from) : basename(g.from)}</span>}
-                <span class="se-ov-ctx">
-                  {b.context.text.slice(0, b.context.start)}
-                  <mark>{b.context.text.slice(b.context.start, b.context.end)}</mark>
-                  {b.context.text.slice(b.context.end)}
-                </span>
-              </div>
-            )),
-          )}
-          {back.length > MAX_LINK_ROWS && <Hint>{(back.length - MAX_LINK_ROWS).toLocaleString()} more notes link here — the Backlinks panel lists them all.</Hint>}
-        </div>
-      )}
-    </Section>
-  );
+  return <mod.Connections path={path} live={model} />;
 }
 
 // ---------------------------------------------------------------- info
@@ -730,7 +567,7 @@ export function OverviewPanel() {
         <OutlineSection path={path} model={model} />
         {md && <CodeBlocksSection path={path} model={model} />}
         {md && <TasksSection path={path} model={model} refresh={refresh} />}
-        {md && <LinksSection path={path} />}
+        {md && <ConnectionsSlot path={path} model={model} />}
         <InfoSection path={path} model={model} />
       </>
     );

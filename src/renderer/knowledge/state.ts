@@ -373,6 +373,35 @@ export async function linkMention(target: string, m: Mention): Promise<boolean> 
   return ok;
 }
 
+/** Links every mention: one edit per note (one undo step), mentions that changed meanwhile are skipped. */
+export async function linkMentions(target: string, ms: readonly Mention[]): Promise<number> {
+  const byFile = new Map<string, Mention[]>();
+  for (const m of ms) byFile.set(m.from, [...(byFile.get(m.from) ?? []), m]);
+  let linked = 0;
+  for (const [from, list] of byFile) {
+    const name = wikiLinkTextFor(target, from, (t, f) => index.resolve(t, f));
+    try {
+      await editFile(from, (text) => {
+        const edits: TextEdit[] = [];
+        let last = -1;
+        for (const m of [...list].sort((a, b) => a.line - b.line || a.col - b.col)) {
+          const at = offsetOf(text, m.line, m.col);
+          const found = text.slice(at, at + m.length);
+          if (found !== m.text || at < last) continue;
+          edits.push({ from: at, to: at + m.length, insert: found === name ? `[[${name}]]` : `[[${name}|${found}]]` });
+          last = at + m.length;
+        }
+        linked += edits.length;
+        return edits;
+      });
+    } catch (err) {
+      console.warn('[knowledge] could not link mentions in', from, err);
+    }
+  }
+  if (linked < ms.length) app.toast(`Linked ${linked} of ${ms.length} mentions — the others changed meanwhile`, 'info');
+  return linked;
+}
+
 // ---------- daily notes + templates ----------
 
 const setting = (key: string, fallback: string): string => {

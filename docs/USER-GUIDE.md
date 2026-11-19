@@ -59,7 +59,7 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 | **Outline** | Headings (code files: classes, functions, methods) | Jump there |
 | **Code blocks** | Language + the **command** in each block | Jump there · **copy** button or `Ctrl+C` |
 | **Tasks** | Done / total, the open ones | Jump · **checkbox or `Space` ticks it** (`Ctrl+Z` undoes) |
-| **Links** | Links in this note · notes linking here | Open that note |
+| **Connections** | Small graph · notes linking here · links · mentions · shared tags · related notes | Open that note (see [Connected notes](#connected-notes)) |
 | **Info** | Words, reading time, lines, size, modified · tags · properties | Tag → search for it |
 
 - **It follows you.** The section the cursor is in is highlighted, and the list updates while you type.
@@ -233,19 +233,54 @@ done: false
 | `[[Note\|shown text]]` | Link with different text |
 | `#tag`, `#project/sub` | Tag, nested tag |
 
-**`Ctrl` + hover** over a link shows a preview of that note.
+**`Ctrl` + hover** over a link shows a preview of that note (see [Link preview](#link-preview)).
 
 ### Panels
 
 | Panel | Open | Shows |
 |---|---|---|
 | **Outline** | `Ctrl+Alt+O` | Headings of the current note (the **file overview**, `Ctrl+Alt+B`, shows them on the right — with code blocks, tasks and links) |
-| **Backlinks** | `Ctrl+Alt+L` | Notes linking here · **unlinked mentions** · outgoing links · unresolved links |
+| **Backlinks** | `Ctrl+Alt+L` | Notes linking here · **unlinked mentions** · outgoing links · unresolved links · orphan notes · notes without incoming links |
 | **Tags** | Command "Open tags" | All tags with counts |
 | **Graph** | `Ctrl+Alt+G` | All notes and their links |
 | **Local graph** | Command "Open local graph" | Only the current note's neighbours |
 
 **Unlinked mention** = the note's name appears as plain text somewhere. One click turns it into a link.
+
+### Connected notes
+
+**Everything about how a note is linked, in one place:** file overview (`Ctrl+Alt+B`) → **Connections**.
+
+| Part | Shows | Click |
+|---|---|---|
+| **Local graph** | The note and its neighbours. **1 / 2** = direct links only, or links of links too | A dot opens that note · `Ctrl` + wheel zooms · the graph button opens it big |
+| **Linked from** | Each note linking here, **with the line** the link is in | Jumps to that line |
+| **Links to** | What this note links to. Missing notes are dashed | Open it · **Create** makes the missing note |
+| **Unlinked mentions** | Where the note's name is plain text | **Link** one · **Link all** |
+| **Shared tags** | This note's tags and how many other notes have them | Lists those notes |
+| **Related** | Notes that link to the same notes, are linked from the same notes, or share tags | Open it |
+
+- **Counts** are in each header. Collapsed parts stay collapsed.
+- **Live:** it follows the open note and your typing.
+- **Index built on demand?** You see this note's own links and tags, and a **Build now** button for the rest.
+
+**Find loose ends** (command palette, `Ctrl+Shift+P`):
+
+| Command | Lists |
+|---|---|
+| **Show orphan notes** | Notes with no links in or out |
+| **Show notes without incoming links** | Notes nothing links to |
+
+Both open in the **Backlinks** panel, with counts.
+
+### Link preview
+
+**Hold `Ctrl` (`Cmd` on macOS) and hover a link.** After a moment a small preview of the linked note appears.
+
+- Works for `[[wikilinks]]` and `[text](note.md)`, in the editor and the reading view.
+- `[[Note#Heading]]` shows **that section**; `[[Note#^block]]` that block.
+- It goes away when you move off, scroll, click or press `Esc`. `Ctrl+click` still opens the link.
+- **Without `Ctrl`:** Settings → Links & notes → **Link preview on hover** → *Always* (or *Off*).
 
 ### Renaming keeps links working
 
@@ -657,6 +692,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | PHP version | 8.3 |
 | | SQL keyword case | UPPERCASE |
 | **Links & notes** | Update links on rename | On |
+| | Link preview on hover | With Ctrl / Cmd |
 | | Daily notes folder | `daily` |
 | | Daily note name | `YYYY-MM-DD` |
 | | Daily note template | None |

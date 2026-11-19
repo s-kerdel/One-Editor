@@ -1,8 +1,8 @@
-// Knowledge module entry — startup stub. Registers panels, commands and key bindings right away;
+// Knowledge module entry — startup stub. Registers panels and key-bound commands right away;
 // the implementation (index, panels, link actions: ./impl) loads once the app is idle after boot,
 // or earlier when a panel/command/link needs it.
 import { app } from '../app/app';
-import { registerCommands } from '../app/commands';
+import { addCommandSource, registerCommands } from '../app/commands';
 import { afterBootIdle, lazy, lazyComponent, withModule } from '../app/lazy';
 import { ICON_BACKLINKS, ICON_OUTLINE, ICON_TAGS } from './panel-icons';
 
@@ -34,24 +34,10 @@ export function installKnowledge() {
   registerCommands([
     { id: 'knowledge.outline', title: 'Open outline', category: 'Notes', keys: ['Mod-Alt-o'], keywords: ['headings', 'toc', 'table of contents'], run: () => showPanel('outline') },
     { id: 'knowledge.backlinks', title: 'Open backlinks', category: 'Notes', keys: ['Mod-Alt-l'], keywords: ['links', 'mentions', 'references'], run: () => showPanel('backlinks') },
-    { id: 'knowledge.tags', title: 'Open tags', category: 'Notes', keywords: ['hashtag'], run: () => showPanel('tags') },
     { id: 'knowledge.graph', title: 'Open graph view', category: 'Notes', keys: ['Mod-Alt-g'], keywords: ['network', 'map', 'links'], run: () => withModule(impl, (m) => m.openGraph(false)) },
-    { id: 'knowledge.localGraph', title: 'Open local graph (current note)', category: 'Notes', keywords: ['network', 'neighbours'], when: () => !!app.activePath.value, run: () => withModule(impl, (m) => m.openGraph(true)) },
-    { id: 'knowledge.dailyNote', title: "Open today's daily note", category: 'Notes', keywords: ['journal', 'today', 'diary'], when: () => !!app.workspace.value, run: () => withModule(impl, (m) => void m.openDailyNote()) },
-    { id: 'knowledge.insertTemplate', title: 'Insert template', category: 'Notes', keywords: ['snippet', 'boilerplate'], run: () => withModule(impl, (m) => m.openTemplatePicker(), { typeahead: true }) },
-    {
-      id: 'knowledge.unresolved',
-      title: 'Show unresolved links',
-      category: 'Notes',
-      keywords: ['broken', 'missing', 'dangling'],
-      run: () =>
-        withModule(impl, (m) => {
-          showPanel('backlinks');
-          m.openSection('unresolved');
-          requestAnimationFrame(() => document.querySelector('[data-section="unresolved"]')?.scrollIntoView({ block: 'start' }));
-        }),
-    },
   ]);
+  // Keyless (palette-only) commands register from the chunk: zero startup bytes.
+  addCommandSource(() => impl.load().then((m) => m.registerKnowledgeCommands()));
 
   // Never on the launch path: the index is only needed once the user starts navigating.
   afterBootIdle(() => void impl.load().catch((err) => console.warn('[knowledge] failed to load', err)));

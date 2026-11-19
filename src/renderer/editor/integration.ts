@@ -6,11 +6,39 @@ import { dirname, join, normalize } from '@shared/paths';
 import { resolveWikiTarget } from '@shared/wikilinks';
 import { app } from '../app/app';
 import { fileUrl } from '../platform';
-import { setEditorHost, type LinkTarget } from './host';
+import { setEditorHost, type HoveredLink, type LinkTarget } from './host';
 import { scanTags, type CompletionHost } from './complete';
+import { loadKnowledge } from '../knowledge';
 
-type KnowledgeLike = { tags?: () => unknown; headings?: (p: string) => Array<{ text: string; level: number }>; ensure?: () => void };
+type KnowledgeLike = {
+  tags?: () => unknown;
+  headings?: (p: string) => Array<{ text: string; level: number }>;
+  ensure?: () => void;
+  linkPreview?: { hover(link: HoveredLink | null, from: string): void };
+};
 const knowledge = () => (app as unknown as { knowledge?: KnowledgeLike }).knowledge;
+
+// Link hover preview: the popup is the knowledge module's. Hovered before its chunk is in → the
+// latest link is shown once it arrives (unless the pointer left meanwhile).
+let pendingHover: { link: HoveredLink; from: string } | null = null;
+function hoverLink(link: HoveredLink | null, from: string) {
+  const lp = knowledge()?.linkPreview;
+  if (lp) return lp.hover(link, from);
+  pendingHover = link ? { link, from } : null;
+  if (link)
+    void loadKnowledge().then(
+      () => {
+        const p = pendingHover;
+        pendingHover = null;
+        if (p) knowledge()?.linkPreview?.hover(p.link, p.from);
+      },
+      () => {},
+    );
+}
+const hoverMode = (): 'mod' | 'hover' | 'off' => {
+  const v = app.settings.value['links.hoverPreview'];
+  return v === 'hover' || v === 'off' ? v : 'mod';
+};
 
 let resolveCache = new Map<string, string | null>();
 let cacheFiles: readonly string[] | null = null;
@@ -167,6 +195,8 @@ export function installEditorIntegration(ctx: { view: () => EditorView | null; p
     resolveWiki: (target, from) => (target ? resolveCached(target, from) : from),
     readNote: (path) => completionHost.readText(path),
     noteRevision: (path) => revisions.get(path) ?? 0,
+    hoverLink,
+    hoverMode,
   });
   // Embedded notes re-render when their source changes (another tab, external edit, save).
   const revisions = new Map<string, number>();
