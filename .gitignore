@@ -1,5 +1,6 @@
 # Dependencies & build output
-node_modules/
+# Dependencies (no trailing slash: also matches the node_modules symlink in build worktrees)
+node_modules
 dist/
 release/
 .e2e-dist*/
