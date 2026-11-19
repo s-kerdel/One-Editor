@@ -6,6 +6,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { buildSync } from 'esbuild';
 import type { FileData } from '../../../src/shared/api';
+import { decodeTextFrame } from '../../../src/shared/textframe';
 
 const TMP = path.resolve(__dirname, '../../../.tmp/unit-indexer-worker');
 let dir: string;
@@ -16,6 +17,7 @@ beforeAll(async () => {
   const out = path.join(TMP, 'indexer-worker.cjs');
   buildSync({ entryPoints: [path.resolve(__dirname, '../../../src/backend/indexer-worker.ts')], bundle: true, platform: 'node', format: 'cjs', target: 'node22', outfile: out, logLevel: 'error' });
   process.env.SEC_EDIT_INDEXER_SRC_FILE = out;
+  process.env.SEC_EDIT_INDEXER_IDLE_MS = '300';
   ({ Workspace } = await import('../../../src/backend/workspace'));
   dir = await fsp.mkdtemp(path.join(TMP, 'ws-'));
   for (let i = 0; i < 300; i++) {
@@ -48,7 +50,7 @@ describe('indexer worker thread', () => {
     const w = new Workspace(dir, { watchMode: 'poll', readThreads: 2 });
     const viaWorker = await all(w);
     expect((w as any).host.inWorker).toBe(true);
-    const raw = JSON.parse(new TextDecoder().decode(await w.readAllTextPageRaw({ maxBytes: 8 << 20 })));
+    const raw = decodeTextFrame(await w.readAllTextPageRaw({ maxBytes: 8 << 20 }));
     expect(raw.files.map((f: FileData) => f.path)).toEqual(viaWorker.map((f) => f.path));
     const upd = await w.readIndexedFiles(['d0/n0.md', 'gen/x.md', 'nope.md']);
     expect(upd.files.map((f) => f.path)).toEqual(['d0/n0.md']);
@@ -95,5 +97,36 @@ describe('indexer worker thread', () => {
     } finally {
       delete process.env.SEC_EDIT_TEST_FS_LATENCY_MS;
     }
+  });
+
+  it('an idle indexer thread stops (memory back) and restarts on the next request', async () => {
+    const w = new Workspace(dir, { watchMode: 'poll', readThreads: 2 });
+    const first = await all(w);
+    const host = (w as any).host;
+    expect(host.inWorker).toBe(true);
+    await new Promise((r) => setTimeout(r, 700));
+    expect(host.running, 'stopped after being idle').toBe(false);
+    const again = await all(w);
+    expect(again.map((f) => f.path)).toEqual(first.map((f) => f.path));
+    const upd = await w.readIndexedFiles(['d0/n0.md']);
+    expect(upd.files.length).toBe(1);
+    w.dispose();
+  });
+
+  it('a part-way pass keeps its thread (a pass paused while hidden resumes with its state)', async () => {
+    const big = await fsp.mkdtemp(path.join(TMP, 'big-'));
+    for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(big, `n${i}.md`), `# N${i}\n\n` + 'filler text '.repeat(1000)); // ~12 KB each: > 1 page
+    const w = new Workspace(big, { watchMode: 'poll', readThreads: 2 });
+    const first = decodeTextFrame<{ nextCursor: string | null }>(await w.readAllTextPageRaw({ maxBytes: 64 << 10 }));
+    const host = (w as any).host;
+    expect(first.nextCursor).not.toBeNull();
+    await new Promise((r) => setTimeout(r, 700));
+    expect(host.running, 'kept while the pass is open').toBe(true);
+    let cursor = first.nextCursor;
+    while (cursor !== null) cursor = decodeTextFrame<{ nextCursor: string | null }>(await w.readAllTextPageRaw({ cursor, maxBytes: 64 << 10 })).nextCursor;
+    await new Promise((r) => setTimeout(r, 700));
+    expect(host.running, 'stopped once the pass finished').toBe(false);
+    w.dispose();
+    await fsp.rm(big, { recursive: true, force: true });
   });
 });

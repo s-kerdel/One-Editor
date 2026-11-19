@@ -70,13 +70,14 @@ export function defaultReadThreads(root = ''): number {
   return process.platform === 'win32' ? 8 : Math.max(2, Math.min(4, cores - 1));
 }
 
-const IDLE_MS = 15_000;
+const IDLE_MS = 5_000;
 
 export class ReadPool {
   private workers: Worker[] = [];
-  private next = 0;
+  /** Batches in flight per thread (parallel to workers). */
+  private load: number[] = [];
   private seq = 0;
-  private waiting = new Map<number, { resolve: (r: ReadResult[]) => void; reject: (e: unknown) => void }>();
+  private waiting = new Map<number, { resolve: (r: ReadResult[]) => void; reject: (e: unknown) => void; worker: Worker }>();
   private idleTimer: NodeJS.Timeout | null = null;
   private broken = false;
 
@@ -86,37 +87,54 @@ export class ReadPool {
     return this.threads;
   }
 
+  /** Threads running now (they start on demand and stop when idle). */
+  get running() {
+    return this.workers.length;
+  }
+
   /** False when threads are off (0) or could not start: callers read in-thread instead. */
   get available() {
     return this.threads > 0 && !this.broken;
   }
 
-  /** Starts the threads ahead of the first read (they take a few ms each to boot). */
+  /** Starts a few threads ahead of the first pass (they take a few ms each to boot). */
   warm() {
     if (!this.available) return;
     try {
-      this.ensure();
+      while (this.workers.length < Math.min(4, this.threads)) this.spawn();
       this.armIdle();
     } catch {
       this.broken = true;
     }
   }
 
-  private ensure() {
-    if (this.workers.length) return;
-    for (let i = 0; i < this.threads; i++) {
-      const w = new Worker(WORKER_SRC, { eval: true });
-      w.unref(); // never keeps the process alive
-      w.on('message', (m: { id: number; out: ReadResult[] }) => {
-        const p = this.waiting.get(m.id);
-        this.waiting.delete(m.id);
-        p?.resolve(m.out);
-        this.armIdle();
-      });
-      w.on('error', (err) => this.fail(err));
-      w.on('exit', (code) => code !== 0 && this.workers.includes(w) && this.fail(new Error(`read worker exited (${code})`)));
-      this.workers.push(w);
+  private spawn(): number {
+    // These threads only move bytes (backing stores live outside the JS heap): small heaps.
+    const w = new Worker(WORKER_SRC, { eval: true, resourceLimits: { maxYoungGenerationSizeMb: 1, maxOldGenerationSizeMb: 16, codeRangeSizeMb: 4, stackSizeMb: 1 } });
+    w.unref(); // never keeps the process alive
+    w.on('message', (m: { id: number; out: ReadResult[] }) => {
+      const p = this.waiting.get(m.id);
+      this.waiting.delete(m.id);
+      const i = this.workers.indexOf(w);
+      if (i !== -1) this.load[i] = Math.max(0, this.load[i] - 1);
+      p?.resolve(m.out);
+      this.armIdle();
+    });
+    w.on('error', (err) => this.fail(err));
+    w.on('exit', (code) => code !== 0 && this.workers.includes(w) && this.fail(new Error(`read worker exited (${code})`)));
+    this.workers.push(w);
+    this.load.push(0);
+    return this.workers.length - 1;
+  }
+
+  /** An idle thread, else a new one (up to the limit), else the least loaded: a one-file update starts one thread, a pass all of them. */
+  private pick(): number {
+    let best = -1;
+    for (let i = 0; i < this.workers.length; i++) {
+      if (this.load[i] === 0) return i;
+      if (best < 0 || this.load[i] < this.load[best]) best = i;
     }
+    return this.workers.length < this.threads ? this.spawn() : best;
   }
 
   private fail(err: unknown) {
@@ -129,16 +147,17 @@ export class ReadPool {
 
   private armIdle() {
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    // Threads cost a few MB each: gone shortly after the last index pass.
+    // Threads cost a few MB each: gone shortly after the last read.
     this.idleTimer = this.waiting.size ? null : setTimeout(() => this.close(), IDLE_MS);
     this.idleTimer?.unref();
   }
 
-  /** Reads a batch on the next thread (round robin); results in job order. */
+  /** Reads a batch on an idle (or new, or the least busy) thread; results in job order. */
   read(jobs: ReadJob[], maxBytes: number): Promise<ReadResult[]> {
     if (!this.available) return Promise.reject(new Error('read pool unavailable'));
+    let i: number;
     try {
-      this.ensure();
+      i = this.pick();
     } catch (err) {
       this.broken = true;
       return Promise.reject(err);
@@ -146,9 +165,10 @@ export class ReadPool {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     const id = ++this.seq;
-    const w = this.workers[this.next++ % this.workers.length];
+    const w = this.workers[i];
+    this.load[i]++;
     return new Promise((resolve, reject) => {
-      this.waiting.set(id, { resolve, reject });
+      this.waiting.set(id, { resolve, reject, worker: w });
       w.postMessage({ id, jobs, max: maxBytes });
     });
   }
@@ -158,6 +178,7 @@ export class ReadPool {
     this.idleTimer = null;
     const ws = this.workers;
     this.workers = [];
+    this.load = [];
     for (const w of ws) void w.terminate().catch(() => {});
   }
 }

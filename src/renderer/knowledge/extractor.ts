@@ -8,6 +8,8 @@ import type { ExtractDoc, FromKnowledgeWorker, ToKnowledgeWorker } from '../../k
 const SLICE_MS = 8;
 /** No reply for this long while jobs are pending → the worker is wedged or never loaded. */
 const WATCHDOG_MS = 15000;
+/** Extraction workers are only needed for builds / big edits: idle ones are stopped (their heap with them). */
+const IDLE_MS = 30_000;
 
 interface Job {
   docs: ExtractDoc[];
@@ -73,8 +75,18 @@ class Extractor {
     });
   }
 
+  private stopIdle() {
+    this.idleTimer = null;
+    if (this.jobs.size || this.mode !== 'worker') return;
+    for (const w of this.workers) w.terminate();
+    this.workers = [];
+    this.busy = [];
+  }
+
   /** Least busy worker; another one only once every worker has a backlog (bulk builds, not edits). */
   private pick(): number {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
     let best = -1;
     for (let i = 0; i < this.workers.length; i++) if (best < 0 || this.busy[i] < this.busy[best]) best = i;
     if ((best < 0 || this.busy[best] >= 2) && this.workers.length < maxExtractors()) {
@@ -104,12 +116,18 @@ class Extractor {
     }
   }
 
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+
   private onMessage(m: FromKnowledgeWorker) {
     const job = this.jobs.get(m.id);
     if (!job) return;
     this.jobs.delete(m.id);
     this.busy[job.worker] = Math.max(0, this.busy[job.worker] - 1);
     this.arm();
+    if (!this.jobs.size) {
+      if (this.idleTimer) clearTimeout(this.idleTimer);
+      this.idleTimer = setTimeout(() => this.stopIdle(), IDLE_MS);
+    }
     if (m.type === 'extracted') job.resolve(m.infos);
     else job.reject(new Error(m.message));
   }
