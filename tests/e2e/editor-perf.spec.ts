@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './harness';
+import { cpuLoadMeter, describeLoad, skipIfBusy } from './cpu-load';
 
 test.use({ trace: 'off' }); // trace snapshots of a 1 MB DOM make every Playwright call slow
 
@@ -115,14 +116,18 @@ for (const [label, size, cpuBudget, frameBudget] of [
     await page.evaluate((p) => (window as any).__secEdit.openFile(p), `perf-${size}.md`);
     await expect(page.locator('.cm-content')).toContainText('Perf note');
     await page.waitForTimeout(500);
+    const meter = cpuLoadMeter();
     const top = await measureTyping(page, `perf-${size}.md`, 'quick brown fox jumps', Math.floor(note.length * 0.02));
     const mid = await measureTyping(page, `perf-${size}.md`, 'lazy dog again here', Math.floor(note.length * 0.5));
     const sync = await measureDispatch(page, 60);
+    const load = meter.stop();
     console.log(
       `[latency] ${label} (${(note.length / 1000).toFixed(0)}K chars): key→frame top median ${top.median.toFixed(1)} p95 ${top.p95.toFixed(1)} max ${top.max.toFixed(1)} ms; ` +
         `mid median ${mid.median.toFixed(1)} p95 ${mid.p95.toFixed(1)} max ${mid.max.toFixed(1)} ms; long tasks ${top.longTasks + mid.longTasks} (max ${Math.max(top.maxLong, mid.maxLong).toFixed(0)} ms); ` +
         `dispatch+measure median ${sync.median.toFixed(2)} p95 ${sync.p95.toFixed(2)} max ${sync.max.toFixed(2)} ms`,
     );
+    console.log(`[latency] ${label}: ${describeLoad(load)}`);
+    skipIfBusy(load, `${label} typing`);
     expect(sync.median).toBeLessThan(cpuBudget);
     expect(top.median).toBeLessThan(frameBudget);
     expect(mid.median).toBeLessThan(frameBudget);

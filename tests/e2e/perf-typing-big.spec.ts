@@ -2,6 +2,7 @@
 // refreshes as the index changes), the file overview (links, outline, stats of that note) and the
 // knowledge index re-extracting it. Before: p95 424 ms (Electron), every panel recomputing per edit.
 import { test, expect } from './harness';
+import { cpuLoadMeter, describeLoad, skipIfBusy } from './cpu-load';
 // @ts-expect-error plain .mjs helper without types
 import { noteContent } from '../perf/gen-workspace.mjs';
 
@@ -30,7 +31,9 @@ test('typing in a 1 MB note with search, overview and knowledge live: p95 key→
       requestAnimationFrame(() => setTimeout(() => w.__kt.push(performance.now() - s), 0));
     }, true);
   });
+  const meter = cpuLoadMeter();
   await page.keyboard.type(' typing latency check in a one megabyte note with the panels open', { delay: 30 });
+  const load = meter.stop();
   await page.waitForTimeout(2500); // debounced consumers (index, overview, knowledge, autosave) run
   const r = await page.evaluate(() => {
     const w = window as any;
@@ -38,8 +41,9 @@ test('typing in a 1 MB note with search, overview and knowledge live: p95 key→
     const q = (p: number) => Math.round(t[Math.min(t.length - 1, Math.floor(t.length * p))]);
     return { keys: t.length, median: q(0.5), p95: q(0.95), max: q(1), longTasks: (w.__lt as number[]).length, longest: Math.max(0, ...(w.__lt as number[])) };
   });
-  console.log(`[perf-typing-big] 1 MB note, search + overview + knowledge live: ${JSON.stringify(r)}`);
+  console.log(`[perf-typing-big] 1 MB note, search + overview + knowledge live: ${JSON.stringify(r)}; ${describeLoad(load)}`);
   expect(r.keys).toBeGreaterThan(40);
+  skipIfBusy(load, '1 MB typing');
   // Generous for a loaded CI box: on an idle machine median ~12 ms, p95 ~20 ms.
   expect(r.median, 'median key→frame').toBeLessThan(40);
   expect(r.p95, 'p95 key→frame').toBeLessThan(100);

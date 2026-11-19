@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Page } from '@playwright/test';
 import { test, expect, RENDERER_DIR } from './harness';
+import { cpuLoadMeter, describeLoad, skipIfBusy } from './cpu-load';
 import { startServer, type RunningServer } from '../../src/server/server';
 // @ts-expect-error plain .mjs helper without types
 import { generate, noteContent, noteName } from '../perf/gen-workspace.mjs';
@@ -200,6 +201,7 @@ test('typing in a 20 KB note stays smooth with search, outline and backlinks liv
   expect((await fsp.stat(path.join(BIG, 'notes/big-note.md'))).size).toBeGreaterThan(19000);
 
   const results: Record<string, { median: number; p95: number; max: number }> = {};
+  const meter = cpuLoadMeter();
   for (const panel of ['search', 'outline', 'backlinks', 'tags']) {
     await page.locator(`.se-nav-btn[data-panel="${panel}"]`).click();
     if (panel === 'search') {
@@ -233,12 +235,14 @@ test('typing in a 20 KB note stays smooth with search, outline and backlinks liv
     const times = (await page.evaluate(() => (window as any).__keyTimes as number[])).sort((a, b) => a - b);
     results[panel] = { median: Math.round(times[Math.floor(times.length / 2)] * 10) / 10, p95: Math.round(times[Math.floor(times.length * 0.95)] * 10) / 10, max: Math.round(times[times.length - 1] * 10) / 10 };
   }
+  const load = meter.stop();
   const tasks = (await longTasks(page)).filter((t) => t.start > 0);
   console.log(
     `[perf-scale] typing 20 KB note, key→frame (median/p95/max ms): ${Object.entries(results)
       .map(([k, v]) => `${k} ${v.median}/${v.p95}/${v.max}`)
-      .join(' · ')}; long tasks total ${tasks.length} (max ${Math.max(0, ...tasks.map((t) => t.duration))} ms)`,
+      .join(' · ')}; long tasks total ${tasks.length} (max ${Math.max(0, ...tasks.map((t) => t.duration))} ms); ${describeLoad(load)}`,
   );
+  skipIfBusy(load, '20 KB typing with panels');
   for (const [panel, r] of Object.entries(results)) {
     expect(r.median, `median key→frame with ${panel} panel`).toBeLessThan(40);
     expect(r.p95, `p95 key→frame with ${panel} panel`).toBeLessThan(120);

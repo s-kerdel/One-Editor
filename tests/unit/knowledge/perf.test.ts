@@ -3,6 +3,10 @@ import { KnowledgeIndex } from '../../../src/knowledge/index';
 import { createRenameRewriter } from '../../../src/knowledge/rename';
 import { buildGraph, ForceSim } from '../../../src/knowledge/graph';
 import { applyTemplate, dailyNotePath, formatDate, sanitizeNoteName } from '../../../src/knowledge/templates';
+import { cpuLoadMeter, describeLoad, type CpuLoad } from '../../perf/cpu-meter';
+
+/** Wall-clock budgets are skipped (with the reason) when another job kept the CPUs busy meanwhile. */
+const busyNote = (load: CpuLoad) => `${describeLoad(load)}: wall-clock budgets not measurable`;
 
 function synth(n: number): Array<[string, string]> {
   const out: Array<[string, string]> = [];
@@ -25,7 +29,8 @@ describe('performance', { retry: 2 }, () => {
   const N = 5000;
   const data = synth(N);
 
-  it(`indexes ${N} notes (~${Math.round(data.reduce((a, [, t]) => a + t.length, 0) / 1e6)} MB) and answers queries fast`, () => {
+  it(`indexes ${N} notes (~${Math.round(data.reduce((a, [, t]) => a + t.length, 0) / 1e6)} MB) and answers queries fast`, (ctx) => {
+    const meter = cpuLoadMeter();
     const idx = new KnowledgeIndex();
     const t0 = performance.now();
     idx.setFiles(data.map(([p]) => p));
@@ -60,13 +65,16 @@ describe('performance', { retry: 2 }, () => {
     expect(back.length).toBeGreaterThan(0);
     expect(mentions.length).toBeGreaterThanOrEqual(2);
     expect(idx.resolve('Alias 77')).toBe('folder27/Note 77.md');
+    const load = meter.stop();
+    ctx.skip(load.busy, busyNote(load));
     expect(tIndex).toBeLessThan(1500);
     expect(tFirstQuery).toBeLessThan(1000);
     expect(tMentions).toBeLessThan(1000);
     expect(tIncremental).toBeLessThan(100);
   });
 
-  it('rewrites links across 5k notes quickly', () => {
+  it('rewrites links across 5k notes quickly', (ctx) => {
+    const meter = cpuLoadMeter();
     const files = data.map(([p]) => p);
     const from = data[10][0];
     data[11][1] += '\n[[Note 10]] [x](../folder10/Note%2010.md)';
@@ -77,10 +85,13 @@ describe('performance', { retry: 2 }, () => {
     const ms = performance.now() - t0;
     console.log(`[perf] rename scan of ${N} notes: ${ms.toFixed(0)}ms, ${touched} notes touched`);
     expect(touched).toBeGreaterThan(0);
+    const load = meter.stop();
+    ctx.skip(load.busy, busyNote(load));
     expect(ms).toBeLessThan(2500);
   });
 
-  it('builds and simulates a 5k-node graph within a frame budget', () => {
+  it('builds and simulates a 5k-node graph within a frame budget', (ctx) => {
+    const meter = cpuLoadMeter();
     const idx = new KnowledgeIndex();
     for (const [p, t] of data) idx.update(p, t);
     idx.backlinks(data[0][0]); // derive links outside the measurement
@@ -93,6 +104,8 @@ describe('performance', { retry: 2 }, () => {
     const tTick = (performance.now() - t1) / 20;
     console.log(`[perf] graph build: ${tBuild.toFixed(0)}ms (${g.nodes.length} nodes, ${g.edges.length / 2} edges) | sim tick: ${tTick.toFixed(1)}ms`);
     expect(g.nodes.length).toBe(N);
+    const load = meter.stop();
+    ctx.skip(load.busy, busyNote(load));
     expect(tBuild).toBeLessThan(1000);
     expect(tTick).toBeLessThan(40);
   });

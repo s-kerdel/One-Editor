@@ -11,6 +11,11 @@ mkdirSync(process.env.TMPDIR, { recursive: true });
 
 // Electron E2E (real app under Xvfb on Linux):  npm run test:electron
 // The app is staged once per run into a private dir (see tests/e2e/electron/global-setup.ts).
+/** Specs that measure time / CPU (perf-*.spec.ts, *-perf.spec.ts): after the rest, one at a time. */
+const TIMING_SPECS = /(?:^|[\\/])(?:perf(?:-[^\\/]*)?|[^\\/]*-perf)\.spec\.ts$/;
+/** Full run only (no spec file / grep given): naming a timing spec runs just that. */
+const FULL_RUN = !process.argv.slice(2).some((a) => /\.spec\.ts(?::\d+)*$/.test(a) || /(?:^|\/)tests\/e2e(?:\/|$)/.test(a) || /^(?:-g|--grep(?:-invert)?|--last-failed|--only-changed)(?:=|$)/.test(a));
+
 export default defineConfig({
   testDir: 'tests/e2e/electron',
   testMatch: /.*\.spec\.ts$/,
@@ -21,4 +26,8 @@ export default defineConfig({
   workers: 3,
   reporter: [['list']],
   outputDir: process.env.SEC_EDIT_PW_OUTPUT || '.tmp/electron-results',
+  projects: [
+    { name: 'functional', testIgnore: TIMING_SPECS },
+    { name: 'timing', testMatch: TIMING_SPECS, dependencies: FULL_RUN ? ['functional'] : [], workers: 1, fullyParallel: false, timeout: 120_000 },
+  ],
 });
