@@ -15,6 +15,13 @@ export default defineConfig({
     sourcemap: false,
     chunkSizeWarningLimit: 4000,
     modulePreload: { polyfill: false },
+    rolldownOptions: {
+      output: {
+        // app.ts + ui.ts are both startup code: keep them in one chunk. Otherwise a lazy feature that
+        // imports only one of them splits them apart (+1 request, ~100 B gzip on the startup budget).
+        codeSplitting: { groups: [{ name: 'core', test: /src[\\/]renderer[\\/]app[\\/](app|ui)\.tsx?$/ }] },
+      },
+    },
   },
   server: { port: 5173, strictPort: false },
 });
