@@ -258,7 +258,9 @@ html[data-theme='light'] .se-ws-avatar { color: hsl(var(--ws-hue) 55% 42%); }
 .se-tree { position: relative; flex: 1; min-height: 0; overflow: auto; outline: none; padding-bottom: 24px; }
 .se-tree-inner { position: relative; margin: 0 6px; }
 .se-tree-inner.drop-root { box-shadow: inset 0 0 0 1px var(--accent); border-radius: var(--radius-md); background: var(--accent-soft); }
-.se-tree-row { position: absolute; left: 0; right: 0; height: var(--row-h); display: flex; align-items: center; gap: 8px; padding-right: 8px; border-radius: var(--radius-md); color: var(--text-muted); font-size: 13.5px; cursor: pointer; white-space: nowrap; user-select: none; transition: background 0.1s, color 0.1s; }
+/* Row hover is instant on purpose (tabs too): a background / colour transition animates ~6 frames of
+   style + paint for every row the pointer crosses — sweeping a list kept the renderer busy. */
+.se-tree-row { position: absolute; left: 0; right: 0; height: var(--row-h); display: flex; align-items: center; gap: 8px; padding-right: 8px; border-radius: var(--radius-md); color: var(--text-muted); font-size: 13.5px; cursor: pointer; white-space: nowrap; user-select: none; }
 .se-tree-row:hover { background: var(--bg-hover); color: var(--text); }
 .se-tree-row.dir { color: var(--text); }
 /* The open note is a raised "card" in the list, echoing the editor card. */
@@ -270,12 +272,14 @@ html[data-theme='light'] .se-ws-avatar { color: hsl(var(--ws-hue) 55% 42%); }
 .se-tree-row.drop { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .se-tree-row.creating { cursor: default; background: transparent; box-shadow: none; }
 .se-tree-lead { position: relative; width: 16px; height: 16px; flex: none; display: grid; place-items: center; }
-.se-tree-chev { display: none; color: var(--text-muted); }
-.se-tree-row.dir:hover .se-tree-chev { display: block; }
-.ui-shelf .se-tree-row.dir:hover .se-ficon-folder { display: none; }
+/* Folder icon and chevron share the lead cell; hover swaps their visibility (paint only: `display` re-laid out the row). */
+.se-tree-lead > * { grid-area: 1 / 1; }
+.se-tree-chev { visibility: hidden; color: var(--text-muted); }
+.se-tree-row.dir:hover .se-tree-chev { visibility: visible; }
+.ui-shelf .se-tree-row.dir:hover .se-ficon-folder { visibility: hidden; }
 .se-tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* .md is implied in a notes app: kept in the DOM (copy, a11y, tests) but only hinted on hover. */
-.se-tree-ext { color: var(--text-faint); opacity: 0; transition: opacity 0.12s; }
+.se-tree-ext { color: var(--text-faint); opacity: 0; }
 .se-tree-row:hover .se-tree-ext { opacity: 0.8; }
 .se-tree-count { flex: none; min-width: 18px; padding: 0 5px; border-radius: var(--radius-pill); font-size: 11px; line-height: 16px; text-align: center; color: var(--text-faint); background: var(--bg-shelf-inset); }
 .se-tree-badge { color: var(--text-faint); font-size: 11px; }
@@ -342,7 +346,8 @@ html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220)
 .ui-classic .se-tree-row.active { background: var(--accent-soft); box-shadow: none; }
 .ui-classic .se-tree-row.active .se-tree-name { font-weight: 500; }
 .ui-classic .se-tree-lead { display: contents; }
-.ui-classic .se-tree-ext { opacity: 1; }
+/* Also on hover: 1 ↔ 0.8 would add / drop the span's paint layer — a layout for every row the pointer crosses. */
+.ui-classic .se-tree-ext, .ui-classic .se-tree-row:hover .se-tree-ext { opacity: 1; }
 .ui-classic .se-tree-input { height: 22px; border-radius: var(--radius-sm); }
 .ui-classic .se-tree-error { top: var(--row-h-classic); }
 .se-classic-ws { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; height: 26px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: var(--radius); background: transparent; text-align: left; }
@@ -355,7 +360,7 @@ html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220)
 .se-tabs { flex: 1; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .se-tabs::-webkit-scrollbar { display: none; }
 .se-tabs-end { flex: 1; } /* the strip's empty end (drags the window with the integrated frame) */
-.se-tab { position: relative; display: flex; align-items: center; gap: 7px; max-width: 240px; min-width: 0; padding: 0 6px 0 12px; border-right: 1px solid var(--border); color: var(--text-muted); cursor: pointer; white-space: nowrap; user-select: none; flex: none; transition: background 0.1s, color 0.1s; }
+.se-tab { position: relative; display: flex; align-items: center; gap: 7px; max-width: 240px; min-width: 0; padding: 0 6px 0 12px; border-right: 1px solid var(--border); color: var(--text-muted); cursor: pointer; white-space: nowrap; user-select: none; flex: none; }
 .se-tab:hover { background: var(--bg-hover); color: var(--text); }
 .se-tab.active { background: var(--bg); color: var(--text); }
 .se-tab.active::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--accent); }
@@ -368,13 +373,14 @@ html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220)
 .se-tab-hint { color: var(--text-faint); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; max-width: 90px; }
 .se-tab-close { position: relative; width: 20px; height: 20px; display: grid; place-items: center; flex: none; border: 0; padding: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); }
 .se-tab-close:hover { background: var(--bg-active); color: var(--text); }
-.se-tab-x { opacity: 0; transition: opacity 0.1s; }
-.se-tab:hover .se-tab-x, .se-tab.active .se-tab-x { opacity: 1; }
+/* visibility, not opacity 0 ↔ 1 (adds / drops a paint layer) or display: neither re-lays out the strip on hover. */
+.se-tab-x { visibility: hidden; }
+.se-tab:hover .se-tab-x, .se-tab.active .se-tab-x { visibility: visible; }
 .se-tab-dirty { position: absolute; width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
 .se-tab.active .se-tab-dirty { background: var(--accent); }
-.se-tab.dirty .se-tab-x { opacity: 0; }
-.se-tab.dirty .se-tab-close:hover .se-tab-x { opacity: 1; }
-.se-tab.dirty .se-tab-close:hover .se-tab-dirty { display: none; }
+.se-tab.dirty .se-tab-x { visibility: hidden; }
+.se-tab.dirty .se-tab-close:hover .se-tab-x { visibility: visible; }
+.se-tab.dirty .se-tab-close:hover .se-tab-dirty { visibility: hidden; }
 .se-tabbar-tools { display: flex; align-items: center; padding: 0 8px; gap: 4px; flex: none; }
 .se-width-btn { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-faint); transition: background 0.1s, color 0.1s; }
 .se-width-btn:hover { background: var(--bg-hover); color: var(--text); }

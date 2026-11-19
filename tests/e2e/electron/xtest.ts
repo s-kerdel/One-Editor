@@ -5,6 +5,8 @@ import net from 'node:net';
 
 export interface XPointer {
   move(x: number, y: number): Promise<void>;
+  /** Pointer motion only: no settle pause (for continuous sweeps at mouse-report rates). */
+  motion(x: number, y: number): Promise<void>;
   down(button?: number): Promise<void>;
   up(button?: number): Promise<void>;
   click(x: number, y: number, opts?: { count?: number }): Promise<void>;
@@ -84,6 +86,10 @@ export async function connectXTest(display = process.env.DISPLAY || ':99'): Prom
       fake(6, 0, Math.round(x), Math.round(y)); // MotionNotify, absolute
       await sync();
       await pause(30);
+    },
+    async motion(x, y) {
+      fake(6, 0, Math.round(x), Math.round(y));
+      await sync();
     },
     async down(button = 1) {
       fake(4, button);
