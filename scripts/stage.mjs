@@ -1,4 +1,4 @@
-// Stages a minimal production app folder:  <out>/package.json + <out>/dist/{main,renderer}
+// Stages a minimal production app folder:  <out>/package.json + <out>/dist/{main,renderer,server}
 // + <out>/node_modules/node-pty (the one native module: runtime JS + the target's binaries only).
 // Everything else is bundled, so packages ship exactly what runs.
 //   node scripts/stage.mjs [--out release/app] [--platform win32|linux|darwin] [--arch x64|arm64]
@@ -20,7 +20,8 @@ fs.rmSync(out, { recursive: true, force: true });
 fs.mkdirSync(path.join(out, 'dist'), { recursive: true });
 const node = process.execPath;
 run(node, [path.join(root, 'node_modules/vite/bin/vite.js'), 'build', '--logLevel', 'warn'], { SEC_EDIT_RENDERER_OUT: path.join(out, 'dist/renderer') });
-run(node, [path.join(root, 'scripts/build-node.mjs'), '--outdir', path.join(out, 'dist'), '--only', 'electron']);
+// Electron main/preload + the browser-mode server (run by the packaged exe: "Start web server").
+run(node, [path.join(root, 'scripts/build-node.mjs'), '--outdir', path.join(out, 'dist')]);
 fs.writeFileSync(
   path.join(out, 'package.json'),
   JSON.stringify(
