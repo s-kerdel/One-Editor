@@ -23,8 +23,14 @@ const SLICE_CHARS = 1_000_000;
 const FILES_PER_SHARD = 800;
 /** While indexing, live results refresh at most this often. */
 const PROGRESS_BUMP_MS = 700;
-/** Feeder page size: parsed in a worker, so bigger pages just mean fewer round trips. */
-const FEED_PAGE_BYTES = 4 << 20;
+/**
+ * Feeder page size. Electron (app:// protocol; RPC travels over IPC): 4 MB = fewer round trips.
+ * Browser mode: 1 MB — a 4 MB response held the page's HTTP delivery for tens of ms on a busy machine,
+ * and every small RPC answer (opening a file) queued behind it, once per page.
+ */
+const feedPageBytes = () => (app.backend.kind === 'web' ? 1 << 20 : 4 << 20);
+/** Longest the first build waits for the knowledge module to subscribe to its notes. */
+const NOTES_GATE_MS = 1500;
 /** File events are coalesced this long before the changed files are re-read and re-indexed. */
 const REFRESH_DEBOUNCE_MS = 500;
 
@@ -96,8 +102,10 @@ class SearchClient {
    * Knowledge subscribes here: its index is rebuilt from these events. Subscribing after a build has
    * started gets a replay (the shards re-extract from the text they hold) — nothing is missed.
    */
-  onNotes(cb: (e: NotesEvent) => void): () => void {
+  onNotes(cb: (e: NotesEvent) => void, opts: { replay?: boolean } = {}): () => void {
     this.notesCbs.add(cb);
+    if (!opts.replay) return () => this.notesCbs.delete(cb); // observers (tests, diagnostics)
+    this.openNotesGate();
     if (this.shards && this.status.value !== 'idle') {
       if (this.status.value === 'indexing') this.replayAfterBuild = true;
       else this.replayNotes();
@@ -190,9 +198,21 @@ class SearchClient {
    */
   start(): Promise<void> {
     if (this.starting) return this.starting;
-    this.starting = new Promise<void>((r) => setTimeout(r, 0)).then(() => this.reindex());
+    // The knowledge index is built from this build's note stream: give its module a moment to
+    // subscribe (it loads at the same idle moment), or it gets a full replay = twice the work.
+    const gate = new Promise<void>((r) => {
+      this.openNotesGate = () => ((this.notesSubscribed = true), r());
+      if (this.notesSubscribed) r();
+      setTimeout(r, NOTES_GATE_MS);
+    });
+    this.starting = new Promise<void>((r) => setTimeout(r, 0))
+      .then(() => gate)
+      .then(() => this.reindex());
     return this.starting;
   }
+
+  private notesSubscribed = false;
+  private openNotesGate: () => void = () => void (this.notesSubscribed = true);
 
   /** (Re)creates the shard workers when the count changes; existing shards are reused otherwise. */
   private ensureShards(n: number) {
@@ -349,7 +369,7 @@ class SearchClient {
         this.feeding = true;
         this.shards.reset(gen);
         this.ports[0].post({ type: 'pause', on: document.visibilityState === 'hidden' });
-        this.ports[0].post({ type: 'feed', gen, src, shards: this.shards.n, maxBytes: FEED_PAGE_BYTES });
+        this.ports[0].post({ type: 'feed', gen, src, shards: this.shards.n, maxBytes: feedPageBytes() });
         return;
       }
     }

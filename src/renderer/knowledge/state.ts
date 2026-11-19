@@ -109,8 +109,53 @@ function removeNow(path: string) {
 let buildStart = 0;
 let buildNotes = 0;
 
+/** Notes events wait here and are applied a few ms at a time, in order (typing and clicks interleave). */
+const noteQueue: NotesEvent[] = [];
+let draining = false;
+const NOTES_SLICE_MS = 6;
+const yieldTask = () =>
+  new Promise<void>((r) => {
+    const ch = new MessageChannel();
+    ch.port1.onmessage = () => {
+      ch.port1.close();
+      r();
+    };
+    ch.port2.postMessage(0);
+  });
+
+function queueNotes(e: NotesEvent) {
+  noteQueue.push(e);
+  if (!draining) void drainNotes();
+}
+
+async function drainNotes() {
+  draining = true;
+  try {
+    let t = performance.now();
+    while (noteQueue.length) {
+      const e = noteQueue.shift()!;
+      if (e.kind === 'items' && e.items.length > 32) {
+        // Big batch: split so one slice stays short.
+        for (let i = 0; i < e.items.length; i += 32) {
+          applyNotes({ ...e, items: e.items.slice(i, i + 32), removed: i === 0 ? e.removed : undefined });
+          if (performance.now() - t > NOTES_SLICE_MS) {
+            await yieldTask();
+            t = performance.now();
+          }
+        }
+      } else applyNotes(e);
+      if (performance.now() - t > NOTES_SLICE_MS) {
+        await yieldTask();
+        t = performance.now();
+      }
+    }
+  } finally {
+    draining = false;
+  }
+}
+
 /** The index follows the search workers' notes stream: a rebuild there is a rebuild here. */
-function onNotes(e: NotesEvent) {
+function applyNotes(e: NotesEvent) {
   if (e.kind === 'start') {
     generation = e.gen;
     readyResolve?.();
@@ -378,7 +423,7 @@ export function installIndexing() {
 
   // Builds (workspace opened, index settings changed) and disk changes arrive as note metadata
   // from the search workers; editor edits are extracted here.
-  searchClient.onNotes(onNotes);
+  searchClient.onNotes(queueNotes, { replay: true });
   app.events.on('tree:changed', () => {
     if (building.value) index.setFiles(app.files.value);
     else {

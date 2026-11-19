@@ -87,6 +87,11 @@ async function probeWhileIndexing(page: Page) {
     // Indexing starts on idle after boot: wait until it runs, then probe until it is done.
     while (!(window as any).__secEditSearch || (window as any).__secEditSearch.status.value === 'idle') await new Promise((r) => setTimeout(r, 20));
     const startedAt = performance.now();
+    // UI-thread lag: how late a 5 ms timer fires (busy main thread delays every continuation).
+    const lag: number[][] = [];
+    let lastT = performance.now();
+    const lagTimer = setInterval(() => { const n = performance.now(); if (n - lastT > 25) lag.push([Math.round(n - startedAt), Math.round(n - lastT)]); lastT = n; }, 5);
+
     while (!ready() && performance.now() - t0 < 120000) {
       const f = files[i++ % files.length];
       const s = performance.now();
@@ -94,14 +99,24 @@ async function probeWhileIndexing(page: Page) {
       await a.backend.getWorkspace();
       const d = performance.now() - s;
       lat.push(d);
+      // Slow probe: was it waiting for a connection, for the server, or for this thread?
+      if (d > 40) {
+        const all = performance.getEntriesByType('resource') as PerformanceResourceTiming[];
+        const at = (n: string) => all.filter((e) => e.name.includes(n)).pop();
+        const t = (e?: PerformanceResourceTiming) => e && { queued: Math.round(e.requestStart - e.fetchStart), server: Math.round(e.responseStart - e.requestStart), total: Math.round(e.responseEnd - e.startTime) };
+        const busy = all.filter((e) => e.startTime < s + d && e.responseEnd > s && !/readFile|getWorkspace/.test(e.name)).map((e) => e.name.replace(/^.*\/api\//, '').replace(/\?.*$/, ''));
+        ((window as any).__rt ??= []).push({ d: Math.round(d), readFile: t(at('/rpc/readFile')), getWorkspace: t(at('/rpc/getWorkspace')), alsoInFlight: busy });
+      }
       if (d > 40) slow.push([Math.round(s - startedAt), Math.round(d)]);
       await new Promise((r) => setTimeout(r, 25));
     }
     const doneAt = performance.now();
+    clearInterval(lagTimer);
+    (window as any).__lagInfo = lag.slice(0, 8);
     const lt = ((window as any).__lt as Array<{ at: number; ms: number }>).filter((t) => t.at >= startedAt && t.at <= doneAt);
     lat.sort((x, y) => x - y);
     const q = (p: number) => Math.round(lat[Math.min(lat.length - 1, Math.floor(lat.length * p))] ?? 0);
-    return { indexMs: Math.round(doneAt - startedAt), probes: lat.length, p50: q(0.5), p95: q(0.95), max: q(1), slow: slow.slice(0, 6), longTasks: lt.length, longestTask: Math.max(0, ...lt.map((t) => t.ms)) };
+    return { indexMs: Math.round(doneAt - startedAt), probes: lat.length, p50: q(0.5), p95: q(0.95), max: q(1), slow: slow.slice(0, 6), rt: ((window as any).__rt ?? []).slice(0, 6), uiLag: (window as any).__lagInfo, longTasks: lt.length, longestTask: Math.max(0, ...lt.map((t) => t.ms)) };
   });
 }
 
@@ -142,9 +157,21 @@ test('an fs-event storm never triggers a full index pass or tree walk; ignored f
   }
   const writeMs = Date.now() - t0;
   // Real notes become searchable (incrementally) — within a few seconds of the storm.
-  await expect
-    .poll(async () => page.evaluate(async () => (await (window as any).__secEditSearch.search('stormuniqueword', { limit: 1000 }, 'storm'))?.totalFiles ?? 0), { timeout: 30000 })
-    .toBe(Math.ceil(5000 / 17));
+  const found = () => page.evaluate(async () => ((await (window as any).__secEditSearch.search('stormuniqueword', { limit: 1000 }, 'storm'))?.results ?? []).map((r: { path: string }) => r.path));
+  try {
+    await expect.poll(async () => (await found()).length, { timeout: 30000 }).toBe(Math.ceil(5000 / 17));
+  } catch (err) {
+    // Where did the missing ones get lost: watcher (backend index), reader, or the renderer side?
+    const got = new Set(await found());
+    const want = Array.from({ length: 5000 }, (_, i) => i).filter((i) => i % 17 === 0).map((i) => `project-0/docs/storm/storm-note-${i}.md`);
+    const missing = want.filter((p) => !got.has(p));
+    const ws = (server.service as any).workspace;
+    const known = new Set(ws.filePaths());
+    const reread = JSON.parse(Buffer.from(await server.service.indexFilesRaw(missing)).toString());
+    const log = await page.evaluate(() => ((window as any).__secEditActivity?.value ?? []).filter((e: any) => e.kind === 'index-update').slice(-10));
+    console.log(`[perf-responsive] storm missing ${missing.length}: in backend index ${missing.filter((p) => known.has(p)).length}; re-read → files ${reread.files.length}, skipped ${reread.skipped.length}, gone ${reread.gone.length}; log ${JSON.stringify(log)}`);
+    throw err;
+  }
   await page.waitForTimeout(1500);
   const d = Object.fromEntries(Object.entries(counts).map(([k, v]) => [k, v - (before as any)[k]]));
   const ignoredHits = await page.evaluate(async () => (await (window as any).__secEditSearch.search('stormignored', {}, 'storm2'))?.totalFiles ?? -1);

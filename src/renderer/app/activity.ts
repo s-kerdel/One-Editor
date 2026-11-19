@@ -17,6 +17,7 @@ export interface ActivityEntry {
 
 const MAX = 200;
 export const activityLog = signal<ActivityEntry[]>([]);
+(globalThis as { __secEditActivity?: unknown }).__secEditActivity = activityLog; // E2E / debugging
 /** Shown in the status bar while set, e.g. "Indexing 4,210 / 18,000" (lives in ui.ts: startup chunk). */
 export { activityNow } from './ui';
 

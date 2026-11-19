@@ -20,6 +20,8 @@ export function notesOf(docs: readonly SearchDoc[]): NoteItem[] {
 }
 
 const SLICE_MS = 8;
+/** Notes per 'notes' message (~1–2 ms to deserialise on the UI thread). */
+const NOTES_BATCH = 64;
 
 export class SearchHost {
   readonly engine = new SearchEngine();
@@ -56,8 +58,7 @@ export class SearchHost {
           const t0 = performance.now();
           this.engine.upsertMany(msg.docs);
           b.ms += performance.now() - t0;
-          const notes = notesOf(msg.docs);
-          if (notes.length) this.post({ type: 'notes', gen: msg.gen, items: notes });
+          this.postNotes(msg.docs, msg.gen);
           if (msg.done) {
             this.building = null;
             this.post({ type: 'indexed', gen: msg.gen, count: this.engine.size, ms: b.ms });
@@ -66,8 +67,7 @@ export class SearchHost {
         }
         case 'upsert': {
           this.engine.upsertMany(msg.docs);
-          const notes = msg.notes ? notesOf(msg.docs) : [];
-          if (notes.length) this.post({ type: 'notes', items: notes });
+          if (msg.notes) this.postNotes(msg.docs);
           break;
         }
         case 'remove':
@@ -119,7 +119,7 @@ export class SearchHost {
         case 'replay': {
           const docs: SearchDoc[] = [];
           for (const [path, content] of this.engine.contents()) if (isMarkdown(path)) docs.push({ path, content });
-          for (let i = 0; i < docs.length; i += 500) this.post({ type: 'notes', gen: msg.gen, items: notesOf(docs.slice(i, i + 500)) });
+          for (let i = 0; i < docs.length; i += NOTES_BATCH) this.post({ type: 'notes', gen: msg.gen, items: notesOf(docs.slice(i, i + NOTES_BATCH)) });
           this.post({ type: 'replayed', gen: msg.gen });
           break;
         }
@@ -137,6 +137,15 @@ export class SearchHost {
       }
     } catch (err) {
       this.post({ type: 'error', id: 'id' in msg ? (msg as { id: number }).id : undefined, message: String((err as Error)?.message ?? err) });
+    }
+  }
+
+  /** Note metadata in small messages: the UI thread deserialises each one in a single task. */
+  private postNotes(docs: readonly SearchDoc[], gen?: number) {
+    const md = docs.filter((d) => isMarkdown(d.path));
+    for (let i = 0; i < md.length; i += NOTES_BATCH) {
+      const items = notesOf(md.slice(i, i + NOTES_BATCH));
+      this.post(gen === undefined ? { type: 'notes', items } : { type: 'notes', gen, items });
     }
   }
 
