@@ -269,6 +269,25 @@ test('source mode: Ctrl+hover over a [[link]] previews it too', async ({ page, w
   await page.keyboard.up('Control');
 });
 
+test('resting on a link, then pressing Ctrl, previews it even when the editor has no keyboard focus', async ({ page, ws }) => {
+  await ws.write('notes/rest.md', '# Rest\n\nSee [[kubernetes]] here.\n');
+  await boot(page, ws);
+  await openFile(page, 'notes/rest.md');
+  const wiki = page.locator('.cm-content .se-wikilink', { hasText: 'kubernetes' });
+  await expect(wiki).toBeVisible();
+  // Like opening the note from the file tree: keyboard focus is not in the editor.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect(await page.evaluate(() => !!document.activeElement?.closest('.cm-editor'))).toBe(false);
+  const b = (await wiki.boundingBox())!;
+  await page.mouse.move(b.x + 4, b.y + b.height / 2);
+  await page.mouse.move(b.x + 8, b.y + b.height / 2);
+  await page.waitForTimeout(300);
+  await expect(page.locator('.se-linkpv')).toHaveCount(0);
+  await page.keyboard.down('Control'); // no mouse move after this
+  await expect(page.locator('.se-linkpv .se-linkpv-title')).toHaveText('kubernetes');
+  await page.keyboard.up('Control');
+});
+
 test('classic sidebar style, both themes (screenshots)', async ({ page, ws }) => {
   test.skip(!SHOTS, 'screenshot-only');
   await ws.server.service.saveSettings({ sidebarStyle: 'classic' });

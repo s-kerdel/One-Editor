@@ -90,8 +90,27 @@ function probe() {
   host.hoverLink({ ...hit.link, rect: hit.rect }, p.view.state.facet(docPath));
 }
 
+// Ctrl/Cmd pressed while the pointer already rests on a link. Window-level: the editor often has no
+// keyboard focus then (note opened from the tree, focus in a panel), so its own keydown never fires.
+let keysHooked = false;
+function hookKeys() {
+  if (keysHooked) return;
+  keysHooked = true;
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if ((e.key === 'Control' || e.key === 'Meta') && !e.repeat && pointer?.view.dom.isConnected) {
+        pointer.mod = true;
+        probe();
+      }
+    },
+    true,
+  );
+}
+
 export const pagePreview = EditorView.domEventHandlers({
   mousemove(e, view) {
+    hookKeys();
     const t = e.target as Element | null;
     pointer = { view, x: e.clientX, y: e.clientY, mod: modKey(e), onText: !!t?.closest?.('.cm-line') && !t.closest('.cm-widgetBuffer, .se-note-embed') };
     if (!raf) raf = requestAnimationFrame(probe);
@@ -100,14 +119,6 @@ export const pagePreview = EditorView.domEventHandlers({
   mouseleave(_e, view) {
     if (pointer?.view === view) pointer = null;
     if (shown?.view === view) clear();
-    return false;
-  },
-  keydown(e, view) {
-    // Ctrl/Cmd pressed while the pointer already rests on a link.
-    if ((e.key === 'Control' || e.key === 'Meta') && pointer?.view === view) {
-      pointer.mod = true;
-      probe();
-    }
     return false;
   },
 });
