@@ -20,6 +20,9 @@ import { renderPdf } from './pdf-window';
 import { TerminalService, loadNodePty, registerTerminalIpc } from './terminal';
 import { VaultService, registerVaultIpc } from './vault';
 import { registerGpuIpc } from './gpu';
+import { WebServerService, childEnv, lanAddresses, registerWebServerIpc, spawnCli } from './web-server';
+import { WEB_SERVER_CHANNELS } from '../shared/web-server';
+import os from 'node:os';
 import { createRelaunch, frameOf, frameWindowOptions, initialOverlay, isDarkColor, parseOverlay, rememberOverlay, type TitleBarCache, type WindowFrame } from './frame';
 
 const tMainStart = performance.now(); // ms since process start (Node's timeOrigin)
@@ -140,6 +143,18 @@ function main() {
   // Process explorer rows (read only while it is open): Chromium processes + which children are shells.
   registerProcessSource(electronProcessSource({ shellPids: () => terminals.pids(), uiPid: () => (win && !win.isDestroyed() ? win.webContents.getOSProcessId() : 0) }));
 
+  // "Start web server": browser mode for the open folder in a child process (only on request, never at launch).
+  const webServerCli = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'server', 'cli.mjs') : path.join(__dirname, '../server/cli.mjs');
+  const webServer = new WebServerService({
+    getRoot: () => service.workspace?.root ?? null,
+    spawn: (args) => spawnCli(process.execPath, webServerCli, args, childEnv(process.env, app.getPath('userData'))),
+    lanAddresses: () => lanAddresses(os.networkInterfaces()),
+    openExternal: (url) => shell.openExternal(url),
+    onChange: (s) => win && !win.isDestroyed() && win.webContents.send(WEB_SERVER_CHANNELS.changed, s), // also fires while quitting
+    log: (m) => console.log(m), // never the URL / token
+  });
+  if (isTest) (globalThis as any).__secEditWebServer = webServer; // E2E: child pid (no orphan after quit)
+
   const rendererDir = path.resolve(process.env.SEC_EDIT_RENDERER_DIR || path.join(__dirname, '../renderer'));
   const stateFile = path.join(app.getPath('userData'), 'window-state.json');
 
@@ -188,6 +203,7 @@ function main() {
         const result = (await (service as any)[method](...args)) ?? null;
         // Shells started in the previous folder go with it.
         if (method === 'openWorkspace') terminals.setWorkspace(service.workspace?.root ?? null);
+        if (method === 'openWorkspace') webServer.workspaceChanged();
         return { ok: true, result };
       } catch (err: any) {
         const code = err instanceof BackendFailure ? err.code : err?.code || 'EIO';
@@ -208,6 +224,7 @@ function main() {
   });
   registerVaultIpc(ipcMain, vault, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   registerGpuIpc(ipcMain, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
+  registerWebServerIpc(ipcMain, webServer, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   ipcMain.handle('app:toggleDevTools', (e) => trustedSender(e) && win?.webContents.toggleDevTools());
   // Settings → Window frame → "Restart now": through the normal close flow (never loses edits).
   ipcMain.handle('app:relaunch', (e) => {
@@ -237,6 +254,8 @@ function main() {
   service.onSettingsChanged((s, patch) => {
     if ('theme' in patch || 'sidebarStyle' in patch) applyTheme(s);
   });
+  // A browser-mode server (or another process) changed settings.json: the window applies it live.
+  service.onExternalSettings((patch) => win && !win.isDestroyed() && win.webContents.send('settings:changed', patch));
 
   function applyTheme(s: Settings) {
     // Drives prefers-color-scheme in the page *and* native chrome (Windows title bar, menus, scrollbars).
@@ -454,9 +473,13 @@ function main() {
   });
 
   // No orphan shells: also on relaunch, which ends with app.exit() (no before-quit).
-  app.on('before-quit', () => terminals.dispose());
+  app.on('before-quit', () => {
+    terminals.dispose();
+    webServer.dispose();
+  });
   app.on('window-all-closed', () => {
     terminals.dispose();
+    webServer.dispose(); // the child also exits by itself once this process is gone (IPC disconnect)
     service.dispose();
     if (!relaunch.allClosed()) app.quit();
   });

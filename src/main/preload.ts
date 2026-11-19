@@ -2,8 +2,9 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 import { terminalBridge } from './terminal-bridge';
 import { vaultBridge } from './vault-bridge';
+import { webServerBridge } from './web-server-bridge';
 
-const CHANNELS = new Set(['fs:events', 'app:openRequest', 'app:closeRequest', 'git:changed']);
+const CHANNELS = new Set(['fs:events', 'app:openRequest', 'app:closeRequest', 'git:changed', 'settings:changed']);
 // The frame main created this window with (webPreferences.additionalArguments): the renderer styles
 // by what the window really has, not by the setting (which may have changed until a restart).
 const frame = process.argv.includes('--sec-edit-frame=integrated') ? 'integrated' : 'native';
@@ -45,4 +46,6 @@ contextBridge.exposeInMainWorld('secEditBridge', {
   terminal: terminalBridge(ipcRenderer),
   // Secrets vault for {{variables}} (vault:* channels, validated in main/vault.ts).
   vault: vaultBridge(ipcRenderer),
+  // "Start web server" (webserver:* channels, validated in main/web-server.ts).
+  webServer: webServerBridge(ipcRenderer),
 });

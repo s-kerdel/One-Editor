@@ -9,9 +9,19 @@ import { flushSettings, setViewMode, updateSettings, ZOOM_STEPS } from './settin
 import { SECTIONS, SETTINGS, filterSettings, isChanged, parseList, parseNumber, resetPatch, shortcutRows, valueOf, type Choice, type SectionId, type SettingDef } from './settings-registry';
 import './settings-ui.css';
 import { primeClassic } from './classic-loader';
+import { lazyComponent } from './lazy';
+
+// Settings → Browser mode: live server state + start / stop (the desktop-only web-server-ui chunk).
+const WebServerPanel = lazyComponent(() => import('../webserver/web-server-ui').then((m) => m.SettingsPanel));
+/** Desktop-only sections (Browser mode) do not exist in the browser build. */
+const visibleSections = () => (app.backend.kind === 'electron' ? SECTIONS : SECTIONS.filter((sec) => !sec.desktopOnly));
+
+let pendingSection: SectionId | null = null;
+/** The next Settings open scrolls to this section (e.g. the web server dialog's "Port and access…"). */
+export const requestSection = (id: SectionId) => void (pendingSection = id);
 
 // Icons only this lazily loaded chunk draws (see addIcons).
-addIcons({ history: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8|M3 3v5h5|M12 7v5l4 2', monitor: 'M3 4h18v12H3z|M8 20h8|M12 16v4', keyboard: 'M2 6h20v12H2z|M6 10h.01|M10 10h.01|M14 10h.01|M18 10h.01|M7 14h10', printer: 'M6 9V3h12v6|M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2|M6 14h12v7H6z' });
+addIcons({ history: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8|M3 3v5h5|M12 7v5l4 2', monitor: 'M3 4h18v12H3z|M8 20h8|M12 16v4', keyboard: 'M2 6h20v12H2z|M6 10h.01|M10 10h.01|M14 10h.01|M18 10h.01|M7 14h10', printer: 'M6 9V3h12v6|M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2|M6 14h12v7H6z', globe: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z|M2 12h20|M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z' });
 
 type Values = Record<string, unknown>;
 
@@ -403,7 +413,8 @@ export function SettingsOverlay() {
   }, []);
 
   const q = query.trim();
-  const matches = useMemo(() => filterSettings(q), [q]);
+  const sections = visibleSections();
+  const matches = useMemo(() => filterSettings(q, SETTINGS.filter((d) => sections.some((sec) => sec.id === d.section))), [q]);
   const bySection = (id: SectionId) => matches.filter((d) => d.section === id);
   const shortcutCount = q ? shortcutRows(listCommands({ all: true }), q, prettyKey).length : 1;
   const count = (id: SectionId) => (id === 'shortcuts' ? shortcutCount : bySection(id).length);
@@ -427,7 +438,7 @@ export function SettingsOverlay() {
     if (!pane) return;
     if (spyPaused.current) return void (spyPaused.current = false);
     let cur: SectionId | null = null;
-    for (const sec of SECTIONS) {
+    for (const sec of sections) {
       const el = sectionEl(sec.id);
       if (!el) continue;
       cur ??= sec.id;
@@ -439,6 +450,11 @@ export function SettingsOverlay() {
     if (body.current) body.current.scrollTop = 0;
     onScroll();
   }, [q]);
+  useEffect(() => {
+    const id = pendingSection;
+    pendingSection = null;
+    if (id) goto(id);
+  }, []);
 
   return (
     <div
@@ -489,7 +505,7 @@ export function SettingsOverlay() {
         </div>
         <div class="se-prefs-main">
           <nav class="se-prefs-nav" aria-label="Sections">
-            {SECTIONS.map((sec) => {
+            {sections.map((sec) => {
               const n = count(sec.id);
               return (
                 <button class={`se-prefs-nav-item${active === sec.id && n > 0 ? ' active' : ''}`} data-nav={sec.id} disabled={n === 0} aria-current={active === sec.id ? 'true' : undefined} onClick={() => goto(sec.id)}>
@@ -506,13 +522,14 @@ export function SettingsOverlay() {
             )}
           </nav>
           <div ref={body} class="se-settings-body" onScroll={onScroll}>
-            {SECTIONS.filter((sec) => sec.id !== 'shortcuts').map((sec) => {
+            {sections.filter((sec) => sec.id !== 'shortcuts').map((sec) => {
               const rows = bySection(sec.id);
               if (!rows.length) return null;
               return (
                 <section data-section={sec.id}>
                   <h3>{sec.title}</h3>
                   {sec.blurb && <p class="se-set-blurb">{sec.blurb}</p>}
+                  {sec.id === 'webserver' && <WebServerPanel />}
                   {rows.map((def, i) => (
                     <>
                       {def.group && def.group !== rows[i - 1]?.group && <h4 class="se-set-group">{def.group}</h4>}

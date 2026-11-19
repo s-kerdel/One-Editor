@@ -14,6 +14,7 @@ import { isMarkdown } from '@shared/paths';
 import type * as WordCount from './wordcount';
 import { gitUi } from '../git/install';
 import { varsStatus } from '../variables/slot';
+import { webServerPill } from '../webserver/slot';
 import { activityNow } from './ui';
 import { indexDeferred } from '../search/demand';
 import { startIndexing } from '../search';
@@ -158,6 +159,7 @@ export function StatusBar() {
   const ws = app.workspace.value;
   const GitBranch = gitUi.value?.Branch; // lazy git chunk; after the save state so nothing shifts when it appears
   const Vars = varsStatus.value; // env / target pills (lazy variables chunk), before the spacer: nothing shifts
+  const WebServer = webServerPill.value; // ":4317" while the web server runs (desktop, lazy chunk)
 
   let state: { label: string; cls: string; icon?: string } | null = null;
   if (doc && !doc.binary) {
@@ -203,6 +205,7 @@ export function StatusBar() {
       )}
       {GitBranch && <GitBranch />}
       {Vars && <Vars />}
+      {WebServer && <WebServer />}
       <span class="se-status-spacer" />
       {/* After the spacer: it absorbs the width, so nothing else moves while this comes and goes. */}
       {activityNow.value && (

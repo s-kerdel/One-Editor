@@ -4,13 +4,15 @@ import { DEFAULT_SETTINGS } from '@shared/api';
 import { normalizeKey } from './commands';
 import { TERMINAL_SECTION, TERMINAL_SETTING_DEFS } from '../terminal/settings';
 
-export type SectionId = 'appearance' | 'editor' | 'files' | 'search' | 'formatting' | 'links' | 'attachments' | 'preview' | 'export' | 'variables' | 'terminal' | 'shortcuts';
+export type SectionId = 'appearance' | 'editor' | 'files' | 'search' | 'formatting' | 'links' | 'attachments' | 'preview' | 'export' | 'variables' | 'terminal' | 'webserver' | 'shortcuts';
 
 export interface SectionDef {
   id: SectionId;
   title: string;
   icon: string;
   blurb?: string;
+  /** Not shown at all in the browser build (e.g. Browser mode: starting a server from the desktop app). */
+  desktopOnly?: boolean;
 }
 
 export const SECTIONS: SectionDef[] = [
@@ -25,6 +27,8 @@ export const SECTIONS: SectionDef[] = [
   { id: 'export', title: 'Export', icon: 'printer', blurb: 'Paper settings for “Export note to PDF…”.' },
   { id: 'variables', title: 'Variables & targets', icon: 'database', blurb: '{{name}} placeholders, environments and targets from the nearest variables.md.' },
   { ...TERMINAL_SECTION },
+  // Settings.tsx shows the live server state + Start / Stop above the rows (src/renderer/webserver).
+  { id: 'webserver', title: 'Browser mode', icon: 'globe', blurb: 'Open this folder in a web browser: on this computer, or from other devices on your network.', desktopOnly: true },
   { id: 'shortcuts', title: 'Keyboard shortcuts', icon: 'keyboard' },
 ];
 
@@ -767,6 +771,33 @@ const defs: Draft[] = [
   },
   // ---- Terminal (src/renderer/terminal/settings.ts) ----
   ...TERMINAL_SETTING_DEFS,
+  // ---- Browser mode (read by shared/web-server.ts optionsFromSettings when "Start web server" runs) ----
+  {
+    key: 'webserver.port',
+    section: 'webserver',
+    label: 'Port',
+    description: 'Empty = automatic (4317, or the next free one). Applies the next time the server starts.',
+    keywords: ['web server', 'browser mode', 'serve', 'http', 'localhost', 'url'],
+    default: null,
+    control: { type: 'number', min: 1024, max: 65535, placeholder: 'Auto' },
+    desktopOnly: true,
+  },
+  {
+    key: 'webserver.access',
+    section: 'webserver',
+    label: 'Who can connect',
+    description: 'Network: anyone on your network with the link can read and edit this folder.',
+    keywords: ['web server', 'browser mode', 'serve', 'lan', 'network', 'share', 'phone', 'tablet', 'remote', 'firewall', '0.0.0.0'],
+    default: 'local',
+    control: {
+      type: 'segmented',
+      options: [
+        { v: 'local', label: 'This computer' },
+        { v: 'lan', label: 'Network (LAN)' },
+      ],
+    },
+    desktopOnly: true,
+  },
 ];
 
 export const SETTINGS: SettingDef[] = defs.map((d) => ({ ...d, id: d.id ?? idFor(d.key) }));

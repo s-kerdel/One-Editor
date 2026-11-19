@@ -58,6 +58,7 @@ npm run serve -- ~/notes --open
 - Prints a **URL with an access token** and opens it.
 - Listens on **127.0.0.1 only** by default. Options: `--port 4317`, `--host`, `--open`.
 - **Zoom** uses the browser's own zoom here.
+- **From the desktop app:** Settings → **Browser mode** → **Start web server** (or the palette). See the [user guide](docs/USER-GUIDE.md#browser-mode-web-server).
 
 ---
 

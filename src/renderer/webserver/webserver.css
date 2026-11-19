@@ -1,0 +1,41 @@
+/* "Start web server" (lazy web-server-ui chunk): info dialog, Settings → Browser mode panel, status-bar pill. */
+.se-wsrv { width: min(560px, 94vw); max-width: none; }
+.se-wsrv-title { display: flex; align-items: center; gap: 8px; }
+.se-wsrv-title > .se-icon { color: var(--accent); }
+.se-wsrv-title .se-dialog-title { flex: 1; }
+
+.se-wsrv-state { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: var(--radius-pill); background: var(--bg-hover); color: var(--text-muted); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.se-wsrv-state::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: 0.6; }
+.se-wsrv-state[data-state='running'] { color: var(--success); }
+.se-wsrv-state[data-state='running']::before { opacity: 1; }
+.se-wsrv-state[data-state='starting'] { color: var(--accent); }
+.se-wsrv-state[data-state='error'] { color: var(--danger); background: var(--danger-soft); }
+
+.se-wsrv-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 2px 0 0; font-size: 12.5px; }
+.se-wsrv-facts dt { color: var(--text-muted); }
+.se-wsrv-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+
+.se-wsrv-links { display: flex; flex-direction: column; gap: 6px; }
+.se-wsrv-link { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.se-wsrv-origin { flex: 1; min-width: 170px; padding: 3px 7px; border-radius: var(--radius-sm); background: var(--code-bg); font: 12px var(--font-mono); user-select: all; }
+.se-wsrv-note { margin: 0; color: var(--text-muted); font-size: 11.5px; line-height: 1.4; }
+.se-wsrv-warn { margin: 0; padding: 5px 9px; border-radius: var(--radius); background: var(--warning-soft); color: var(--text); font-size: 12px; line-height: 1.4; }
+.se-wsrv-error { margin: 0; padding: 7px 10px; border-radius: var(--radius); background: var(--danger-soft); color: var(--text); font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
+
+.se-wsrv-h { margin: 6px 0 0; font-size: 12px; font-weight: 650; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.se-wsrv-list { margin: 0; padding-left: 18px; color: var(--text); font-size: 12.5px; line-height: 1.55; }
+.se-wsrv-text { margin: 0; font-size: 12.5px; line-height: 1.5; }
+.se-wsrv .se-dialog-buttons { align-items: center; }
+.se-wsrv-options { margin-right: auto; padding: 0; }
+
+/* Settings → Browser mode: live state above the option rows. */
+.se-wsrv-panel { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elev); }
+.se-wsrv-head { display: flex; align-items: center; gap: 10px; }
+.se-wsrv-headline { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-wsrv-more summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
+.se-wsrv-more[open] summary { margin-bottom: 6px; }
+.se-wsrv-more .se-wsrv-text { margin-top: 6px; }
+
+.se-wsrv-pill { gap: 4px; font-variant-numeric: tabular-nums; }
+.se-wsrv-pill > .se-icon { color: var(--success); }
+.se-wsrv-pill[data-access='lan'] > .se-icon { color: var(--warning); }

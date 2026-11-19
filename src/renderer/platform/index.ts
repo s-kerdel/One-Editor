@@ -71,7 +71,8 @@ function webBackend(): BackendApi {
   let es: EventSource | null = null;
   const ensureEvents = () => {
     if (es) return;
-    es = new EventSource(`${base}events?token=${encodeURIComponent(token)}`);
+    // Also a global: lazy modules add named-event listeners (`settings`, app/settings-sync.ts) without startup code.
+    es = (window as unknown as { __secEditEvents: EventSource }).__secEditEvents = new EventSource(`${base}events?token=${encodeURIComponent(token)}`);
     es.onmessage = (ev) => {
       const events = JSON.parse(ev.data) as FsEvent[];
       listeners.forEach((l) => l(events));

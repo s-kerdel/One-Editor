@@ -23,6 +23,7 @@ browser mode served by a local Node server. Both share one renderer.
 | `src/renderer/terminal/`, `src/main/terminal*.ts`, `src/shared/terminal.ts` (integrated terminal + Claude glue; shell's `Layout` hosts the bottom panel while `panelOpen`) | **terminal** |
 | `src/backend/git*.ts`, `src/shared/git.ts`, `src/renderer/git/` (status, tree marks, change bars, diff view, Source control pane; one `git(op, …)` RPC; the startup stub `git/install.ts` fills `gitUi` slots that FileTree / StatusBar / Popups / the editor read). **When** git runs is decided only by `backend/git-monitor.ts` (debounce, single-flight, adaptive interval, paused while hidden, multi-repo); `backend/git-wsl.ts` runs git inside WSL for `\\wsl.localhost` roots; every spawn is logged via `backend/git-activity.ts`. Read paths never write the repository; the one exception is the monitor's opt-out index stat-cache refresh (`GitService.refreshIndex`: hooks off, skipped while `index.lock` exists, never killed). Don't add renderer-side status polling: report triggers instead (`git('nudge')`, `git('visibility')`) | **git** |
 | `src/renderer/variables/`, `src/main/vault*.ts`, `src/shared/vault.ts` ({{variables}}, environments / targets, secrets vault, smart paste; the editor chunk holds only `variables/cm.ts`, the rest is the lazy `variables` chunk; `variables/slot.ts` is the status-bar slot) | **variables** |
+| `src/main/web-server*.ts`, `src/shared/web-server.ts`, `src/renderer/webserver/` ("Start web server": browser mode for the open folder as a child process, desktop only; `webserver/slot.ts` is the status-bar slot, the rest is the lazy `web-server-ui` chunk; Settings → Browser mode) | **shell** |
 | `src/renderer/whitespace/` (trailing whitespace: paste trim via CodeMirror's `clipboardInputFilter`, trim on save through format's `beforeSave` hook in `src/format/install.ts`, the `editor.trimWhitespace` command; editor chunk only) | **variables** |
 | `tests/unit/<area>/`, `tests/e2e/<area>*.spec.ts` | the area's owner |
 
@@ -67,6 +68,27 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   Precedence lives in ONE function: `lookup()` in `variables/resolve.ts`. Secrets: `vault:*` IPC (`src/shared/vault.ts`,
   safeStorage in `src/main/vault.ts`); browser mode keeps them in memory only. Per-folder env / target / remembered
   values: localStorage `sec-edit-vars:<root>` (not settings: the registry test guards every dotted key that is read).
+- Web server (desktop only, "Start web server"): main runs `dist/server/cli.mjs <root> --ipc` as a **child process**
+  (`process.execPath` + `ELECTRON_RUN_AS_NODE`, allowlisted env, `SEC_EDIT_CONFIG_DIR` = userData; packaged:
+  `app.asar.unpacked/dist/server/cli.mjs`). Handshake = Node IPC message `{ type: 'ready', port, token }` / `{ type: 'error' }`,
+  never a parsed log line; `{ type: 'stop' }` or an IPC disconnect (app quit / crash) ends it. One at a time, never auto-started,
+  stopped on quit and when another folder is opened. Bridge `secEditBridge.webServer` = `status / start / stop / open / onChange`
+  over `webserver:*` channels (`src/shared/web-server.ts`), re-validated in `src/main/web-server.ts` like the vault; `open`
+  only accepts a link of the running server. The token stays out of logs and the activity log (UI shows the address only;
+  Copy / Open use the full link). The renderer chunk loads after the idle Popups chunk (zero startup bytes but the slot);
+  browser mode has no bridge, so neither commands nor the Settings section (`SectionDef.desktopOnly`) exist there.
+- Sessions per client kind: every HTTP server (`startServer`, so also the .cmd / `start-web.sh`) runs its
+  `BackendService` with `sessionKind: 'web'` → `sessions/<id>@web.json`; the desktop keeps `sessions/<id>.json`.
+  A first browser visit reads the desktop file as a seed, never writes it. Settings are shared on purpose.
+  Renderer localStorage is per origin (`app://sec-edit` vs `http://127.0.0.1:<port>`), so it never crosses over.
+- Settings across processes: `saveSettings` merges only the patch into settings.json as it is on disk, under a
+  cross-process lock (`backend/filelock.ts`, `settings.json.lock`, stale after 5 s). Each backend watches the file
+  (debounced; own writes give no diff; keys still in flight are skipped) and reports *external* changes:
+  `onExternalSettings` → Electron `settings:changed` (preload channel) / server SSE `event: settings`. The renderer
+  re-syncs in `app/settings-sync.ts` (installed by the idle Popups chunk: no startup code).
+- Browser state is per origin = per port: `cli.ts` remembers the last port per folder (`web-ports.json` in app data,
+  `server/ports.ts`) and tries it first without `--port`; when it is busy, the ready handshake carries `busy` and the
+  info panel says browser state starts empty.
 
 ### Global keybinding allocation (avoid conflicts)
 | Owner | Keys |

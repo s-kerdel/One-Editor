@@ -25,6 +25,19 @@ import { collapseAll } from './FileTree';
 import { closeAll } from './Tabs';
 import { gitUi } from '../git/install';
 
+import { installSettingsSync } from './settings-sync';
+
+// Settings written by another sec-edit process (desktop ↔ browser mode) apply live: wired here, not at startup.
+installSettingsSync();
+
+// Desktop "Start web server" (palette commands, status-bar pill): its chunk follows this idle-loaded one,
+// so the startup bundle carries none of it. The browser build has no bridge and never fetches it.
+if ((globalThis as { secEditBridge?: { webServer?: unknown } }).secEditBridge?.webServer)
+  void import('../webserver/web-server-ui').then(
+    (m) => m.install(),
+    (err) => console.warn('[webserver] failed to load', err),
+  );
+
 // ---- file actions behind a dialog / menu ----
 
 export async function deletePathsNow(paths: string[]) {

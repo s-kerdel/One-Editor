@@ -93,7 +93,8 @@ function cookieToken(req: http.IncomingMessage): string | null {
 
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const token = opts.token ?? crypto.randomBytes(18).toString('hex');
-  const service = new BackendService(opts.configDir, opts.hooks ?? {}, opts.workspaceOptions ?? {});
+  // Browser clients keep their own per-folder session (open tabs, tree, layout): see ServiceHooks.sessionKind.
+  const service = new BackendService(opts.configDir, { sessionKind: 'web', ...opts.hooks }, opts.workspaceOptions ?? {});
   if (opts.root) await service.openWorkspace(opts.root);
   const rendererDir = path.resolve(opts.rendererDir);
   const sseClients = new Set<http.ServerResponse>();
@@ -108,6 +109,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     for (const res of sseClients) res.write(payload);
   });
   service.onGitChanged((e) => gitClients.forEach((r) => r.write(`event: git\ndata: ${JSON.stringify(e)}\n\n`)));
+  // settings.json changed by another process (the desktop app): a named event, so fs-event handlers never see it.
+  service.onExternalSettings((patch) => sseClients.forEach((r) => r.write(`event: settings\ndata: ${JSON.stringify(patch)}\n\n`)));
   const ping = setInterval(() => [...sseClients, ...gitClients].forEach((r) => r.write(': ping\n\n')), 25000);
   ping.unref();
 

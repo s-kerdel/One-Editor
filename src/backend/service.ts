@@ -22,6 +22,7 @@ import type { PdfExportResult, PdfLayout } from '../shared/pdf';
 import { stem } from '../shared/paths';
 import { BackendFailure, MAX_INDEX_BYTES, Workspace, retryWin, type IndexOptions, type WorkspaceOptions } from './workspace';
 import { platformTrash } from './trash';
+import { withFileLock } from './filelock';
 import { checkPdfRequest, looksLikePdf, withPdfExtension, writeFileAtomic } from './pdf-export';
 import { GitService, gitEnv, locateGit, type GitServiceOptions } from './git';
 import { GitMonitor, type GitMonitorEvent } from './git-monitor';
@@ -72,7 +73,7 @@ export function writeJson(file: string, data: unknown): Promise<void> {
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 
 /** Stable per-folder id for config files (sessions, export folders). */
-const rootId = (root: string) => crypto.createHash('sha1').update(root.toLowerCase()).digest('hex').slice(0, 16);
+export const rootId = (root: string) => crypto.createHash('sha1').update(root.toLowerCase()).digest('hex').slice(0, 16);
 
 /** Windows: %LOCALAPPDATA% (a cache must not travel with a roaming profile); elsewhere next to the settings. */
 export function defaultCacheDir(configDir: string): string {
@@ -116,6 +117,12 @@ export interface ServiceHooks {
   pickSavePath?: (defaultPath: string) => Promise<string | null>;
   /** Open a file with its default app (Electron shell.openPath). */
   openPath?: (absPath: string) => Promise<void>;
+  /**
+   * Whose open tabs / tree / layout this process keeps per folder. 'web' = browser mode (every HTTP server,
+   * "Start web server" and the .cmd included): its own session file, so a browser tab and the desktop app on
+   * the same folder never overwrite each other. Settings stay shared. Default 'desktop'.
+   */
+  sessionKind?: 'desktop' | 'web';
 }
 
 export class BackendService {
@@ -124,6 +131,12 @@ export class BackendService {
   private settingsLoad: Promise<Settings> | null = null;
   private fsListeners = new Set<(e: FsEvent[]) => void>();
   private settingsListeners = new Set<(s: Settings, patch: Partial<Settings>) => void>();
+  /** Changes another process wrote to settings.json (desktop ↔ browser mode), see watchSettings(). */
+  private externalSettingsListeners = new Set<(patch: Partial<Settings>) => void>();
+  private settingsWatch: { close(): void } | null = null;
+  /** Keys of our own patches not on disk yet: a file event in between must not revert them. */
+  private settingsInFlight = new Map<string, number>();
+  private settingsWrites: Promise<unknown> = Promise.resolve();
   private unwatch: (() => void) | null = null;
   /** In-memory copy of recent.json (rapid opens must not read a stale file). */
   private recent: string[] | null = null;
@@ -151,8 +164,8 @@ export class BackendService {
   private get recentFile() {
     return path.join(this.configDir, 'recent.json');
   }
-  private sessionFile(root: string) {
-    return path.join(this.configDir, 'sessions', `${rootId(root)}.json`);
+  private sessionFile(root: string, kind = this.hooks.sessionKind ?? 'desktop') {
+    return path.join(this.configDir, 'sessions', `${rootId(root)}${kind === 'web' ? '@web' : ''}.json`);
   }
   /** Last folder a PDF was saved to, per workspace. */
   private get exportDirsFile() {
@@ -170,6 +183,12 @@ export class BackendService {
   }
 
   /** Main process uses this to follow theme changes (native title bar, window background). */
+  /** Only what another sec-edit process changed (never our own saves): forward it to the UI. */
+  onExternalSettings(cb: (patch: Partial<Settings>) => void): () => void {
+    this.externalSettingsListeners.add(cb);
+    return () => this.externalSettingsListeners.delete(cb);
+  }
+
   onSettingsChanged(cb: (s: Settings, patch: Partial<Settings>) => void): () => void {
     this.settingsListeners.add(cb);
     return () => this.settingsListeners.delete(cb);
@@ -393,7 +412,11 @@ export class BackendService {
 
   async getSettings(): Promise<Settings> {
     if (this.settings) return this.settings;
-    this.settingsLoad ??= readJson<Partial<Settings>>(this.settingsFile, {}).then((s) => (this.settings = { ...DEFAULT_SETTINGS, ...(s && typeof s === 'object' ? s : {}) }));
+    this.settingsLoad ??= readJson<Partial<Settings>>(this.settingsFile, {}).then((s) => {
+      this.settings = { ...DEFAULT_SETTINGS, ...(s && typeof s === 'object' ? s : {}) };
+      this.watchSettings();
+      return this.settings;
+    });
     return this.settingsLoad;
   }
 
@@ -402,15 +425,86 @@ export class BackendService {
     // Merge into the *current* object after the await, so concurrent saves never drop each other's patch.
     const next = { ...this.settings!, ...patch } as Settings;
     this.settings = next;
+    this.applySettingEffects(next, patch);
+    this.settingsListeners.forEach((l) => l(next, patch));
+    await this.writeSettingsPatch(patch);
+    return this.settings!;
+  }
+
+  private applySettingEffects(next: Settings, patch: Partial<Settings>) {
     if (this.workspace && ('excludeGlobs' in patch || 'showHiddenFiles' in patch)) {
       this.workspace.setOptions({ exclude: next.excludeGlobs, showHidden: next.showHiddenFiles });
     }
     if (this.workspace && INDEX_KEYS.some((k) => k in patch)) this.workspace.setIndexOptions(indexOptionsFrom(next));
     if ('git.wslRouting' in patch) this.disposeGit(); // the next git call rebuilds the monitor with the new routing
     if ('git.refreshIndex' in patch) this.monitor?.setRefreshIndex(next['git.refreshIndex'] !== false);
-    this.settingsListeners.forEach((l) => l(next, patch));
-    await writeJson(this.settingsFile, next);
-    return next;
+  }
+
+  /**
+   * Only the changed keys, merged into the file as it is *now*: the desktop app and a browser-mode server
+   * share settings.json, and writing a whole (stale) in-memory copy dropped the other one's changes.
+   */
+  private writeSettingsPatch(patch: Partial<Settings>): Promise<void> {
+    const keys = Object.keys(patch);
+    for (const k of keys) this.settingsInFlight.set(k, (this.settingsInFlight.get(k) ?? 0) + 1);
+    const run = this.settingsWrites.then(() =>
+      withFileLock(this.settingsFile, async () => {
+        const disk = await readJson<Partial<Settings> | null>(this.settingsFile, null);
+        await writeJson(this.settingsFile, { ...(disk && typeof disk === 'object' ? disk : {}), ...patch });
+      }),
+    );
+    const done = run.finally(() => {
+      for (const k of keys) {
+        const n = (this.settingsInFlight.get(k) ?? 1) - 1;
+        if (n > 0) this.settingsInFlight.set(k, n);
+        else this.settingsInFlight.delete(k);
+      }
+    });
+    this.settingsWrites = done.catch(() => {});
+    return done;
+  }
+
+  /** Picks up settings.json written by another process (debounced). Our own writes produce no diff. */
+  private watchSettings() {
+    if (this.settingsWatch) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const kick = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void this.reloadSettings().catch(() => {}), 120);
+      timer.unref?.();
+    };
+    const file = this.settingsFile;
+    try {
+      fs.mkdirSync(this.configDir, { recursive: true });
+      // The folder, not the file: an atomic rename replaces the file (and a watch on it would go deaf).
+      const w = fs.watch(this.configDir, { persistent: false }, (_e, name) => (!name || name === 'settings.json') && kick());
+      w.on('error', () => {});
+      this.settingsWatch = { close: () => (w.close(), timer && clearTimeout(timer)) };
+    } catch {
+      const poll = () => kick();
+      fs.watchFile(file, { interval: 2000, persistent: false }, poll);
+      this.settingsWatch = { close: () => fs.unwatchFile(file, poll) };
+    }
+  }
+
+  private async reloadSettings() {
+    const cur = this.settings;
+    const disk = await readJson<Partial<Settings> | null>(this.settingsFile, null);
+    if (!cur || !disk || typeof disk !== 'object') return;
+    const fresh: Record<string, unknown> = { ...DEFAULT_SETTINGS, ...disk };
+    const patch: Record<string, unknown> = {};
+    for (const k of new Set([...Object.keys(cur), ...Object.keys(fresh)])) {
+      if (this.settingsInFlight.has(k)) continue;
+      const a = (cur as Record<string, unknown>)[k] ?? null;
+      const b = fresh[k] ?? null;
+      if (JSON.stringify(a) !== JSON.stringify(b)) patch[k] = b;
+    }
+    if (!Object.keys(patch).length || this.settings !== cur) return;
+    const next = { ...cur, ...patch } as Settings;
+    this.settings = next;
+    this.applySettingEffects(next, patch as Partial<Settings>);
+    this.settingsListeners.forEach((l) => l(next, patch as Partial<Settings>));
+    this.externalSettingsListeners.forEach((l) => l(patch as Partial<Settings>));
   }
 
   /** Last session written per workspace root: a reload's first getSession() can arrive while the
@@ -420,7 +514,11 @@ export class BackendService {
   async getSession(): Promise<SessionState> {
     const ws = this.workspace;
     if (!ws) return { openTabs: [], activeTab: null };
-    const s = this.sessionCache.get(ws.root) ?? (await readJson<SessionState>(this.sessionFile(ws.root), { openTabs: [], activeTab: null }));
+    const empty: SessionState = { openTabs: [], activeTab: null };
+    let s = this.sessionCache.get(ws.root) ?? (await readJson<SessionState | null>(this.sessionFile(ws.root), null));
+    // First browser visit: start from the desktop's tabs (a read-only seed; saves go to the web file only).
+    if (!s && this.hooks.sessionKind === 'web') s = await readJson<SessionState | null>(this.sessionFile(ws.root, 'desktop'), null);
+    s = s && typeof s === 'object' ? s : empty;
     return { ...s, openTabs: Array.isArray(s.openTabs) ? s.openTabs : [], activeTab: s.activeTab ?? null };
   }
 
@@ -597,6 +695,8 @@ export class BackendService {
   }
 
   dispose() {
+    this.settingsWatch?.close();
+    this.settingsWatch = null;
     this.unwatch?.();
     this.workspace?.dispose();
     this.disposeGit();

@@ -14,6 +14,7 @@
 | Run commands / use Claude Code | [7. Terminal and Claude Code](#7-terminal-and-claude-code) |
 | See changes, commit, push | [8. Git](#8-git) |
 | Change how it behaves | [9. Settings](#9-settings) |
+| Open this folder in a web browser (phone, tablet, another PC) | [Browser mode](#browser-mode-web-server) |
 | Put `{{host}}`, `{{user}}`… in commands | [10. Variables & targets](#10-variables--targets) |
 | Turn a pasted curl / JSON / log into a clean block | [11. Smart paste](#11-smart-paste) |
 | Fix a problem | [12. Troubleshooting](#12-troubleshooting) |
@@ -678,6 +679,8 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | "Run in terminal" presses Enter | Off |
 | | Keep a terminal ready (next one opens instantly) | Off |
 | | GPU acceleration | Automatic (only on a hardware GPU) |
+| **Browser mode** (desktop only) | Port | Automatic (4317, else the next free one) |
+| | Who can connect | This computer |
 
 ### Make it yours (Appearance)
 
@@ -712,6 +715,32 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | macOS | `~/Library/Application Support/sec-edit/settings.json` |
 
 Settings are **global**, not per folder.
+
+### Browser mode (web server)
+
+**Open this folder in a web browser** — on this computer, or from your phone / another PC on the same network. The desktop app keeps running; the browser edits the same files.
+
+| Do this | How |
+|---|---|
+| **Start** | Settings → **Browser mode** → **Start web server**, or palette → **"Start web server"** |
+| **Get the link** | **Copy link** or **Open** in the info box. The status bar pill **🌐 :4317** opens it again |
+| **See it all** | Palette → **"Web server: Show info"** (folder, address, access, limits) |
+| **Stop** | **Stop server**, palette → **"Stop web server"**, or quit sec-edit |
+
+| Option | Choices |
+|---|---|
+| **Port** | Empty = automatic (4317, else the next free one) · or a fixed port |
+| **Who can connect** | **This computer** (default, 127.0.0.1 only) · **Network (LAN)** |
+
+- **The link holds a secret key.** Without it the server refuses every request. Share it only with people you trust.
+- **Network (LAN) is opt-in, and asked every time:** anyone on your network with the link can **read and edit** this folder. It is plain HTTP: trusted networks only, not public Wi-Fi.
+- **Windows:** the first network start shows a **firewall prompt** for sec-edit. Allow **Private networks** only.
+- **Nothing starts on its own.** Opening another folder stops it. Quitting sec-edit stops it.
+- **Own tabs:** the browser keeps its own open tabs, tree and layout per folder (the first visit starts from the desktop's). The desktop's stay as they were.
+- **Settings are shared:** a change in the browser shows up in the desktop app at once, and the other way round.
+- **Same folder, same port:** the browser remembers things per address (environment pick, recent files). So a folder gets its last port again. If that port is taken, the info box says so: browser state for this folder then starts empty.
+- **In the browser:** no terminal · secrets of `{{variables}}` stay in that tab's memory only · PDF export = the browser's print dialog · one server at a time.
+- **Without the desktop app:** `Start web server.cmd` (Windows) or `start-web.sh` (Linux) next to the program.
 
 ---
 
@@ -872,6 +901,8 @@ After a paste a small **"Paste as…"** chip appears for a few seconds. Ignore i
 | **Formatting fails** | The message names the syntax error. File types without a formatter say so |
 | **Formatting ignores my settings** | A `.prettierrc` or `.editorconfig` in the folder wins |
 | **Zoom keys do nothing** | Browser mode uses the browser's zoom |
+| **Phone / other PC cannot open the web server link** | Settings → Browser mode → **Network (LAN)**, then use the **network** address (not `127.0.0.1`), same Wi-Fi. Windows: allow sec-edit through the firewall (Windows Security → Firewall → Allow an app) |
+| **"Port … is in use"** (web server) | Leave **Port** empty (automatic), or pick another one |
 | **I want the Windows title bar back** | Settings → Appearance → **Window frame: Native** → **Restart now** |
 | **Can't drag the window** | Drag the **empty** part of the tab strip (not a tab or button) |
 | **Spellcheck did not turn on** | Restart the desktop app |
