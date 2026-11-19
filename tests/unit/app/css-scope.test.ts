@@ -8,6 +8,21 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../src/renderer');
 const appCss = fs.readFileSync(path.join(root, 'styles/app.css'), 'utf8');
 
+/** Splits a selector list at its top-level commas (not the ones inside `:is(…)`, `:not(…)`, …). */
+function splitList(sel: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < sel.length; i++) {
+    const c = sel[i];
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
+    else if (c === ',' && depth === 0) (out.push(sel.slice(start, i)), (start = i + 1));
+  }
+  out.push(sel.slice(start));
+  return out.map((s) => s.trim()).filter(Boolean);
+}
+
 /** Selectors of every rule (skips @-rule preludes; descends into @media blocks). */
 function selectors(css: string): string[] {
   const out: string[] = [];
@@ -17,7 +32,7 @@ function selectors(css: string): string[] {
   while ((m = re.exec(clean))) {
     const sel = m[1].trim();
     if (!sel || sel.startsWith('@') || /^(from|to|\d+%)/.test(sel)) continue;
-    out.push(...sel.split(',').map((s) => s.trim()).filter(Boolean));
+    out.push(...splitList(sel));
   }
   return out;
 }
