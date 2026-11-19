@@ -3,10 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { startServer, type RunningServer } from './server';
-
-// More libuv threads (default 4) before the pool starts: on slow roots (WSL, network) each readdir /
-// open blocks one, and a tree walk must not starve the user's file opens.
-process.env.UV_THREADPOOL_SIZE ||= '16';
+import { isBridgeRoot } from '../backend/readpool';
 
 const args = process.argv.slice(2);
 const flag = (name: string) => {
@@ -27,6 +24,9 @@ const portArg = flag('--port');
 const host = flag('--host') ?? '127.0.0.1';
 const shouldOpen = bool('--open');
 const root = path.resolve(args[0] ?? process.cwd());
+// More libuv threads (default 4) only for a slow root (WSL, network), before the pool starts: there
+// each readdir / open blocks one, and a tree walk must not starve file opens. Locally they only contend.
+if (!process.env.UV_THREADPOOL_SIZE && isBridgeRoot(root)) process.env.UV_THREADPOOL_SIZE = '16';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const rendererDir = process.env.SEC_EDIT_RENDERER_DIR || path.resolve(here, '../renderer');
 

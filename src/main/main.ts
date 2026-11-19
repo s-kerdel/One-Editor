@@ -12,6 +12,7 @@ import { RPC_METHODS, type Settings } from '../shared/api';
 import { BackendService, readJson, writeJson } from '../backend/service';
 import { BackendFailure } from '../backend/workspace';
 import { isInsideDir } from '../backend/pathsafe';
+import { isBridgeRoot } from '../backend/readpool';
 import { APP_ORIGIN, SCHEME, isAppNavigation, isExternalUrl, pathsFromArgs, routeAppUrl } from './protocol';
 import { renderPdf } from './pdf-window';
 import { TerminalService, loadNodePty, registerTerminalIpc } from './terminal';
@@ -19,14 +20,29 @@ import { VaultService, registerVaultIpc } from './vault';
 import { createRelaunch, frameOf, frameWindowOptions, initialOverlay, isDarkColor, parseOverlay, rememberOverlay, type TitleBarCache, type WindowFrame } from './frame';
 
 const tMainStart = performance.now(); // ms since process start (Node's timeOrigin)
-// More libuv threads (default 4) before the pool starts: on a WSL / network root every readdir or
-// open blocks one for milliseconds, and a tree walk must not starve the user's file opens.
-process.env.UV_THREADPOOL_SIZE ||= '16';
 const isTest = !!process.env.SEC_EDIT_TEST;
 /** Per-launch secret for app://sec-edit/__index/ (handed to the page through the preload). */
 const indexToken = crypto.randomBytes(16).toString('hex');
 const logTimings = isTest || !!process.env.SEC_EDIT_TIMINGS;
 if (process.env.SEC_EDIT_USER_DATA) app.setPath('userData', process.env.SEC_EDIT_USER_DATA);
+// More libuv threads (default 4) only when this launch opens a slow folder (WSL / UNC / network):
+// there every readdir or open blocks one for ms, and a tree walk must not starve file opens. On a
+// local disk 16 threads only contend (the launch tree walk took ~2× as long). The pool size is fixed
+// when it starts, so it is decided here, before any async I/O, from the folder this launch opens.
+if (!process.env.UV_THREADPOOL_SIZE && (isBridgeRoot('') || launchFolders().some(isBridgeRoot))) process.env.UV_THREADPOOL_SIZE = '16';
+
+/** What this launch opens (argv / SEC_EDIT_OPEN, else the most recent folder): a sync guess. */
+function launchFolders(): string[] {
+  const paths = pathsFromArgv(process.argv);
+  if (process.env.SEC_EDIT_OPEN) paths.push(path.resolve(process.env.SEC_EDIT_OPEN));
+  if (paths.length) return paths;
+  try {
+    const recent: unknown = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'recent.json'), 'utf8'));
+    return Array.isArray(recent) && typeof recent[0] === 'string' ? [recent[0]] : [];
+  } catch {
+    return [];
+  }
+}
 
 // A dev server only makes sense from a source checkout: in a packaged build this env var would point the
 // privileged preload bridge (full file access) at an arbitrary URL.
@@ -110,6 +126,7 @@ function main() {
       if (err) throw new BackendFailure('EIO', err);
     },
   });
+  if (isTest) (globalThis as any).__secEditService = service; // startup guard: tree walks at launch
 
   // Integrated terminal: node-pty loads on the first spawn only (nothing at launch).
   const terminals = new TerminalService({

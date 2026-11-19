@@ -117,11 +117,20 @@ export async function probeCaseSensitive(root: string): Promise<boolean | null> 
   return null;
 }
 
+/** How long the first walk's tree may answer the next full listTree (the renderer asks within ~1 s). */
+const BOOT_TREE_MS = 5_000;
+
 export class Workspace {
   readonly root: string;
   private matcher: ExcludeMatcher;
   private index = new Map<string, Entry>();
   private indexed = false;
+  /** The first full walk while it runs (shared by everyone who asks for the tree meanwhile). */
+  private firstWalk: { p: Promise<TreeNode>; joined: boolean } | null = null;
+  /** That walk's tree, for one caller right after it (nobody had joined it): exact while nothing changed. */
+  private bootTree: { tree: TreeNode; version: number; at: number } | null = null;
+  /** Full-tree walks so far (startup guard: one per workspace open). */
+  fullWalks = 0;
   private watch: WatchBackend | null = null;
   private readonly watchMode: WatchMode;
   private readonly debounceMs: number;
@@ -286,6 +295,102 @@ export class Workspace {
 
   /** Lists the whole tree (and rebuilds the index), or a subtree. Files are not stat'ed: readdir only, for speed. */
   async listTree(sub = ''): Promise<TreeNode> {
+    if (!normalize(sub)) {
+      // Until the first full walk is done nobody has a tree: whoever asks meanwhile (the watcher's
+      // kick-off at open, the renderer's first listTree, the indexer) shares that walk instead of
+      // walking every folder again. The watcher starts before it and reports later changes.
+      if (!this.indexed) {
+        if (this.firstWalk) {
+          this.firstWalk.joined = true;
+          return this.firstWalk.p;
+        }
+        const w: { p: Promise<TreeNode>; joined: boolean } = { p: null!, joined: false };
+        const watched = !!this.watch; // only a watcher running since before the walk keeps its tree exact
+        w.p = this.walkTree('').then(
+          (tree) => {
+            if (watched && !w.joined && !this.disposed) this.bootTree = { tree, version: this.indexVersion, at: Date.now() };
+            return tree;
+          },
+        ).finally(() => this.firstWalk === w && (this.firstWalk = null));
+        this.firstWalk = w;
+        return w.p;
+      }
+      // The walk won the race (fast disk, browser mode): the renderer's boot listTree arrives just
+      // after it. Its tree is still exact while nothing changed since — once, and only shortly after.
+      const boot = this.bootTree;
+      this.bootTree = null;
+      if (boot && this.watch && boot.version === this.indexVersion && !this.pending.size && !this.flushing && !this.flushTimer && !this.rescanRequested && Date.now() - boot.at < BOOT_TREE_MS) return boot.tree;
+    }
+    return this.walkTree(sub);
+  }
+
+  /**
+   * readdir for tree walks, at most (libuv threads − 1) at a time. An uncapped walk queues hundreds
+   * of readdirs ahead of every other fs call: the launch session read and any file open waited for
+   * the whole walk (~40 ms on 12k entries); capped they wait ~2 ms, for a few ms more walk.
+   */
+  private readdirInSlot(abs: string): Promise<fs.Dirent[]> {
+    return this.inDirSlot(async () => {
+      await fsDelayAsync(); // tests: latency injection (a slow bridge holds the thread too)
+      return fsp.readdir(abs, { withFileTypes: true });
+    });
+  }
+  private async inDirSlot<T>(run: () => Promise<T>): Promise<T> {
+    const max = Math.max(1, (Number(process.env.UV_THREADPOOL_SIZE) || 4) - 1);
+    if (this.dirSlots < max) this.dirSlots++;
+    else await new Promise<void>((r) => this.dirWaiters.push(r)); // the slot is handed over
+    try {
+      return await run();
+    } finally {
+      const next = this.dirWaiters.shift();
+      if (next) next();
+      else this.dirSlots--;
+    }
+  }
+  private dirSlots = 0;
+  private dirWaiters: Array<() => void> = [];
+
+  /**
+   * Per-folder watching (Linux) starts once the first walk is done: an entry added or removed in a
+   * folder between its readdir and its watch would be missed — by the index and by the tree the
+   * renderer got. Folders changed since the walk began are listed again; differences go through the
+   * normal watcher queue (events). In the background, after the tree has gone out.
+   */
+  private async catchUpAfterWalk(walkStart: number) {
+    const dirs = [''];
+    for (const [k, v] of this.index) if (v.kind === 'dir') dirs.push(k);
+    const changed: string[] = [];
+    await Promise.all(
+      dirs.map(async (rel) => {
+        const st = await this.inDirSlot(() => fsp.stat(this.abs(rel))).catch(() => null);
+        if (st && st.mtimeMs >= walkStart - 1000) changed.push(rel);
+      }),
+    );
+    if (this.disposed || !changed.length) return;
+    const want = new Set(changed);
+    const childrenOf = new Map<string, string[]>();
+    for (const k of this.index.keys()) {
+      const p = parentOf(k);
+      if (!want.has(p)) continue;
+      const list = childrenOf.get(p);
+      if (list) list.push(k);
+      else childrenOf.set(p, [k]);
+    }
+    for (const rel of changed) {
+      const names = await this.inDirSlot(() => fsp.readdir(this.abs(rel))).catch(() => null);
+      if (!names || this.disposed) continue;
+      const now = new Set<string>();
+      for (const n of names) {
+        if (this.matcher.name(n)) continue; // what the walk skips (dotfiles, excluded names)
+        now.add(rel ? `${rel}/${n}` : n);
+      }
+      for (const c of now) if (!this.index.has(c)) this.queue(c);
+      for (const c of childrenOf.get(rel) ?? []) if (!now.has(c)) this.queue(c);
+    }
+  }
+
+  private async walkTree(sub: string): Promise<TreeNode> {
+    const walkStart = Date.now();
     const base = normalize(sub);
     const absBase = this.abs(base);
     await this.detectCase();
@@ -314,8 +419,7 @@ export class Workspace {
     const walk = async (absDir: string, relDir: string, depth: number, followed: string[]): Promise<TreeNode[]> => {
       let entries: fs.Dirent[];
       try {
-        await fsDelayAsync(); // tests: latency injection (slow bridge)
-        entries = await fsp.readdir(absDir, { withFileTypes: true });
+        entries = await this.readdirInSlot(absDir);
       } catch {
         return [];
       }
@@ -369,6 +473,7 @@ export class Workspace {
       return nodes.sort(compareNodes);
     };
 
+    if (!base) this.fullWalks++;
     const children = await walk(absBase, base, depthOf(base), []);
     this.indexVersion++;
     this.ignoreVersion++;
@@ -379,8 +484,11 @@ export class Workspace {
       const first = !this.indexed;
       this.indexed = true;
       this.syncWatchedDirs();
-      // The indexers ask for text right after boot: start the indexer thread and its readers now.
-      if (first && this.cacheFile !== undefined && !this.disposed) void this.indexer().then((h) => h.warm(), () => {});
+      if (first && this.watch?.mode === 'perdir') setImmediate(() => void this.catchUpAfterWalk(walkStart).catch(() => {}));
+      // The indexers ask for text right after boot: start the indexer thread and its readers now —
+      // just after this tree has gone out (starting a thread and posting 10k paths costs the main
+      // thread ms the waiting window should not pay).
+      if (first && this.cacheFile !== undefined && !this.disposed) setImmediate(() => !this.disposed && void this.indexer().then((h) => h.warm(), () => {}));
     } else if (this.watch?.wantsDirs) {
       this.watchDir(base);
       for (const [k, v] of index) if (v.kind === 'dir' && isUnder(k, base)) this.watchDir(k);
@@ -998,6 +1106,7 @@ export class Workspace {
 
   dispose() {
     this.disposed = true;
+    this.bootTree = null;
     this.host?.dispose();
     this.host = null;
     if (this.flushTimer) clearTimeout(this.flushTimer);
