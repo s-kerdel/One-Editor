@@ -11,6 +11,7 @@ import { fuzzyFilter, fuzzyMatch } from '../../search/fuzzy';
 import { outline, type OutlineItem } from '../../search/symbols';
 import type { HeadingHit, SearchMatch } from '../../search/types';
 import { searchClient } from './client';
+import { indexDeferred, indexOnDemand } from './demand';
 import { HighlightPositions, HighlightRanges } from './highlight';
 import { IconCommand, IconHeading, IconLine, IconSearch, IconSymbol, fileIcon } from './icons';
 import { getRecentCommands, getRecentFiles, touchRecentCommand } from './state';
@@ -135,6 +136,13 @@ const PLACEHOLDER: Record<ReturnType<typeof modeOf>, string> = {
   files: 'Go to file…   > commands   # headings   @ in file   : line',
 };
 
+/** While the index builds (on demand: the first content search started it), say so — with progress. */
+function indexingNote(): string | null {
+  if (searchClient.status.value !== 'indexing') return null;
+  const p = searchClient.progress.value;
+  return p && p.total ? `Indexing… ${p.done.toLocaleString()} / ${p.total.toLocaleString()} files` : 'Indexing…';
+}
+
 export function Palette({ initial = '' }: { initial?: string }) {
   const [q, setQ] = useState(initial);
   const [sel, setSel] = useState(0);
@@ -149,7 +157,8 @@ export function Palette({ initial = '' }: { initial?: string }) {
     if (!el) return;
     el.focus();
     el.setSelectionRange(el.value.length, el.value.length);
-    void searchClient.start();
+    // On demand: going to a file by name needs no index; content / workspace-heading hits start it.
+    if (!indexOnDemand()) void searchClient.start();
     return () => {
       if (!picked.current) requestAnimationFrame(() => app.overlay.value === null && app.editor?.focus());
     };
@@ -191,7 +200,9 @@ export function Palette({ initial = '' }: { initial?: string }) {
   const asyncKey = `${mode}|${q}`;
   useEffect(() => {
     const fileCount = syncSections.reduce((n, s) => n + s.items.length, 0);
-    const wantContent = mode === 'files' && !fileHash && !fileLine && q.trim().length >= 3 && fileCount < 6;
+    const contentQuery = mode === 'files' && !fileHash && !fileLine && q.trim().length >= 3 && fileCount < 6;
+    // Index built on demand and not yet: going to a file by name must not build it (a note says how).
+    const wantContent = contentQuery && !indexDeferred.value;
     const wantHeadings = mode === 'wsHeadings' || !!fileHash;
     if (!wantContent && !wantHeadings) {
       setAsyncItems({ key: asyncKey, content: [], headings: [], loading: false });
@@ -328,7 +339,8 @@ export function Palette({ initial = '' }: { initial?: string }) {
             </>
           ))}
           {empty && <li class="se-pal-empty">{emptyText(mode, q)}</li>}
-          {asyncItems.loading && !flat.length && <li class="se-pal-empty">Searching…</li>}
+          {indexDeferred.value && mode === 'files' && q.trim().length >= 3 && <li class="se-pal-empty">File contents are indexed on demand — Ctrl+Shift+F searches them.</li>}
+          {asyncItems.loading && !flat.length && <li class="se-pal-empty">{indexingNote() ?? 'Searching…'}</li>}
         </ul>
         <div class="se-pal-foot">
           <span>

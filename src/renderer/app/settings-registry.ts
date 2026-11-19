@@ -455,6 +455,21 @@ const defs: Draft[] = [
 
   // ---- Search & indexing (read by the backend: service.ts indexOptionsFrom; workers by search/client.ts) ----
   {
+    key: 'search.indexing',
+    section: 'search',
+    label: 'Build the index',
+    description: 'On demand: when you first search or open backlinks. Switching to it applies next launch.',
+    keywords: ['index', 'on demand', 'lazy', 'launch', 'startup', 'background', 'workers'],
+    default: 'launch',
+    control: {
+      type: 'segmented',
+      options: [
+        { v: 'launch', label: 'At launch' },
+        { v: 'onDemand', label: 'On demand' },
+      ],
+    },
+  },
+  {
     key: 'search.respectGitignore',
     section: 'search',
     label: 'Skip git-ignored files',

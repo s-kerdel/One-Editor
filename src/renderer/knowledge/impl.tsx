@@ -8,6 +8,7 @@ import { app } from '../app/app';
 import './knowledge.css';
 import { BacklinksPanel, OutlinePanel, TagsPanel, openSection } from './panels';
 import { building, index, insertTemplate, installIndexing, kv, openDailyNote, openLink, templateFiles, whenIndexed } from './state';
+import { searchClient } from '../search/client';
 import type { GraphViewProps } from './GraphView';
 import { extractor } from './extractor';
 
@@ -16,6 +17,7 @@ export { index as knowledgeIndex } from './state';
 // ---------- graph overlay (lazy) ----------
 
 export function openGraph(local: boolean) {
+  void searchClient.start(); // the graph is drawn from the index (on demand: this builds it)
   const close = () => {
     app.overlay.value = null;
     app.editor?.focus();
@@ -116,7 +118,8 @@ export function installKnowledgeImpl() {
   if (installed) return;
   installed = true;
   // Public, feature-detectable API (editor autocomplete, preview, search…): `(app as any).knowledge`.
-  const api = Object.assign(index, { whenReady: whenIndexed, isBuilding: () => building.value, changed: kv, openLink, extractionMode: () => extractor.mode });
+  // ensure(): consumers that need the index (completion, overview) — builds it when on demand.
+  const api = Object.assign(index, { whenReady: whenIndexed, isBuilding: () => building.value, changed: kv, openLink, extractionMode: () => extractor.mode, ensure: () => void searchClient.start() });
   (app as any).knowledge = api;
   app.openLink = openLink;
   installIndexing();

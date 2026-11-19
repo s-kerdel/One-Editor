@@ -8,6 +8,15 @@ import { getCommand } from '../app/commands';
 import * as searchModule from '../search';
 import { extractHeadings, type Backlink, type Mention, type Snippet, type TagNode } from '../../knowledge/index';
 import { building, index, kv, linkMention, openLink, tagLineOf, unlinkedMentionsOf } from './state';
+import { searchClient } from '../search/client';
+
+/** These panels read the index: opening one builds it when it is built on demand (search.indexing). */
+const useIndexBuild = () => useEffect(() => void searchClient.start(), []);
+/** "Indexing… 1,200 / 4,000 files" while the build runs (what is shown meanwhile is partial). */
+function indexingText() {
+  const p = searchClient.progress.value;
+  return p && p.total ? `Indexing… ${p.done.toLocaleString()} / ${p.total.toLocaleString()} files` : 'Indexing…';
+}
 import { Chevron, IconCollapse, IconExpand, IconFile, IconFilePlus, IconGraph, IconHash, IconLink, IconSearch } from './icons';
 
 // Section open/closed state survives switching sidebar tabs.
@@ -283,6 +292,7 @@ function MentionRow({ m, target }: { m: Mention; target: string }) {
 }
 
 export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
+  useIndexBuild();
   const path = app.activePath.value;
   const version = kv.value;
   const sections = sectionState.value;
@@ -371,7 +381,7 @@ export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
       {head}
       <Section id="linked" title="Linked mentions" count={backlinks.length}>
         {backlinks.length === 0 ? (
-          <Empty>{building.value ? 'Indexing…' : 'No notes link here yet.'}</Empty>
+          <Empty>{building.value ? indexingText() : 'No notes link here yet.'}</Empty>
         ) : (
           groupBy(backlinks).map(([from, items]) => (
             <FileGroup key={from} path={from} count={items.length}>
@@ -488,6 +498,7 @@ function filterTags(nodes: TagNode[], q: string): TagNode[] {
 }
 
 export function TagsPanel() {
+  useIndexBuild();
   const version = kv.value;
   const [filter, setFilter] = useState('');
   const [sort, setSort] = useState<'name' | 'count'>('name');
@@ -515,7 +526,7 @@ export function TagsPanel() {
       {tree.length === 0 ? (
         <Empty>
           {building.value ? (
-            'Indexing…'
+            indexingText()
           ) : (
             <>
               No tags yet. Write <code>#tag</code> in a note or add <code>tags:</code> to its frontmatter.

@@ -7,6 +7,7 @@ import { app } from '../app/app';
 import { noteEdited, refreshTree } from '../app/documents';
 import { KnowledgeIndex, extractNote, findHeadingLine, findTagLine, wikiLinkTextFor, applyEdits, type Mention, type TextEdit } from '../../knowledge/index';
 import { searchClient, type NotesEvent } from '../search/client';
+import { indexDeferred, indexOnDemand } from '../search/demand';
 import { logActivity } from '../app/activity';
 import { extractor } from './extractor';
 import { createRenameRewriter } from '../../knowledge/rename';
@@ -93,6 +94,8 @@ function updateNow(path: string, text: string) {
 
 /** Debounced/background update: big notes are extracted by the worker, small ones right here. */
 function updateSoon(path: string, text: string) {
+  // On demand, not built yet: nothing to update (and no extraction worker) — the first build reads all.
+  if (indexDeferred.value) return;
   if (!isMarkdown(path) || text.length <= INLINE_MAX_CHARS || index.sameText(path, text)) return updateNow(path, text);
   const v = stamp(path);
   void extractor.extract([{ path, text }]).then(
@@ -274,7 +277,8 @@ export async function openLink(target: string, fromPath: string, _opts?: { newTa
   const link = parseWikiLink(target.replace(/^!?\[\[|\]\]$/g, ''));
   let path = link.target ? index.resolve(link.target, fromPath) : fromPath;
   if (!path && link.target && building.value) {
-    // Aliases are only known once the index is built.
+    // Aliases are only known once the index is built (on demand: this builds it).
+    void searchClient.start();
     await whenIndexed();
     path = index.resolve(link.target, fromPath);
   }
@@ -310,6 +314,7 @@ export async function handleRenamed(from: string, to: string): Promise<number> {
     if (!pairs.size && /\.[^/]+$/.test(to)) pairs.set(from, to);
   }
   if (app.settings.value['links.updateOnRename'] === false || !pairs.size) return 0;
+  void searchClient.start(); // on demand: updating links needs the index — this builds it
   await whenIndexed();
   const allFiles = new Set([...index.files(), ...app.files.value, ...pairs.values()]);
   for (const old of pairs.keys()) allFiles.delete(old);
@@ -474,8 +479,9 @@ export function installIndexing() {
     building.value = true;
     readyPromise = new Promise((res) => (readyResolve = res));
   }
-  // The knowledge index is built by the search workers: make sure they run (after first paint).
+  // The knowledge index is built by the search workers: make sure they run (after first paint) —
+  // unless the index is built on demand (search.indexing): then the first consumer starts them.
   void whenBooted()
     .then(idle)
-    .then(() => searchClient.start());
+    .then(() => (indexOnDemand() ? undefined : searchClient.start()));
 }

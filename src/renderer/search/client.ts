@@ -8,6 +8,7 @@ import { signal } from '@preact/signals';
 import { app } from '../app/app';
 import { streamAllTextPages } from '../app/workspace-text';
 import { activityNow, logActivity } from '../app/activity';
+import { markIndexStarted } from './demand';
 import { webToken } from '../platform';
 import { ShardedSearch } from '../../search/shards';
 import type { FeedSource } from '../../search/feeder';
@@ -198,6 +199,7 @@ class SearchClient {
    */
   start(): Promise<void> {
     if (this.starting) return this.starting;
+    markIndexStarted(); // on demand: this is the first consumer; the index stays live from now on
     // The knowledge index is built from this build's note stream: give its module a moment to
     // subscribe (it loads at the same idle moment), or it gets a full replay = twice the work.
     const gate = new Promise<void>((r) => {

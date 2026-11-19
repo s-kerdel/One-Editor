@@ -7,6 +7,7 @@ import { app } from '../app/app';
 import { registerCommands } from '../app/commands';
 import { afterBootIdle, lazy, lazyComponent, withModule } from '../app/lazy';
 import { renameRecentFile, touchRecentFile } from './recent';
+import { indexDeferred, indexOnDemand, indexStarted } from './demand';
 
 type Impl = typeof import('./impl');
 const impl = lazy<Impl>(() =>
@@ -18,6 +19,9 @@ const impl = lazy<Impl>(() =>
 
 /** Loads the search implementation (idempotent). */
 export const loadSearch = () => impl.load();
+
+/** Build the index now (first consumer on demand, or the status bar's "Search index: on demand"). */
+export const startIndexing = () => impl.load().then((m) => m.searchClient.start());
 
 /** Open the search panel with `q` and run it immediately. */
 export function openSearch(q: string, opts: { replace?: boolean; regex?: boolean } = {}) {
@@ -38,7 +42,13 @@ export function installSearch() {
   app.events.on('file:renamed', (from, to) => renameRecentFile(from, to));
 
   // Never on the launch path: fetch the chunk and build the index (in a worker) once idle after boot.
-  afterBootIdle(() => void impl.load().then((m) => m.searchClient.start()).catch((err) => console.warn('[search] failed to load', err)), 2500);
+  // On demand (search.indexing): the chunk loads, but nothing builds until a consumer asks (./demand).
+  const deferIfOnDemand = () => void (indexDeferred.value = indexOnDemand() && !indexStarted() && !!app.workspace.value);
+  deferIfOnDemand();
+  app.events.on('workspace:opened', deferIfOnDemand);
+  afterBootIdle(() => void impl.load().then((m) => (indexOnDemand() ? undefined : m.searchClient.start())).catch((err) => console.warn('[search] failed to load', err)), 2500);
+  // Switched to "At launch" while waiting: build now. (The other way round applies next launch.)
+  app.settings.subscribe((s) => void (indexDeferred.value && s['search.indexing'] !== 'onDemand' && startIndexing()));
 
   const palette = (prefix: string) => () => openPalette(prefix);
   const focus = (replace: boolean) => () => withModule(impl, (m) => m.focusSearch(replace), { typeahead: true });

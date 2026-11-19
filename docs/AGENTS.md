@@ -44,6 +44,9 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   the tree still lists them), reads in worker threads and keeps a text cache in the app's data folder (never the workspace).
   Search is sharded over workers (`src/search/shards.ts`, exact two-phase merge — keep `tests/unit/search/shards.test.ts` green).
   Emit `app.events.emit('index:stale')` after a setting that changes what is indexed (both indexes rebuild).
+  The index may be built **on demand** (`search.indexing`): a feature that reads it must ask for it —
+  `searchClient.start()` / `(app as any).knowledge.ensure()` (search, mentions, headings already do) — and show
+  "Indexing… x / y" (`searchClient.progress`) instead of an empty state; `indexDeferred` (`search/demand.ts`) = not built yet.
 - Shared helpers: `src/shared/paths.ts` (POSIX rel paths), `src/shared/languages.ts` (ext/fence → CM/Shiki/Prettier ids),
   `src/shared/wikilinks.ts` (parse + resolve `[[links]]`).
 - Global `window.__secEdit` = `app` (for E2E introspection). `html[data-ready="true"]` once booted.

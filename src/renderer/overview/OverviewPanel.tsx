@@ -13,6 +13,8 @@ import { fileUrl } from '../platform';
 import './icons';
 import './overview.css';
 import { copyBlock, jumpTo, toggleTask } from './actions';
+import { indexDeferred } from '../search/demand';
+import { startIndexing } from '../search';
 import { collapsedSections, keepInView, setSectionCollapsed, useCursorDerived, useKnowledge, useLiveContent, useRoving, type Knowledge } from './hooks';
 import {
   activeOutlineIndex,
@@ -480,6 +482,19 @@ function LinksSection({ path }: { path: string }) {
     else jumpTo(path, o.line, o.col); // a broken file link: show where it is
   };
 
+  // Search index built on demand and not yet: say so (this column is often open at launch — it must
+  // not start the build by itself).
+  if (indexDeferred.value)
+    return (
+      <Section id="links" title="Links" count={null}>
+        <Hint>
+          Links and backlinks come from the search index, built on demand.{' '}
+          <button class="se-ov-lvl-btn" onClick={() => void startIndexing()}>
+            Build now
+          </button>
+        </Hint>
+      </Section>
+    );
   return (
     <Section id="links" title="Links" count={kn ? out.length + back.length : null} countTitle={`${out.length} outgoing${unresolved ? ` (${unresolved} not created yet)` : ''} · ${back.length} linking here`}>
       {!kn ? (

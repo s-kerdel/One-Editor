@@ -15,6 +15,8 @@ import type * as WordCount from './wordcount';
 import { gitUi } from '../git/install';
 import { varsStatus } from '../variables/slot';
 import { activityNow } from './ui';
+import { indexDeferred } from '../search/demand';
+import { startIndexing } from '../search';
 
 // The counter is its own tiny chunk: nothing to count before a note is shown (first paint stays lean).
 let wc: typeof WordCount | null = null;
@@ -207,6 +209,11 @@ export function StatusBar() {
         <span class="se-status-item" data-testid="activity" aria-live="polite" style="font-variant-numeric:tabular-nums">
           {activityNow.value}
         </span>
+      )}
+      {indexDeferred.value && !activityNow.value && (
+        <button class="se-status-item se-status-btn" data-testid="index-on-demand" title="Built when you first search or open backlinks. Click to build it now." onClick={() => void startIndexing()}>
+          Search index: on demand
+        </button>
       )}
       {cur && doc && !doc.binary && (
         <span class="se-status-item" title="Line, column">

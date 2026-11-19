@@ -9,7 +9,7 @@ import { fileUrl } from '../platform';
 import { setEditorHost, type LinkTarget } from './host';
 import { scanTags, type CompletionHost } from './complete';
 
-type KnowledgeLike = { tags?: () => unknown; headings?: (p: string) => Array<{ text: string; level: number }> };
+type KnowledgeLike = { tags?: () => unknown; headings?: (p: string) => Array<{ text: string; level: number }>; ensure?: () => void };
 const knowledge = () => (app as unknown as { knowledge?: KnowledgeLike }).knowledge;
 
 let resolveCache = new Map<string, string | null>();
@@ -129,6 +129,7 @@ export const completionHost: CompletionHost = {
         }
     };
     try {
+      knowledge()?.ensure?.(); // index built on demand: # completion asks for it (open notes count meanwhile)
       walk(knowledge()?.tags?.());
     } catch {}
     for (const d of app.docs.values()) if (/\.(md|markdown|mdx)$/i.test(d.path)) scanTags(d.content, counts);
@@ -136,6 +137,7 @@ export const completionHost: CompletionHost = {
   },
   headings(path) {
     try {
+      knowledge()?.ensure?.(); // [[note# completion: builds the index when it is built on demand
       const hs = knowledge()?.headings?.(path);
       return Array.isArray(hs) && hs.length ? hs.map((h) => ({ text: h.text, level: h.level })) : null;
     } catch {

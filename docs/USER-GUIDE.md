@@ -289,6 +289,17 @@ Turn this off in Settings → Links & notes → **Update links on rename**.
 | Find / replace in **this file** | `Ctrl+F` / `Ctrl+H` |
 | Jump to a heading | `Ctrl+Shift+O` (this file) · `Ctrl+T` (workspace) |
 
+### When the index is built
+
+**At launch** (default): the search index builds in the background right after start.
+
+**On demand** (Settings → Search → **Build the index**): nothing is indexed until you need it.
+
+- It builds the first time you **find in files**, open **backlinks**, **tags** or the **graph**, or rename a note that others link to.
+- Opening a file by name (`Ctrl+P`) does not build it.
+- Until then the status bar shows **Search index: on demand**. Click it to build now.
+- Once built it stays up to date until you close the app. Unchanged files are read from the cache.
+
 ### Find in files
 
 **Paste anything. It is searched literally.** Commands with flags and punctuation work as they are:
@@ -650,6 +661,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | Daily note template | None |
 | | Templates folder | `templates` |
 | | Date format / Time format | `YYYY-MM-DD` / `HH:mm` |
+| **Search** | Build the index | At launch |
 | **Attachments** | Save pasted files to | One folder in the workspace |
 | | Attachments folder | `attachments` |
 | **Preview** | Single line breaks | Off |

@@ -84,6 +84,32 @@ describe('launch: one tree walk', () => {
     }
   });
 
+  it('index on demand (warmIndexer: false): no indexer after the walk until text is asked for', async () => {
+    await fsp.mkdir(TMP, { recursive: true });
+    dir = await fsp.mkdtemp(path.join(TMP, 'ws-'));
+    fs.writeFileSync(path.join(dir, 'a.md'), 'alpha');
+    ws = new Workspace(dir, { watchMode: 'poll', pollMs: 50, warmIndexer: false, cacheDir: path.join(dir, '..', 'cache-' + path.basename(dir)) });
+    const w = ws;
+    w.onEvents(() => {});
+    await w.listTree();
+    await new Promise((r) => setTimeout(r, 100));
+    expect((w as any).host, 'no indexer thread / readers / cache read at launch').toBeNull();
+    const page = await w.readAllTextPage({ maxBytes: 64 << 10 });
+    expect(page.files.map((f) => f.path)).toEqual(['a.md']);
+    expect((w as any).host).not.toBeNull();
+  });
+
+  it('index at launch (default): the indexer starts right after the walk', async () => {
+    await fsp.mkdir(TMP, { recursive: true });
+    dir = await fsp.mkdtemp(path.join(TMP, 'ws-'));
+    fs.writeFileSync(path.join(dir, 'a.md'), 'alpha');
+    ws = new Workspace(dir, { watchMode: 'poll', pollMs: 50, cacheDir: path.join(dir, '..', 'cache-' + path.basename(dir)) });
+    const w = ws;
+    w.onEvents(() => {});
+    await w.listTree();
+    await until(() => !!(w as any).host);
+  });
+
   it('a change after the launch walk means a fresh walk (never a stale tree)', async () => {
     const w = await makeWs();
     let events = 0;

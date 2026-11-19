@@ -70,6 +70,9 @@ export interface WorkspaceOptions {
   cacheDir?: string;
   /** Reader threads for indexing (0 = read in-thread). */
   readThreads?: number;
+  /** Start the indexer thread right after the first walk (default). false (search.indexing = onDemand):
+   *  nothing index-related runs — no thread, no readers, no cache read — until text is first asked for. */
+  warmIndexer?: boolean;
   /** Skip the probe (tests). true = names differ by case. */
   caseSensitive?: boolean;
 }
@@ -156,6 +159,7 @@ export class Workspace {
   private ignoreVersion = 0;
   private readonly cacheFile: string | null;
   private readonly readThreads: number;
+  private readonly warmIndexer: boolean;
   /** Indexing I/O (pass, cache, filters, decoding) lives here — a worker thread in the app. */
   private host: IndexerHost | null = null;
   private sentVersion = '';
@@ -205,6 +209,7 @@ export class Workspace {
     this.indexOpts = { ...DEFAULT_INDEX, ...definedOnly(opts.index ?? {}) };
     this.cacheFile = opts.cacheDir ? cacheFileFor(opts.cacheDir, this.root) : null;
     this.readThreads = opts.readThreads ?? defaultReadThreads(this.root);
+    this.warmIndexer = opts.warmIndexer !== false;
     if (opts.caseSensitive !== undefined) {
       this.caseSensitive = opts.caseSensitive;
       this.caseProbe = Promise.resolve(opts.caseSensitive);
@@ -488,7 +493,7 @@ export class Workspace {
       // The indexers ask for text right after boot: start the indexer thread and its readers now —
       // just after this tree has gone out (starting a thread and posting 10k paths costs the main
       // thread ms the waiting window should not pay).
-      if (first && this.cacheFile !== undefined && !this.disposed) setImmediate(() => !this.disposed && void this.indexer().then((h) => h.warm(), () => {}));
+      if (first && this.warmIndexer && this.cacheFile !== undefined && !this.disposed) setImmediate(() => !this.disposed && void this.indexer().then((h) => h.warm(), () => {}));
     } else if (this.watch?.wantsDirs) {
       this.watchDir(base);
       for (const [k, v] of index) if (v.kind === 'dir' && isUnder(k, base)) this.watchDir(k);

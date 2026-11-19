@@ -201,7 +201,9 @@ export class BackendService {
     const s = await this.getSettings();
     // The text cache lives with the app's data (never inside the folder); '' = off.
     const cacheDir = this.workspaceOptions.cacheDir === undefined ? defaultCacheDir(this.configDir) : this.workspaceOptions.cacheDir || undefined;
-    this.workspace = new Workspace(resolved, { exclude: s.excludeGlobs, showHidden: s.showHiddenFiles, index: indexOptionsFrom(s), ...this.workspaceOptions, cacheDir });
+    // search.indexing = onDemand: no indexer thread at open; the renderer's first consumer starts it.
+    const warmIndexer = s['search.indexing'] !== 'onDemand';
+    this.workspace = new Workspace(resolved, { exclude: s.excludeGlobs, showHidden: s.showHiddenFiles, index: indexOptionsFrom(s), warmIndexer, ...this.workspaceOptions, cacheDir });
     this.unwatch = this.workspace.onEvents((e) => {
       this.fsListeners.forEach((l) => l(e));
       this.monitor?.trigger('fs', e.map((x) => x.path));
