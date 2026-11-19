@@ -1,6 +1,6 @@
 // File overview for the active file: outline (headings or code symbols), code blocks, tasks, links
 // and file info, in collapsible sections. Lazy chunk — see ./index.ts.
-import { render, type ComponentChildren } from 'preact';
+import { render, type ComponentChildren, type VNode } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { basename, dirname, isMarkdown, stem } from '@shared/paths';
@@ -65,6 +65,30 @@ function Section(props: { id: string; title: string; count?: number | string | n
 function Hint({ children }: { children: ComponentChildren }) {
   return <div class="se-ov-hint">{children}</div>;
 }
+
+function Rows({ render }: { render: () => ComponentChildren }) {
+  return <>{render()}</>;
+}
+
+/**
+ * The same rows while `sig` holds. Preact skips a component vnode it rendered before, so an edit
+ * that changes nothing a list shows costs one string compare instead of re-diffing up to 1,500 rows
+ * per section (a 1 MB note: 50–80 ms per refresh). `sig` covers everything the rows show and capture;
+ * handlers that need the latest model go through a ref (`useLatest`).
+ */
+function useRows(sig: string, render: () => ComponentChildren): VNode {
+  const ref = useRef<{ sig: string; vnode: VNode } | null>(null);
+  if (ref.current?.sig !== sig) ref.current = { sig, vnode: <Rows render={render} /> };
+  return ref.current.vnode;
+}
+
+function useLatest<T>(value: T): { readonly current: T } {
+  const ref = useRef(value);
+  ref.current = value;
+  return ref;
+}
+
+const SEP = '\u0001';
 
 /** Hovering / focusing the panel pauses "follow the cursor" scrolling, so it never fights the user. */
 function userIsInPanel(el: Element | null) {
@@ -156,53 +180,67 @@ function OutlineSection({ path, model }: { path: string; model: DocModel }) {
   ) : null;
 
   const shown = rows.length > MAX_ROWS ? rows.slice(0, MAX_ROWS) : rows;
+  const live = useLatest({ toggle });
+  const sig =
+    `${path}${SEP}${md}${SEP}${active}${SEP}${rows.length}\n` +
+    shown
+      .map(({ i, collapsed }) => {
+        const e = entries[i];
+        return `${i}${SEP}${e.key}${SEP}${e.line}${SEP}${e.level}${SEP}${e.depth}${SEP}${e.hasChildren ? 1 : 0}${collapsed ? 1 : 0}${SEP}${md ? '' : symbolKind(entries, e)}${SEP}${e.text}`;
+      })
+      .join('\n');
+  const rowNodes = useRows(sig, () => (
+    <>
+      {shown.map(({ i, collapsed }) => {
+        const e = entries[i];
+        const kind = md ? null : (KIND.get(symbolKind(entries, e)) ?? KIND.get('function')!);
+        return (
+          <div
+            key={e.key}
+            class={`se-ov-row se-ov-ol${md ? ` h${e.level}` : ''}${i === active ? ' is-active' : ''}`}
+            role="treeitem"
+            aria-level={e.depth + 1}
+            aria-expanded={e.hasChildren ? !collapsed : undefined}
+            aria-selected={i === active}
+            tabIndex={-1}
+            data-row
+            data-key={e.key}
+            data-i={i}
+            data-line={e.line}
+            style={{ '--d': e.depth }}
+            title={`${e.text} — line ${e.line + 1}`}
+            onClick={() => jumpTo(path, e.line)}
+          >
+            {e.hasChildren ? (
+              <span
+                class="se-ov-twisty"
+                aria-hidden="true"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  live.current.toggle(e);
+                }}
+              >
+                <Icon name="chevronRight" size={11} class={`se-ov-chev${collapsed ? '' : ' open'}`} />
+              </span>
+            ) : (
+              <span class="se-ov-twisty" />
+            )}
+            {kind && <span class={`se-ov-kind k-${kind[1]}`}>{kind[0]}</span>}
+            <span class="se-ov-text">{e.text}</span>
+            {md && <span class="se-ov-tag">H{e.level}</span>}
+          </div>
+        );
+      })}
+      {rows.length > MAX_ROWS && <Hint>{(rows.length - MAX_ROWS).toLocaleString()} more — use Ctrl+Shift+O to search them.</Hint>}
+    </>
+  ));
   return (
     <Section id="outline" title={md ? 'Outline' : 'Symbols'} count={entries.length} actions={actions}>
       {entries.length === 0 ? (
         <Hint>{md ? <>No headings yet. Start a line with <code>#</code> to add one.</> : 'No classes or functions found.'}</Hint>
       ) : (
         <div class="se-ov-list" ref={listRef} role="tree" aria-label={md ? 'Outline' : 'Symbols'} onKeyDown={roving.onKeyDown} onFocusIn={roving.onFocusIn}>
-          {shown.map(({ i, collapsed }) => {
-            const e = entries[i];
-            const kind = md ? null : (KIND.get(symbolKind(entries, e)) ?? KIND.get('function')!);
-            return (
-              <div
-                key={e.key}
-                class={`se-ov-row se-ov-ol${md ? ` h${e.level}` : ''}${i === active ? ' is-active' : ''}`}
-                role="treeitem"
-                aria-level={e.depth + 1}
-                aria-expanded={e.hasChildren ? !collapsed : undefined}
-                aria-selected={i === active}
-                tabIndex={-1}
-                data-row
-                data-key={e.key}
-                data-i={i}
-                data-line={e.line}
-                style={{ '--d': e.depth }}
-                title={`${e.text} — line ${e.line + 1}`}
-                onClick={() => jumpTo(path, e.line)}
-              >
-                {e.hasChildren ? (
-                  <span
-                    class="se-ov-twisty"
-                    aria-hidden="true"
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      toggle(e);
-                    }}
-                  >
-                    <Icon name="chevronRight" size={11} class={`se-ov-chev${collapsed ? '' : ' open'}`} />
-                  </span>
-                ) : (
-                  <span class="se-ov-twisty" />
-                )}
-                {kind && <span class={`se-ov-kind k-${kind[1]}`}>{kind[0]}</span>}
-                <span class="se-ov-text">{e.text}</span>
-                {md && <span class="se-ov-tag">H{e.level}</span>}
-              </div>
-            );
-          })}
-          {rows.length > MAX_ROWS && <Hint>{(rows.length - MAX_ROWS).toLocaleString()} more — use Ctrl+Shift+O to search them.</Hint>}
+          {rowNodes}
         </div>
       )}
     </Section>
@@ -238,42 +276,48 @@ function CodeBlocksSection({ path, model }: { path: string; model: DocModel }) {
     return false;
   });
   const shown = blocks.length > MAX_ROWS ? blocks.slice(0, MAX_ROWS) : blocks;
+  // Copy reads the current model: a block's body can change while its row (label, line) does not.
+  const live = useLatest({ copy: (i: number) => blocks[i] && copyBlock(model, blocks[i]) });
+  const sig = `${path}${SEP}${active}\n` + shown.map((b) => `${b.line}${SEP}${b.lines}${SEP}${b.lang}${SEP}${b.note ?? ''}${SEP}${b.label}`).join('\n');
+  const rowNodes = useRows(sig, () =>
+    shown.map((b, i) => (
+      <div
+        key={`${b.line}`}
+        class={`se-ov-row se-ov-code${i === active ? ' is-active' : ''}`}
+        role="listitem"
+        tabIndex={-1}
+        data-row
+        data-key={`b${b.line}`}
+        data-i={i}
+        data-line={b.line}
+        title={`${b.note ? `${b.note}\n` : ''}${b.label}\n\nLine ${b.line + 1} · ${b.lines} ${b.lines === 1 ? 'line' : 'lines'} · Enter: jump · Ctrl+C: copy`}
+        onClick={() => jumpTo(path, b.lines ? b.line + 1 : b.line)}
+      >
+        <span class={`se-ov-lang${toneOf(b.lang)}`}>{b.lang || 'text'}</span>
+        <code class="se-ov-cmd">{b.label || <em>empty</em>}</code>
+        {b.lines > 1 && <span class="se-ov-meta">{b.lines}</span>}
+        <button
+          class="se-ov-mini se-ov-copy"
+          tabIndex={-1}
+          title="Copy code"
+          aria-label="Copy code"
+          onClick={(e) => {
+            e.stopPropagation();
+            live.current.copy(i);
+          }}
+        >
+          <Icon name="copy" size={12} />
+        </button>
+      </div>
+    )),
+  );
   return (
     <Section id="code" title="Code blocks" count={blocks.length}>
       {blocks.length === 0 ? (
         <Hint>No code blocks. Fence one with <code>```</code> and a language.</Hint>
       ) : (
         <div class="se-ov-list" ref={listRef} role="list" aria-label="Code blocks" onKeyDown={roving.onKeyDown} onFocusIn={roving.onFocusIn}>
-          {shown.map((b, i) => (
-            <div
-              key={`${b.line}`}
-              class={`se-ov-row se-ov-code${i === active ? ' is-active' : ''}`}
-              role="listitem"
-              tabIndex={-1}
-              data-row
-              data-key={`b${b.line}`}
-              data-i={i}
-              data-line={b.line}
-              title={`${b.note ? `${b.note}\n` : ''}${b.label}\n\nLine ${b.line + 1} · ${b.lines} ${b.lines === 1 ? 'line' : 'lines'} · Enter: jump · Ctrl+C: copy`}
-              onClick={() => jumpTo(path, b.lines ? b.line + 1 : b.line)}
-            >
-              <span class={`se-ov-lang${toneOf(b.lang)}`}>{b.lang || 'text'}</span>
-              <code class="se-ov-cmd">{b.label || <em>empty</em>}</code>
-              {b.lines > 1 && <span class="se-ov-meta">{b.lines}</span>}
-              <button
-                class="se-ov-mini se-ov-copy"
-                tabIndex={-1}
-                title="Copy code"
-                aria-label="Copy code"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  copyBlock(model, b);
-                }}
-              >
-                <Icon name="copy" size={12} />
-              </button>
-            </div>
-          ))}
+          {rowNodes}
         </div>
       )}
     </Section>
@@ -309,24 +353,10 @@ function TasksSection({ path, model, refresh }: { path: string; model: DocModel;
       </button>
     ) : null;
   const shown = items.length > MAX_ROWS ? items.slice(0, MAX_ROWS) : items;
-  return (
-    <Section id="tasks" title="Tasks" count={total ? `${t.done}/${total}` : 0} countTitle={`${t.open} open · ${t.done} done`} actions={actions}>
-      {total === 0 ? (
-        <Hint>No tasks. Type <code>- [ ]</code> to add one.</Hint>
-      ) : (
-        <>
-          <div class="se-ov-progress" title={`${t.done} of ${total} done`}>
-            <div class="se-ov-bar" role="progressbar" aria-label="Tasks done" aria-valuemin={0} aria-valuemax={total} aria-valuenow={t.done}>
-              <span style={{ width: `${pct}%` }} />
-            </div>
-            <span class="se-ov-progress-text">
-              {t.open === 0 ? 'All done' : `${t.open} open`} · {pct}%
-            </span>
-          </div>
-          {items.length === 0 ? (
-            <Hint>Nothing left to do.</Hint>
-          ) : (
-            <div class="se-ov-list" ref={listRef} role="list" aria-label="Tasks" onKeyDown={roving.onKeyDown} onFocusIn={roving.onFocusIn}>
+  const live = useLatest({ flip });
+  const sig = `${path}${SEP}${showDone}\n` + shown.map((x) => `${x.line}${SEP}${x.col}${SEP}${x.done ? 1 : 0}${SEP}${x.depth}${SEP}${x.text}`).join('\n');
+  const rowNodes = useRows(sig, () => (
+    <>
               {shown.map((x, i) => (
                 <div
                   key={`${x.line}`}
@@ -348,7 +378,7 @@ function TasksSection({ path, model, refresh }: { path: string; model: DocModel;
                     aria-label="Toggle task"
                     onClick={(e) => {
                       e.stopPropagation();
-                      flip(i);
+                      live.current.flip(i);
                     }}
                   >
                     <Icon name="check" size={10} />
@@ -356,6 +386,27 @@ function TasksSection({ path, model, refresh }: { path: string; model: DocModel;
                   <span class="se-ov-text">{x.text || <em>(empty task)</em>}</span>
                 </div>
               ))}
+    </>
+  ));
+  return (
+    <Section id="tasks" title="Tasks" count={total ? `${t.done}/${total}` : 0} countTitle={`${t.open} open · ${t.done} done`} actions={actions}>
+      {total === 0 ? (
+        <Hint>No tasks. Type <code>- [ ]</code> to add one.</Hint>
+      ) : (
+        <>
+          <div class="se-ov-progress" title={`${t.done} of ${total} done`}>
+            <div class="se-ov-bar" role="progressbar" aria-label="Tasks done" aria-valuemin={0} aria-valuemax={total} aria-valuenow={t.done}>
+              <span style={{ width: `${pct}%` }} />
+            </div>
+            <span class="se-ov-progress-text">
+              {t.open === 0 ? 'All done' : `${t.open} open`} · {pct}%
+            </span>
+          </div>
+          {items.length === 0 ? (
+            <Hint>Nothing left to do.</Hint>
+          ) : (
+            <div class="se-ov-list" ref={listRef} role="list" aria-label="Tasks" onKeyDown={roving.onKeyDown} onFocusIn={roving.onFocusIn}>
+              {rowNodes}
             </div>
           )}
         </>
