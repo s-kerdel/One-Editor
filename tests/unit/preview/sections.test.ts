@@ -12,8 +12,8 @@ const textOf = (html: string) => {
   return el.innerHTML.replace(/\s+/g, ' ').trim();
 };
 /** Rendering section by section must give the same document as rendering it whole. */
-function expectEquivalent(src: string) {
-  const { sections, defs } = splitSections(src);
+function expectEquivalent(src: string, soft?: { min: number; max: number }) {
+  const { sections, defs } = splitSections(src, soft);
   expect(sections.map((s) => s.text).join('\n')).toBe(src);
   let line = 0;
   for (const s of sections) {
@@ -66,6 +66,56 @@ describe('splitSections', () => {
   it('line numbers are continuous', () => {
     expect(starts(`a${pad}\n# b\n\n# c`)).toEqual([0, 241, 243]);
   });
+  // Soft cuts: long stretches without headings split at neutral paragraph starts (huge notes stay progressive).
+  const tricky = (i: number) =>
+    [
+      `Paragraph ${i} with **bold**, a [ref][r${i % 3}] and a [[wiki ${i}]] link that runs on like prose does.`,
+      `1. loose item ${i}\n\n2. second\n\n3.\n\n   indented continuation of 3`,
+      `- bullet\n\n  - nested after blank\n\n- back`,
+      `Text right after a list ends it ${i}.`,
+      `> [!note] Callout ${i}\n> line\n>\n> after a quoted blank`,
+      `> plain quote\n\n> second quote`,
+      `| a | b |\n|---|---|\n| ${i} | x |`,
+      '```ts\nconst a = 1;\n\n\nconst b = 2; // blank lines inside the fence\n```',
+      `- item with a fence\n\n  \`\`\`\n  code\n\n  more code\n  \`\`\`\n\nafter the list`,
+      `$$\na = b\n\nc = d\n$$`,
+      `<pre>\nraw\n\nstill raw\n</pre>`,
+      `<div>\nhtml block\n</div>`,
+      `%% comment\n\nstill comment %%`,
+      `Setext ${i}\n======`,
+      `    indented code\n\n    more indented`,
+      `***`,
+      `*emphasis start* and \\escaped and "quoted" and (parens) ${i}`,
+      `[r${i % 3}]: https://example.com/${i % 3}`,
+    ].join('\n\n');
+  const headingless = (size: number) => {
+    let src = 'Intro line.';
+    for (let i = 0; src.length < size; i++) src += '\n\n' + tricky(i);
+    return src + '\n';
+  };
+
+  it('splits long heading-less documents at neutral paragraph starts, rendering the same', () => {
+    expect(expectEquivalent(headingless(60_000))).toBeGreaterThan(3);
+  });
+
+  it('every soft-cut candidate is neutral (cut at all of them: still the same document)', () => {
+    expect(expectEquivalent(headingless(30_000), { min: 0, max: 0 })).toBeGreaterThan(200);
+  });
+
+  it('soft cuts keep sections bounded and are stable under edits (typing re-renders one section)', () => {
+    const src = headingless(400_000);
+    const a = splitSections(src).sections;
+    expect(Math.max(...a.map((s) => s.text.length))).toBeLessThan(40_000);
+    expect(a.length).toBeGreaterThan(400_000 / 40_000);
+    const mid = src.indexOf('Paragraph 150 ');
+    expect(mid).toBeGreaterThan(0);
+    for (const edit of [(t: string) => t.slice(0, mid) + 'typed ' + t.slice(mid), (t: string) => t.slice(0, mid) + 'A new paragraph.\n\n' + t.slice(mid)]) {
+      const b = splitSections(edit(src)).sections;
+      const old = new Set(a.map((s) => s.text));
+      expect(b.filter((s) => !old.has(s.text)).length, 'sections changed by one edit').toBeLessThanOrEqual(2);
+    }
+  });
+
   it('mixed real-world document stays equivalent', () => {
     const src = `---\ntags: [a]\n---\n\n# Title${pad}\n\n> [!note] Callout\n> - [ ] task\n\n## Code\n\n\`\`\`php\n<?php\n# php comment\n\`\`\`\n\nSetext\n======\n\ntext #tag\n\n| a |\n|---|\n| 1 |\n### Table end\n\n    # indented code\n\n#nospace-tag\n\n#### Deep\n$$x$$\n# End\n`;
     expect(expectEquivalent(src)).toBeGreaterThan(4);

@@ -4,6 +4,13 @@
 // A split is only made where it is provably neutral: a column-0 `# heading` always terminates every
 // open container, EXCEPT inside top-level fenced code, multi-line HTML blocks, `$$` math, `%%` comments
 // and frontmatter. The scanner tracks those; whenever it is unsure it errs towards NOT splitting.
+//
+// Long stretches without headings (logs, exports, journals) also split at "soft" cuts: a column-0
+// paragraph-like line after a blank line, outside every tracked construct and not a list item. After
+// a blank line such a line can only start a new top-level block (list items need indented content,
+// quotes and lazy continuations need no blank line), so the cut is neutral too. Soft cuts are
+// content-defined (a hash of the line, above a minimum size): an edit moves at most the cuts next to
+// it, so typing re-renders one section, not everything after the cursor.
 
 export interface Section {
   text: string;
@@ -31,8 +38,21 @@ const LIST_RE = /^( {0,3})((?:[-*+]|\d{1,9}[.)])[ \t]+)/;
 const HEADING_RE = /^#{1,6}(?:[ \t]|$)/;
 const DEF_RE = /^ {0,3}\[(?!\^)[^\]]+\]:\s*\S/;
 const MIN_SPLIT_SIZE = 6000;
+/** Soft cuts: none before this many chars since the last cut; at the first eligible line after the max. */
+const SOFT = { min: 8000, max: 32000 };
+/** First char of a soft-cut line: prose-like (not `>` `[` `<` `$` `|` `:` `%` `-` `+` `=` `#` `~` `` ` ``…). */
+const SOFT_START = /^[\p{L}\p{N}*_!("'\\]/u;
+/** Cheap line hash (FNV-1a over the first 64 chars): picks which eligible lines cut, by content. */
+/** A list item, also an empty one (`2.` alone continues a loose list after a blank line). */
+const ANY_ITEM = /^(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
+function lineHash(s: string): number {
+  let h = 0x811c9dc5;
+  for (let k = 0, n = Math.min(64, s.length); k < n; k++) h = Math.imul(h ^ s.charCodeAt(k), 0x01000193);
+  return h >>> 0;
+}
 
-export function splitSections(src: string): SplitResult {
+/** `soft`: soft-cut sizes (tests pass `max: 0` to cut at every eligible line). */
+export function splitSections(src: string, soft = SOFT): SplitResult {
   const whole = (): SplitResult => ({ sections: [{ text: src, start: 0, lines: countLines(src), open: true }], defs: '' });
   // Small documents render in one go; footnotes need document-wide numbering.
   if (src.length < MIN_SPLIT_SIZE || /^ {0,3}\[\^[^\]]+\]:/m.test(src)) return whole();
@@ -46,6 +66,8 @@ export function splitSections(src: string): SplitResult {
   let comment = false;
   let listIndent = -1; // content indent of the current top-level list item, -1 when not in a list
   let i = 0;
+  let off = 0; // char offset of line i
+  let cutOff = 0; // char offset of the last cut
 
   if (lines[0].trimEnd() === '---') {
     for (i = 1; i < lines.length; i++) {
@@ -54,9 +76,10 @@ export function splitSections(src: string): SplitResult {
     }
     if (i >= lines.length) return whole();
     i++;
+    for (let k = 0; k < i; k++) off += lines[k].length + 1;
   }
 
-  for (; i < lines.length; i++) {
+  for (; i < lines.length; off += lines[i].length + 1, i++) {
     const line = lines[i];
     const blank = line.trim() === '';
     const indent = line.length - line.trimStart().length;
@@ -132,7 +155,16 @@ export function splitSections(src: string): SplitResult {
       comment = true;
       continue;
     }
-    if (indent === 0 && i > 0 && HEADING_RE.test(line)) cuts.push(i);
+    if (indent === 0 && i > 0 && HEADING_RE.test(line)) {
+      cuts.push(i);
+      cutOff = off;
+    } else if (indent === 0 && i > 0 && listIndent < 0 && lines[i - 1].trim() === '' && SOFT_START.test(line) && !ANY_ITEM.test(line)) {
+      const since = off - cutOff;
+      if (since >= soft.max || (since >= soft.min && (lineHash(line) & 7) === 0)) {
+        cuts.push(i);
+        cutOff = off;
+      }
+    }
   }
 
   const open = !!fence || !!htmlEnd || math || comment;
