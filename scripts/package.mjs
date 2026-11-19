@@ -22,6 +22,8 @@ execFileSync(process.execPath, [path.join(root, 'scripts/stage.mjs'), '--out', s
 
 const [outDir] = await packager({
   dir: staged,
+  // Packager's scratch copy stays inside the project (never /tmp).
+  tmpdir: path.join(root, '.tmp/packager'),
   out: release,
   platform,
   arch,

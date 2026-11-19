@@ -112,6 +112,7 @@ there only if it must beat the shell.
 8. No new top-level frameworks (no React/Vue/Tailwind). Small focused libs are fine.
 9. Code comments explain *why*, briefly.
 10. **Stay inside the project.** Temp files, test workspaces and outputs go in `<project>/.tmp/<area>/` only. Never write outside the project (no `/tmp`, no Windows side via `/mnt/c` or `%TEMP%`, no user folders) and never run Windows executables via WSL interop. If a test truly needs that (e.g. real NTFS), stop and ask the lead, who asks the user first.
+    vitest and both Playwright configs set `TMPDIR=<project>/.tmp/tmp`; for ad-hoc scripts (benchmarks, node -e) set `TMPDIR=$PWD/.tmp/tmp` yourself.
 
 ## Running Playwright in parallel
 Also pass a private results dir, or parallel runs clobber `test-results/`:
