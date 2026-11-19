@@ -163,6 +163,7 @@ Numbered lists **renumber themselves** as you edit.
 | **Rich text** (web page, Word, Google Docs) | Clean Markdown |
 | **A file from the tree** | A `[[link]]` or `![[embed]]` |
 | **Terminal / AI output** padded with spaces | **Trailing spaces removed** from every line (also tabs, NBSP); blank lines at the end dropped |
+| **A terminal copy that is one long line** (Windows Terminal pads every row to the window width) | **Split back into its lines**; a line that wrapped over two rows stays one line |
 | Anything with `Ctrl+Shift+V` | **Exactly as copied**: plain text, no trimming, no conversion |
 
 **Where attachments go:** Settings → Attachments. Default is the `attachments/` folder.
@@ -179,6 +180,7 @@ Numbered lists **renumber themselves** as you edit.
 | **Any time** | Palette or right-click → **Trim trailing whitespace** (selection, else the whole file) | — |
 
 - **Markdown hard breaks stay:** two spaces at a line end before a line with text. Turn off: **Keep Markdown hard breaks**. Code blocks and frontmatter are always trimmed.
+- **Terminal rows:** found by their width (40–400 columns). Rows with CJK / emoji (two columns each) don't line up, so that paste stays one line — just without its trailing spaces.
 - **`.editorconfig` wins:** `trim_trailing_whitespace = true` → all lines, `= false` → never.
 - **Undo** after a save undoes your edit, not the cleanup.
 

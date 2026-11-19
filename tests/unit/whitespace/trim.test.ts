@@ -6,7 +6,7 @@ const md = (text: string, o: Partial<Parameters<typeof trimChanges>[1]> = {}) =>
 
 describe('trimPasted (terminal / AI output)', () => {
   it('strips spaces, tabs, NBSP and other Unicode spaces at every line end', () => {
-    expect(trimPasted('ls -la    \n  cd /tmp\t\t\nnbsp  \nwide　\nthin ​')).toBe('ls -la\n  cd /tmp\nnbsp\nwide\nthin');
+    expect(trimPasted('ls -la    \n  cd /tmp\t\t\nnbsp\u00a0\u00a0\nwide\u3000\nthin\u2009\u200b')).toBe('ls -la\n  cd /tmp\nnbsp\nwide\nthin');
   });
   it('drops trailing blank lines; keeps one final newline when the clipboard had one', () => {
     expect(trimPasted('a   \nb   \n      \n   \n')).toBe('a\nb\n');

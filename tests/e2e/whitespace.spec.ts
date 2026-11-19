@@ -7,6 +7,9 @@ import { test, expect } from './harness';
 import { openNote } from './editor-helpers';
 
 const content = (page: Page) => page.evaluate(() => (window as any).__secEdit.editor.getContent() as string);
+// Windows Terminal copy of Claude Code output: rows of 280 padded with spaces, no newline at all.
+const TERMINAL = fs.readFileSync(path.resolve('tests/unit/whitespace/terminal-padded.txt'), 'utf8');
+const TERMINAL_LINES = '```yaml\nvars:                      # used in every environment\n  domain: corp.local\n  share: ADMIN$\n  port: 8080';
 const PADDED = 'drwxr-xr-x  2 root root 4096 .          \n-rw-r--r--  1 root root  220 .bashrc      \n   \n';
 
 async function setup(page: Page, ws: { root: string; open(p: Page): Promise<void> }, settings: Record<string, unknown> = {}) {
@@ -14,6 +17,7 @@ async function setup(page: Page, ws: { root: string; open(p: Page): Promise<void
   fs.writeFileSync(path.join(ws.root, 'ops/out.md'), 'Output:\n');
   fs.writeFileSync(path.join(ws.root, 'ops/run.ts'), 'const a = 1;\n');
   fs.writeFileSync(path.join(ws.root, 'ops/keep.md'), 'untouched  \nedit me\nalso untouched  \n');
+  fs.writeFileSync(path.join(ws.root, 'ops/conf.yaml'), '');
   await ws.open(page);
   // The save hook lives in the lazy format chunk: wait until it is in (its real functions have names).
   await page.waitForFunction(() => (window as any).__secEditFormat?.formatDocument?.name !== '', null, { timeout: 15000 });
@@ -47,6 +51,20 @@ test.describe('trailing whitespace', () => {
     await expect.poll(() => content(page)).toBe('const a = 1;\nlet b = 2;\nlet c = 3;\n');
     await pasteAtEnd(page, 'ops/out.md', 'raw  \n', true);
     await expect.poll(() => content(page)).toBe('Output:\nraw  \n');
+  });
+
+  test('a terminal copy with no newlines (rows padded to the window width) pastes as its lines', async ({ page, ws }) => {
+    await setup(page, ws);
+    expect(TERMINAL).not.toMatch(/\n/);
+    await pasteAtEnd(page, 'ops/out.md', TERMINAL);
+    await expect.poll(() => content(page)).toBe(`Output:\n${TERMINAL_LINES}`);
+    await pasteAtEnd(page, 'ops/conf.yaml', TERMINAL);
+    await expect.poll(() => content(page)).toBe(TERMINAL_LINES);
+    // Ctrl+Shift+V: exactly as copied (one long padded line).
+    await page.keyboard.press('Control+a');
+    await page.keyboard.press('Delete');
+    await page.keyboard.press('Control+Shift+v');
+    await expect.poll(() => content(page)).toBe(TERMINAL);
   });
 
   test("save with 'changed' trims only the edited line; untouched lines keep their spaces", async ({ page, ws }) => {
