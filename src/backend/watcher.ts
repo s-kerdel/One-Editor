@@ -184,7 +184,10 @@ export interface DirPollOptions {
 export function dirPollBackend(root: string, sink: HintSink, src: DirPollSource, o: DirPollOptions = {}): WatchBackend {
   const minMs = o.minMs ?? 2000;
   const maxMs = o.maxMs ?? 10_000;
+  /** Folder → last seen mtime; undefined = not seen yet (initial folders); NEW = found after start. */
   const dirs = new Map<string, number | undefined>();
+  const NEW = -1;
+  let started = false;
   const files = new Map<string, number | undefined>();
   let interval = minMs;
   let timer: NodeJS.Timeout | null = null;
@@ -220,7 +223,9 @@ export function dirPollBackend(root: string, sink: HintSink, src: DirPollSource,
           return;
         }
         dirs.set(rel, st.mtimeMs);
-        if (prev === undefined || prev === st.mtimeMs) return; // first sighting / unchanged
+        // Initial folders: the workspace walk just listed them. A folder found later may have gained
+        // entries between its own listing and this first look: diff it once.
+        if (prev === undefined || (prev !== NEW && prev === st.mtimeMs)) return;
         changed = true;
         await fsDelayAsync();
         const names = await fsp.readdir(abs(rel)).catch(() => null);
@@ -245,6 +250,7 @@ export function dirPollBackend(root: string, sink: HintSink, src: DirPollSource,
     } finally {
       running = false;
     }
+    started = true;
     interval = changed ? minMs : Math.min(maxMs, Math.round(interval * 1.5));
     schedule();
   };
@@ -253,7 +259,12 @@ export function dirPollBackend(root: string, sink: HintSink, src: DirPollSource,
     mode: 'dirpoll',
     wantsDirs: true,
     addDir(rel) {
-      if (!dirs.has(rel)) dirs.set(rel, undefined);
+      if (dirs.has(rel)) return;
+      dirs.set(rel, started ? NEW : undefined);
+      if (started && !running) {
+        interval = minMs; // something is happening: look again soon
+        schedule();
+      }
     },
     removeDir(rel) {
       for (const k of [...dirs.keys()]) if (k === rel || rel === '' || k.startsWith(rel + '/')) dirs.delete(k);

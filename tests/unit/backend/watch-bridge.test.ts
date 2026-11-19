@@ -114,3 +114,23 @@ describe('ignored folders are dropped at the watcher', () => {
     await fsp.rm(dir, { recursive: true, force: true });
   });
 });
+
+describe('folder poller: a folder found after start', () => {
+  it('is diffed on its first look (entries made between its listing and that look are not lost)', async () => {
+    await fsp.mkdir(TMP, { recursive: true });
+    const dir = await fsp.mkdtemp(path.join(TMP, 'poll-new-'));
+    const known = new Map<string, Set<string>>([['', new Set()]]);
+    const hints = new Set<string>();
+    const b = dirPollBackend(dir, { hint: (r) => hints.add(r), rescan: () => {} }, { children: (r) => known.get(r) ?? new Set(), hotFiles: () => [] }, { minMs: 30, maxMs: 60 });
+    b.addDir('');
+    await new Promise((r) => setTimeout(r, 100)); // started
+    // The workspace listed the new folder (empty) and registered it; then files appeared — and nothing more.
+    fs.mkdirSync(path.join(dir, 'late'));
+    known.set('late', new Set());
+    b.addDir('late');
+    fs.writeFileSync(path.join(dir, 'late', 'x.md'), 'x');
+    await waitFor(() => hints.has('late/x.md'));
+    b.close();
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+});
