@@ -111,5 +111,5 @@ test('a "Save changes?" prompt is not cut short: the window waits for the answer
   const closed = app.waitForEvent('close');
   await dlg.locator('.se-btn', { hasText: 'Save' }).last().click();
   await closed;
-  expect(await fsp.readFile(path.join(el.ws, 'README.md'), 'utf8')).toContain('slow reader ');
+  expect(await fsp.readFile(path.join(el.ws, 'README.md'), 'utf8')).toContain('slow reader') // trailing space trimmed on save;
 });

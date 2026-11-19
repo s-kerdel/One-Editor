@@ -215,7 +215,7 @@ test('the overlay’s own close button goes through the unsaved-changes flow', a
     const closed = app.waitForEvent('close');
     await dlg.locator('.se-btn', { hasText: 'Save' }).last().click();
     await closed;
-    expect(await fsp.readFile(path.join(el.ws, 'README.md'), 'utf8')).toContain('close-button ');
+    expect(await fsp.readFile(path.join(el.ws, 'README.md'), 'utf8')).toContain('close-button') // trailing space trimmed on save;
   } finally {
     x?.close();
   }
@@ -363,7 +363,7 @@ test('Restart now: goes through the unsaved-changes flow, then comes back with t
   await dlg.locator('.se-btn', { hasText: 'Save' }).last().click();
   await exited;
   expect(stdout.join('')).toContain('[sec-edit:relaunch]');
-  expect(await fsp.readFile(path.join(el.ws, 'README.md'), 'utf8')).toContain('restart-safe ');
+  expect(await fsp.readFile(path.join(el.ws, 'README.md'), 'utf8')).toContain('restart-safe') // trailing space trimmed on save;
   expect(JSON.parse(await fsp.readFile(path.join(el.userData, 'settings.json'), 'utf8')).windowFrame).toBe('native');
   // The relaunched app (same profile) has the native frame.
   const next = await launch();

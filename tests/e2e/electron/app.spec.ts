@@ -131,5 +131,5 @@ test('closing with unsaved changes (autosave off) asks first', async ({ el }) =>
   const closed = app.waitForEvent('close');
   await dlg.locator('.se-btn', { hasText: 'Save' }).last().click();
   await closed;
-  expect(await fsp.readFile(path.join(el.ws, 'README.md'), 'utf8')).toContain('unsaved ');
+  expect(await fsp.readFile(path.join(el.ws, 'README.md'), 'utf8')).toContain('unsaved') // trailing space trimmed on save;
 });
