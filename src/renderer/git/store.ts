@@ -72,8 +72,14 @@ export class GitStore {
   /** Status after an action the user just did: the backend runs git now and answers with the result. */
   refreshNow(): Promise<void> {
     this.fresh = true;
+    // A pull in flight started before this call: its answer can predate what the user just did
+    // (switching branches right after a save then skipped the uncommitted-changes warning).
+    // Wait for it, then pull: the caller always gets a status from after its own action.
+    // Everyone asking during that run shares ONE follow-up (single-flight).
+    if (this.running) return (this.followUp ??= this.running.then(() => ((this.followUp = null), this.pull())));
     return this.pull();
   }
+  private followUp: Promise<void> | null = null;
 
   /** Fetch what changed since our version (or after the pull in flight). */
   pull(): Promise<void> {

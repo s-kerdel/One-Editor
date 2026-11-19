@@ -67,6 +67,20 @@ describe('GitStore', () => {
     expect(s.marks.value.file('a.md')?.state).toBe('modified');
   });
 
+  it('refreshNow during a run resolves with a status from after the call (not the stale one in flight)', async () => {
+    // The run in flight started before the user's change; its answer must not be what refreshNow returns
+    // (switching branches right after a save skipped the uncommitted-changes warning).
+    const f = fakeBackend([status(), status({ entries: [{ path: 'a.md', state: 'modified' }] })]);
+    const s = new GitStore(f.backend, { debounceMs: 5 });
+    const release = f.hold();
+    void s.refreshNow(); // e.g. the status after a branch switch, still running
+    const mine = s.refreshNow(); // the user just changed a.md
+    release();
+    await mine;
+    expect(s.marks.value.file('a.md')?.state, 'state when refreshNow resolved').toBe('modified');
+    expect(f.calls.status).toBe(2);
+  });
+
   it('identical results do not re-render (signal value kept)', async () => {
     const f = fakeBackend([status({ ms: 3 }), status({ ms: 9 })]);
     const s = new GitStore(f.backend);

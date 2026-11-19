@@ -311,6 +311,10 @@ export function SearchPanel() {
     // A panel that mounts late (lazy chunk after a reload) must not take focus from a dialog the user
     // is already typing in (palette, settings).
     if (app.overlay.value && focusTick.value === 0) return;
+    // Already in another field of this panel (the replace box, focused before this effect ran after
+    // paint): keep it — moving focus now sends the next keystrokes into the query.
+    const active = document.activeElement as HTMLElement | null;
+    if (active && active !== el && active.matches('input, textarea') && el.closest('.se-search')?.contains(active)) return;
     el.focus();
     el.select();
   }, [focusTick.value]);
