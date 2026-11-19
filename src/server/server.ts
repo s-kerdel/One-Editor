@@ -167,7 +167,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
         // Text pages for the search workers (fetched by them directly, never through the UI thread).
         if (url.pathname === '/api/index/page' && req.method === 'GET') {
           const body = await service.indexPageRaw(url.searchParams.get('cursor'), Number(url.searchParams.get('maxBytes')) || undefined);
-          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(body);
+          res.writeHead(200, { 'content-type': 'application/octet-stream', 'cache-control': 'no-store' }).end(body);
           return;
         }
         if (url.pathname === '/api/index/files' && req.method === 'POST') {

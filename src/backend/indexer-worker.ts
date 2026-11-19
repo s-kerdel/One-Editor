@@ -3,6 +3,7 @@
 // go back as UTF-8 JSON bytes (transferred): the host's event loop forwards them without parsing.
 import { parentPort, workerData } from 'node:worker_threads';
 import { Indexer, type IndexerConfig } from './indexer';
+import { encodeTextFrame } from '../shared/textframe';
 
 const port = parentPort!;
 const ix = new Indexer(workerData as IndexerConfig);
@@ -17,9 +18,9 @@ port.on('message', async (m: { id?: number; op: string; [k: string]: any }) => {
       case 'options':
         return ix.setOptions(m.opts);
       case 'page': {
-        const { stamps, ...page } = await ix.page(m.cursor, m.maxBytes);
-        const body = enc.encode(JSON.stringify(page));
-        return port.postMessage({ id: m.id, stamps, body, lastPass: page.nextCursor === null ? passStats() : undefined }, [body.buffer]);
+        const { stamps, files, ...meta } = await ix.page(m.cursor, m.maxBytes);
+        const body = encodeTextFrame(meta, files);
+        return port.postMessage({ id: m.id, stamps, body, passOpen: meta.nextCursor !== null, lastPass: meta.nextCursor === null ? passStats() : undefined }, [body.buffer as ArrayBuffer]);
       }
       case 'files': {
         const { stamps, ...res } = await ix.readFiles(m.paths);

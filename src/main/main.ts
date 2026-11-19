@@ -381,7 +381,7 @@ function main() {
         if (req.headers.get('x-sec-edit-index') !== indexToken) return new Response('forbidden', { status: 403 });
         try {
           const body = route.op === 'page' ? await service.indexPageRaw(route.params.get('cursor'), Number(route.params.get('maxBytes')) || undefined) : await service.indexFilesRaw(await req.json());
-          return new Response(body as Uint8Array<ArrayBuffer>, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+          return new Response(body as Uint8Array<ArrayBuffer>, { headers: { 'content-type': route.op === 'page' ? 'application/octet-stream' : 'application/json', 'cache-control': 'no-store' } });
         } catch (err) {
           return new Response(String((err as Error)?.message ?? err), { status: err instanceof BackendFailure && err.code === 'NO_WORKSPACE' ? 409 : 500 });
         }

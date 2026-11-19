@@ -14,6 +14,7 @@ import { TextPass, upperBound } from './textpass';
 import { CacheWriter, TextCache } from './indexcache';
 import { isProbablyTextName } from './textnames';
 import { fsDelay } from './fsdelay';
+import type { FrameFile } from '../shared/textframe';
 
 export interface IndexOptions {
   /** Honour .gitignore files, .git/info/exclude and the global git excludes file. */
@@ -211,9 +212,11 @@ export class Indexer {
     if (d.binary) return null;
     const content = toLf(d.text);
     if (content.includes('\u0000')) return null;
-    const data: FileData = { path: rel, content, mtime, eol: detectEol(d.text), size };
+    const data: FrameFile = { path: rel, content, mtime, eol: detectEol(d.text), size };
     if (d.bom) data.bom = true;
     if (d.encoding !== 'utf8') data.encoding = d.encoding;
+    // Valid UTF-8 without BOM / CR: the text's UTF-8 is exactly what was read — forward those bytes.
+    else if (!d.bom && content === d.text) data.utf8 = bytes;
     return data;
   }
 
@@ -258,7 +261,7 @@ export class Indexer {
     fromCache: (rel: string, mtime: number, size: number, cache: TextCache): FileData | null => {
       const c = cache.get(rel);
       if (!c || c.content === null) return null;
-      const d: FileData = { path: rel, content: c.content, mtime, eol: c.eol, size };
+      const d: FrameFile = { path: rel, content: c.content, mtime, eol: c.eol, size, utf8: cache.getBytes(rel) };
       if (c.bom) d.bom = true;
       if (c.encoding) d.encoding = c.encoding;
       return d;

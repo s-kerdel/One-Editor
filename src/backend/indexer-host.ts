@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { Worker } from 'node:worker_threads';
 import { Indexer, type IndexOptions, type IndexPage, type IndexerConfig, type PathSnapshot, type ReadFilesResult, type Stamp } from './indexer';
 import type { IgnoreSet } from './gitignore';
+import { decodeTextFrame, encodeTextFrame, type FrameFile } from '../shared/textframe';
 
 declare const __SEC_EDIT_INDEXER_SRC__: string | undefined;
 
@@ -27,7 +28,7 @@ export function indexerSource(): string | null {
 }
 
 export interface Raw {
-  /** UTF-8 JSON (a TextPage, or a ReadFilesResult without stamps). */
+  /** Pages: a text frame (shared/textframe.ts); file batches: UTF-8 JSON (ReadFilesResult without stamps). */
   body: Uint8Array;
   stamps: Stamp[];
 }
@@ -62,12 +63,13 @@ export class LocalIndexerHost implements IndexerHost {
   setOptions(o: Required<IndexOptions>) {
     this.ix.setOptions(o);
   }
-  page(cursor: string | null, maxBytes?: number) {
-    return this.ix.page(cursor, maxBytes);
+  async page(cursor: string | null, maxBytes?: number): Promise<IndexPage> {
+    const p = await this.ix.page(cursor, maxBytes);
+    return { ...p, files: p.files.map(({ utf8: _u, ...f }: FrameFile) => f) };
   }
   async pageRaw(cursor: string | null, maxBytes?: number): Promise<Raw> {
-    const { stamps, ...page } = await this.ix.page(cursor, maxBytes);
-    return { body: enc.encode(JSON.stringify(page)), stamps };
+    const { stamps, files, ...meta } = await this.ix.page(cursor, maxBytes);
+    return { body: encodeTextFrame(meta, files), stamps };
   }
   readFiles(paths: string[]) {
     return this.ix.readFiles(paths);
@@ -93,51 +95,93 @@ export class LocalIndexerHost implements IndexerHost {
   }
 }
 
-type Reply = { id: number; error?: string; body?: Uint8Array; stamps?: Stamp[]; result?: unknown; lastPass?: { read: number; cached: number } };
+type Reply = { id: number; error?: string; body?: Uint8Array; stamps?: Stamp[]; result?: unknown; lastPass?: { read: number; cached: number }; passOpen?: boolean };
+
+/** An idle indexer thread is stopped (its heap — pass buffers, cache — goes with it) and restarted on demand. */
+const IDLE_MS = Number(process.env.SEC_EDIT_INDEXER_IDLE_MS) || 10_000;
 
 export class WorkerIndexerHost implements IndexerHost {
   readonly inWorker = true;
-  private w: Worker;
+  private w: Worker | null = null;
   private seq = 0;
   private waiting = new Map<number, { resolve: (r: Reply) => void; reject: (e: unknown) => void }>();
   private passCbs = new Set<() => void>();
+  private idle: NodeJS.Timeout | null = null;
+  /** Re-sent to a restarted thread. */
+  private snap: PathSnapshot | null = null;
+  private opts: Required<IndexOptions> | null = null;
+  private disposed = false;
+  /** A pass is part-way (e.g. paused while hidden): its state lives in the thread, so the thread stays. */
+  private passOpen = false;
   lastPass: { read: number; cached: number } | null = null;
 
-  constructor(src: string, cfg: IndexerConfig) {
-    this.w = new Worker(src, { eval: true, workerData: cfg });
-    this.w.unref();
-    this.w.on('message', (m: Reply & { type?: string }) => {
+  constructor(
+    private readonly src: string,
+    private readonly cfg: IndexerConfig,
+  ) {}
+
+  private worker(): Worker {
+    if (this.w) return this.w;
+    const w = new Worker(this.src, { eval: true, workerData: this.opts ? { ...this.cfg, index: this.opts } : this.cfg });
+    w.unref();
+    w.on('message', (m: Reply & { type?: string }) => {
       if (m.type === 'passStart') return this.passCbs.forEach((f) => f());
       const p = this.waiting.get(m.id);
       if (!p) return;
       this.waiting.delete(m.id);
       if (m.lastPass) this.lastPass = m.lastPass;
+      if (m.passOpen !== undefined) this.passOpen = m.passOpen;
       if (m.error) p.reject(new Error(m.error));
       else p.resolve(m);
+      this.armIdle();
     });
-    this.w.on('error', (err) => this.fail(err));
-    this.w.on('exit', () => this.fail(new Error('indexer stopped')));
+    w.on('error', (err) => this.fail(w, err));
+    w.on('exit', () => this.fail(w, new Error('indexer stopped')));
+    if (this.snap) w.postMessage({ op: 'paths', snap: this.snap });
+    this.w = w;
+    return w;
   }
 
-  private fail(err: unknown) {
+  private fail(w: Worker, err: unknown) {
+    if (this.w !== w) return; // an idle thread we stopped on purpose
+    this.w = null;
     const all = [...this.waiting.values()];
     this.waiting.clear();
     for (const p of all) p.reject(err);
   }
 
+  private armIdle() {
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = null;
+    if (this.waiting.size || this.disposed || this.passOpen) return;
+    this.idle = setTimeout(() => {
+      this.idle = null;
+      const w = this.w;
+      if (!w || this.waiting.size) return;
+      this.w = null;
+      void w.terminate();
+    }, IDLE_MS);
+    this.idle.unref?.();
+  }
+
   private call(op: string, args: Record<string, unknown>): Promise<Reply> {
     const id = ++this.seq;
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = null;
+    const w = this.worker();
     return new Promise((resolve, reject) => {
       this.waiting.set(id, { resolve, reject });
-      this.w.postMessage({ id, op, ...args });
+      w.postMessage({ id, op, ...args });
     });
   }
 
   setPaths(snap: PathSnapshot) {
-    this.w.postMessage({ op: 'paths', snap });
+    this.snap = snap;
+    this.w?.postMessage({ op: 'paths', snap });
   }
   setOptions(opts: Required<IndexOptions>) {
-    this.w.postMessage({ op: 'options', opts });
+    this.opts = opts;
+    this.w?.postMessage({ op: 'options', opts });
   }
   async pageRaw(cursor: string | null, maxBytes?: number): Promise<Raw> {
     const r = await this.call('page', { cursor, maxBytes });
@@ -145,7 +189,7 @@ export class WorkerIndexerHost implements IndexerHost {
   }
   async page(cursor: string | null, maxBytes?: number): Promise<IndexPage> {
     const r = await this.pageRaw(cursor, maxBytes);
-    return { ...JSON.parse(dec.decode(r.body)), stamps: r.stamps };
+    return { ...decodeTextFrame<Omit<IndexPage, 'files' | 'stamps'>>(r.body), stamps: r.stamps };
   }
   async readFilesRaw(paths: string[]): Promise<Raw> {
     const r = await this.call('files', { paths });
@@ -162,10 +206,21 @@ export class WorkerIndexerHost implements IndexerHost {
     this.passCbs.add(cb);
   }
   warm() {
-    this.w.postMessage({ op: 'warm' });
+    this.worker().postMessage({ op: 'warm' });
+    this.armIdle();
+  }
+  /** Is the thread running now (tests: it stops when idle). */
+  get running() {
+    return !!this.w;
   }
   dispose() {
-    this.w.postMessage({ op: 'dispose' });
-    void this.w.terminate();
+    this.disposed = true;
+    if (this.idle) clearTimeout(this.idle);
+    const w = this.w;
+    this.w = null;
+    if (w) {
+      w.postMessage({ op: 'dispose' });
+      void w.terminate();
+    }
   }
 }

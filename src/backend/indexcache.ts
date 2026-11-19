@@ -128,6 +128,12 @@ export class TextCache {
     return out;
   }
 
+  /** The cached text as its UTF-8 bytes (a view: no decode / re-encode when forwarding it). */
+  getBytes(p: string): Uint8Array | undefined {
+    const s = this.slots.get(p);
+    return s && !(s.flags & F_SKIP) ? this.buf.subarray(s.contentStart, s.end) : undefined;
+  }
+
   /** The record's bytes, for copying an unchanged entry into the next cache without re-encoding. */
   rawRecord(p: string): Buffer | undefined {
     const s = this.slots.get(p);

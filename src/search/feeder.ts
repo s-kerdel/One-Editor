@@ -5,6 +5,7 @@
 import type { FileData } from '../shared/api';
 import type { FromWorker, ToWorker } from './protocol';
 import { shardOfPath } from './shards';
+import { decodeTextFrame } from '../shared/textframe';
 import type { SearchDoc } from './types';
 
 export interface FeedSource {
@@ -38,6 +39,7 @@ export class Feeder {
     private readonly peers: Array<{ postMessage(m: ToWorker): void } | undefined>,
     private readonly post: (m: FromWorker) => void,
     private readonly fetchJson: FetchJson,
+    private readonly fetchBytes: FetchBytes = fetchArrayBuffer,
   ) {}
 
   get shards() {
@@ -77,7 +79,8 @@ export class Feeder {
   /** A full pass: every shard gets its documents, then `done`. Resolves when the last page is routed. */
   async feed(gen: number, src: FeedSource, maxBytes: number): Promise<void> {
     this.gen = gen;
-    const get = (cursor: string | null) => this.fetchJson(src.base + `page?maxBytes=${maxBytes}${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`, { headers: this.headers(src) }) as Promise<Page>;
+    // Pages are text frames: a small JSON header + raw UTF-8 (decoded here, off the UI thread).
+    const get = async (cursor: string | null): Promise<Page> => decodeTextFrame<Page>(await this.fetchBytes(src.base + `page?maxBytes=${maxBytes}${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`, { headers: this.headers(src) }));
     try {
       let next: Promise<Page> | null = get(null);
       while (next) {
@@ -125,6 +128,14 @@ export class Feeder {
     }
   }
 }
+
+export type FetchBytes = (url: string, init?: { headers?: Record<string, string> }) => Promise<ArrayBuffer>;
+
+export const fetchArrayBuffer: FetchBytes = async (url, init) => {
+  const res = await fetch(url, init);
+  if (!res.ok) throw new Error(`index channel: HTTP ${res.status}`);
+  return res.arrayBuffer();
+};
 
 /** fetch → JSON, failing on HTTP errors (works in workers and in Node). */
 export const fetchJson: FetchJson = async (url, init) => {
