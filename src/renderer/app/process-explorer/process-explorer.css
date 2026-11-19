@@ -1,6 +1,6 @@
 .se-procx { width: min(1240px, 96vw); max-width: none; }
 .se-procx-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.se-procx-list { max-height: 64vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.se-procx-list { max-height: 64vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); contain: content; }
 .se-procx table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
 .se-procx th, .se-procx td { padding: 3px 8px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .se-procx th { position: sticky; top: 0; background: var(--bg-elevated, var(--bg)); color: var(--text-muted); font-weight: 600; }

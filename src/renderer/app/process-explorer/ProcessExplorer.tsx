@@ -2,6 +2,7 @@
 // style), refreshed every 2 s while open. Closed: no timer, no observer, no backend helper.
 // Backend rows: shared/processes.ts + backend/processes.ts; UI rows: here + ./sources.ts.
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import type { VNode } from 'preact';
 import { app } from '../app';
 import { activityNow, confirmDialog } from '../ui';
 import { activityLog } from '../activity';
@@ -14,15 +15,18 @@ import { uiSourceRows } from './sources';
 import './process-explorer.css';
 
 export const REFRESH_MS = 2000;
+/** Window not focused (the user is elsewhere, e.g. reproducing the load): refresh less often. */
+export const REFRESH_UNFOCUSED_MS = 5000;
 
 /** Test hook: what the explorer keeps alive (all 0 once it is closed). */
 export const explorerLive = { timers: 0, observers: 0, polls: 0 };
 
 const ACTION_LABEL: Record<ProcAction, string> = { stopGit: 'Stop', stopForeground: 'Stop', kill: 'End', restartIndexer: 'Restart' };
 
+/** Coarse on purpose: a row only re-renders when what it shows changes (not every refresh). */
 function ago(at: number) {
   const s = Math.max(0, Math.round((Date.now() - at) / 1000));
-  return s < 60 ? `${s} s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+  return s < 10 ? 'just now' : s < 60 ? `${Math.floor(s / 10) * 10} s ago` : s < 3600 ? `${Math.floor(s / 60)} min ago` : `${Math.floor(s / 3600)} h ago`;
 }
 
 /** Current run (+ why), else the last run and how long ago — from the shared activity log. */
@@ -89,14 +93,48 @@ function cell(v: number | null | undefined, digits = 1) {
   return v == null || !Number.isFinite(v) ? '—' : v.toFixed(digits);
 }
 
+function Row({ r, depth, doing, act }: { r: ProcRow; depth: number; doing: string; act: (r: ProcRow, a: ProcAction) => void }) {
+  return (
+    <tr data-row={r.id} data-kind={r.kind}>
+      <td class="se-procx-name" style={{ paddingLeft: `${8 + depth * 14}px` }} title={r.detail}>
+        {r.name}
+      </td>
+      <td class="n">{r.pid ?? ''}</td>
+      <td class="n">{cell(r.cpu)}</td>
+      <td class="n">{cell(r.busy, 0)}</td>
+      <td class="n" title={r.memKind}>
+        {r.mem == null ? '—' : `${cell(r.mem)} MB`}
+      </td>
+      <td class="se-procx-state" title={r.detail}>
+        {[r.state, r.detail].filter(Boolean).join(' · ')}
+      </td>
+      <td class="se-procx-doing" title={doing}>
+        {doing}
+      </td>
+      <td class="se-procx-act">
+        {r.actions?.map((a) => (
+          <button class="se-btn" data-action={a} onClick={() => act(r, a)}>
+            {ACTION_LABEL[a]}
+          </button>
+        ))}
+      </td>
+    </tr>
+  );
+}
+
 function ProcessExplorer() {
   const [snap, setSnap] = useState<ProcSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const longTasks = useRef(0);
   const prev = useRef<{ at: number; longTasks: number } | null>(null);
   const renderMs = useRef(0);
+  const rowCache = useRef(new Map<string, { sig: string; vnode: VNode }>());
+  const actRef = useRef<(r: ProcRow, a: ProcAction) => Promise<void>>(async () => {});
+  const stableAct = useRef((r: ProcRow, a: ProcAction) => void actRef.current(r, a)).current;
+  const dialogRef = useRef<HTMLDivElement>(null);
   const t0 = performance.now();
   const close = () => (app.overlay.value = null);
+  useEffect(() => dialogRef.current?.focus(), []);
 
   useEffect(() => {
     let alive = true;
@@ -108,8 +146,10 @@ function ProcessExplorer() {
     } catch {
       obs = null;
     }
+    let timer: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
-      if (document.visibilityState === 'hidden') return; // minimised: nobody is looking
+      timer = null;
+      if (document.visibilityState === 'hidden') return; // minimised: nothing until shown (below)
       explorerLive.polls++;
       try {
         const s = await app.backend.processes?.({ op: 'snapshot' });
@@ -119,13 +159,16 @@ function ProcessExplorer() {
       } catch (err) {
         if (alive) setError((err as Error).message);
       }
+      if (alive) timer = setTimeout(poll, document.hasFocus() ? REFRESH_MS : REFRESH_UNFOCUSED_MS);
     };
+    const onVisible = () => void (document.visibilityState === 'visible' && alive && !timer && poll());
+    document.addEventListener('visibilitychange', onVisible);
     void poll();
-    const timer = setInterval(poll, REFRESH_MS);
     explorerLive.timers++;
     return () => {
       alive = false;
-      clearInterval(timer);
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
       explorerLive.timers--;
       if (obs) {
         obs.disconnect();
@@ -147,6 +190,7 @@ function ProcessExplorer() {
   }
 
   const act = async (r: ProcRow, a: ProcAction) => {
+    if (!r.pid && a !== 'restartIndexer') return;
     const backend = app.backend;
     if (a === 'restartIndexer') {
       await backend.processes?.({ op: 'restartIndexer' });
@@ -166,6 +210,19 @@ function ProcessExplorer() {
     app.toast(ok ? `${r.name} stopped` : `Could not stop ${r.name} (it may have finished)`, ok ? 'success' : 'error');
   };
 
+  // Rows keep their vnode while what they show is unchanged: Preact then skips them (most rows are
+  // static between refreshes); clicks go through a ref, so a reused row calls the current handler.
+  actRef.current = act;
+  const rowNodes = ordered.map(({ row: r, depth, doing }) => {
+    const sig = [depth, r.name, r.pid, cell(r.cpu), cell(r.busy, 0), r.mem == null ? '' : cell(r.mem), r.memKind, r.state, r.detail, doing, r.actions?.join()].join('\u0001');
+    const hit = rowCache.current.get(r.id);
+    if (hit && hit.sig === sig) return hit.vnode;
+    const vnode = <Row key={r.id} r={r} depth={depth} doing={doing} act={stableAct} />;
+    rowCache.current.set(r.id, { sig, vnode });
+    return vnode;
+  });
+  if (rowCache.current.size > ordered.length * 2) for (const id of [...rowCache.current.keys()]) if (!ordered.some((o) => o.row.id === id)) rowCache.current.delete(id);
+
   const copy = () => {
     const head = `sec-edit process list · ${snap?.platform ?? ''} · ${new Date().toISOString()}${snap?.notes?.length ? `\n${snap.notes.join('\n')}` : ''}`;
     void copyText(procText(ordered, head), 'Process list');
@@ -173,7 +230,7 @@ function ProcessExplorer() {
 
   return (
     <div class="se-overlay se-dialog-backdrop" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div class="se-dialog se-procx" role="dialog" aria-modal="true" aria-label="Process explorer" tabIndex={-1} ref={(el) => el?.focus()} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), close())}>
+      <div class="se-dialog se-procx" role="dialog" aria-modal="true" aria-label="Process explorer" tabIndex={-1} ref={dialogRef} onKeyDown={(e) => e.key === 'Escape' && (e.stopPropagation(), close())}>
         <div class="se-procx-head">
           <h2 class="se-dialog-title">Process explorer</h2>
           <button class="se-btn" onClick={copy} disabled={!snap}>
@@ -199,34 +256,8 @@ function ProcessExplorer() {
                   <th />
                 </tr>
               </thead>
-              <tbody>
-                {ordered.map(({ row: r, depth, doing }) => (
-                  <tr key={r.id} data-row={r.id} data-kind={r.kind}>
-                    <td class="se-procx-name" style={{ paddingLeft: `${8 + depth * 14}px` }} title={r.detail}>
-                      {r.name}
-                    </td>
-                    <td class="n">{r.pid ?? ''}</td>
-                    <td class="n">{cell(r.cpu)}</td>
-                    <td class="n">{cell(r.busy, 0)}</td>
-                    <td class="n" title={r.memKind}>
-                      {r.mem == null ? '—' : `${cell(r.mem)} MB`}
-                    </td>
-                    <td class="se-procx-state" title={r.detail}>
-                      {[r.state, r.detail].filter(Boolean).join(' · ')}
-                    </td>
-                    <td class="se-procx-doing" title={doing}>
-                      {doing}
-                    </td>
-                    <td class="se-procx-act">
-                      {r.actions?.map((a) => (
-                        <button class="se-btn" data-action={a} onClick={() => void act(r, a)}>
-                          {ACTION_LABEL[a]}
-                        </button>
-                      ))}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
+              <tbody>{rowNodes}</tbody>
+
             </table>
           )}
         </div>
