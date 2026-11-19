@@ -24,15 +24,20 @@ const WORKER_SRC = `
 const { parentPort } = require('node:worker_threads');
 const fs = require('node:fs');
 const O = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0);
+// Tests: latency injection on every stat / open (9P bridge to WSL, antivirus scanning) — fsdelay.ts.
+const DELAY = Number(process.env.SEC_EDIT_TEST_FS_LATENCY_MS || process.env.SEC_EDIT_TEST_OPEN_DELAY_MS) || 0;
+const nap = DELAY ? new Int32Array(new SharedArrayBuffer(4)) : null;
 parentPort.on('message', (m) => {
   const out = [];
   const transfer = [];
   for (const j of m.jobs) {
     try {
       if (j.mtime !== undefined) {
+        if (nap) Atomics.wait(nap, 0, 0, DELAY);
         const st = fs.statSync(j.abs);
         if (st.isFile() && st.mtimeMs === j.mtime && st.size === j.size) { out.push({ kind: 'hit', mtime: st.mtimeMs, size: st.size }); continue; }
       }
+      if (nap) Atomics.wait(nap, 0, 0, DELAY);
       const fd = fs.openSync(j.abs, O);
       try {
         const st = fs.fstatSync(fd);
@@ -48,10 +53,19 @@ parentPort.on('message', (m) => {
   parentPort.postMessage({ id: m.id, out }, transfer);
 });`;
 
-/** Threads: Windows benefits from more (latency, not CPU); elsewhere a few cores are plenty. */
-export function defaultReadThreads(): number {
+/** `\\wsl.localhost\…`, `\\wsl$\…` or any other UNC share: every file call crosses a network-ish bridge. */
+export function isBridgeRoot(root: string): boolean {
+  return /^(?:\\\\|\/\/)[^\\/]+[\\/]/.test(root) || process.env.SEC_EDIT_TEST_BRIDGE_ROOT === '1';
+}
+
+/**
+ * Reader threads. Latency-bound file systems want many (each thread blocks on one open at a time):
+ * a WSL / UNC root 32, Windows 8 (antivirus scans every open); elsewhere a few cores are plenty.
+ */
+export function defaultReadThreads(root = ''): number {
   const env = Number(process.env.SEC_EDIT_READ_THREADS);
-  if (Number.isFinite(env) && env >= 0) return Math.min(16, Math.floor(env));
+  if (process.env.SEC_EDIT_READ_THREADS && Number.isFinite(env) && env >= 0) return Math.min(32, Math.floor(env));
+  if (isBridgeRoot(root)) return 32;
   const cores = typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length;
   return process.platform === 'win32' ? 8 : Math.max(2, Math.min(4, cores - 1));
 }
@@ -75,6 +89,17 @@ export class ReadPool {
   /** False when threads are off (0) or could not start: callers read in-thread instead. */
   get available() {
     return this.threads > 0 && !this.broken;
+  }
+
+  /** Starts the threads ahead of the first read (they take a few ms each to boot). */
+  warm() {
+    if (!this.available) return;
+    try {
+      this.ensure();
+      this.armIdle();
+    } catch {
+      this.broken = true;
+    }
   }
 
   private ensure() {

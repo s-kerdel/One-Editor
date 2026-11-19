@@ -4,6 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { startServer, type RunningServer } from './server';
 
+// More libuv threads (default 4) before the pool starts: on slow roots (WSL, network) each readdir /
+// open blocks one, and a tree walk must not starve the user's file opens.
+process.env.UV_THREADPOOL_SIZE ||= '16';
+
 const args = process.argv.slice(2);
 const flag = (name: string) => {
   const i = args.indexOf(name);

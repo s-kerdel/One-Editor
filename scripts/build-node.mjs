@@ -10,6 +10,11 @@ const outdir = opt('--outdir', 'dist');
 const only = opt('--only', 'all');
 const common = { bundle: true, platform: 'node', target: 'node22', sourcemap: false, logLevel: 'info', minify: !watch, legalComments: 'none' };
 
+// The indexer runs in a worker thread started from source (`eval: true`): bundle it first and embed it
+// as a string, so it works from inside app.asar and next to the server bundle alike.
+const indexer = await build({ ...common, logLevel: 'warning', entryPoints: ['src/backend/indexer-worker.ts'], format: 'cjs', write: false });
+common.define = { __SEC_EDIT_INDEXER_SRC__: JSON.stringify(indexer.outputFiles[0].text) };
+
 const jobs = [];
 if (only !== 'server') {
   // node-pty is native: loaded at runtime from node_modules (dev) or app.asar.unpacked (packaged).

@@ -20,7 +20,7 @@ export interface PassHost {
   fromCache(rel: string, mtime: number, size: number, cache: TextCache): FileData | null;
 }
 
-type Slot = { file: FileData | null; record?: Buffer; changed: boolean } | undefined;
+type Slot = { file: FileData | null; record?: Buffer; changed: boolean; stamp?: [string, number, number] } | undefined;
 
 export class TextPass {
   /** Next list index handed to the pool / taken by the consumer. */
@@ -114,7 +114,7 @@ export class TextPass {
     } catch {
       file = null; // a path Win32 cannot open etc.: skipped like an unreadable file
     }
-    this.slots.set(i, { file, record, changed });
+    this.slots.set(i, { file, record, changed, stamp: r.kind === 'error' ? undefined : [rel, r.mtime, r.size] });
     if (file) this.buffered += file.content.length;
   }
 
@@ -134,7 +134,7 @@ export class TextPass {
   }
 
   /** Next page (≥ 1 file examined when any remain): ~`want` chars, in path order. */
-  async page(want: number): Promise<FileData[]> {
+  async page(want: number, stamps?: Array<[string, number, number]>): Promise<FileData[]> {
     this.lastUsed = Date.now();
     const files: FileData[] = [];
     let bytes = 0;
@@ -155,6 +155,7 @@ export class TextPass {
       const s = this.slots.get(this.head)!;
       this.slots.delete(this.head);
       this.head++;
+      if (s?.stamp) stamps?.push(s.stamp);
       if (s?.changed && !this.dirty) this.startWriting();
       if (s?.record && this.makeWriter) {
         if (this.writer) this.writer.add(s.record);

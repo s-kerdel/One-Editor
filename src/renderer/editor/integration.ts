@@ -183,6 +183,7 @@ export function installEditorIntegration(ctx: { view: () => EditorView | null; p
     app.events.on('doc:changed', bump),
     app.events.on('doc:saved', bump),
     app.events.on('file:updated', bump),
+    app.events.on('files:changed', (paths) => paths.forEach(bump)),
   ];
   installed = () => offs.forEach((o) => o());
 }

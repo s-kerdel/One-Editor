@@ -11,6 +11,10 @@ import { foldTerm } from './text';
 import { parseQuery } from './query';
 import type { FromWorker, HeadingQuery, ToWorker } from './protocol';
 import type { HeadingHit, SearchDoc, SearchOptions, SearchResponse } from './types';
+import type { Mention } from '../knowledge/index';
+
+// Same order as knowledge's compareMentions (inlined: the search client chunk stays free of knowledge code).
+const compareMentions = (a: Mention, b: Mention) => a.from.localeCompare(b.from) || a.line - b.line || a.col - b.col;
 
 const DEFAULT_LIMIT = 200;
 
@@ -55,13 +59,34 @@ export class ShardedSearch {
 
   // ---------------------------------------------------------------- index maintenance
 
-  private shardFor(path: string): number {
+  /** Renames since the last rebuild: documents the feeder routed by their old name stay where they are. */
+  private renames: Array<[string, string]> = [];
+
+  shardFor(path: string): number {
     let s = this.owner.get(path);
     if (s === undefined) {
-      s = shardOfPath(path, this.n);
+      s = shardOfPath(this.origin(path), this.n);
       this.owner.set(path, s);
     }
     return s;
+  }
+
+  /** The name a document had when it was routed (undoing later renames). */
+  private origin(path: string): string {
+    let p = path;
+    for (let i = this.renames.length - 1; i >= 0; i--) {
+      const [from, to] = this.renames[i];
+      if (p === to) p = from;
+      else if (p.startsWith(to + '/')) p = from + p.slice(to.length);
+    }
+    return p;
+  }
+
+  /** Routing of `paths` (for the feeder's incremental updates). */
+  shardMap(paths: string[]): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const p of paths) out[p] = this.shardFor(p);
+    return out;
   }
 
   private group(docs: SearchDoc[]): SearchDoc[][] {
@@ -73,6 +98,7 @@ export class ShardedSearch {
   /** Starts a rebuild; slices follow via append(). */
   reset(gen: number) {
     this.owner.clear();
+    this.renames = [];
     for (const p of this.ports) p.post({ type: 'reset', gen, docs: [], more: true });
   }
 
@@ -83,19 +109,18 @@ export class ShardedSearch {
     });
   }
 
-  upsert(docs: SearchDoc[]) {
-    this.group(docs).forEach((list, i) => list.length && this.ports[i].post({ type: 'upsert', docs: list }));
+  /** `notes`: the shards also report note metadata (changes from disk, not from the editor). */
+  upsert(docs: SearchDoc[], notes = false) {
+    this.group(docs).forEach((list, i) => list.length && this.ports[i].post(notes ? { type: 'upsert', docs: list, notes } : { type: 'upsert', docs: list }));
   }
 
-  remove(paths: string[]) {
+  remove(paths: string[], notes = false) {
     const out: string[][] = this.ports.map(() => []);
     for (const p of paths) {
-      const s = this.owner.get(p);
-      if (s === undefined) continue;
+      out[this.shardFor(p)].push(p);
       this.owner.delete(p);
-      out[s].push(p);
     }
-    out.forEach((list, i) => list.length && this.ports[i].post({ type: 'remove', paths: list }));
+    out.forEach((list, i) => list.length && this.ports[i].post(notes ? { type: 'remove', paths: list, notes } : { type: 'remove', paths: list }));
   }
 
   /** File or folder rename: every shard moves its own documents. */
@@ -107,6 +132,7 @@ export class ShardedSearch {
       this.owner.delete(p);
       this.owner.set(to + p.slice(from.length), s);
     }
+    this.renames.push([from, to]);
   }
 
   // ---------------------------------------------------------------- replies
@@ -122,7 +148,7 @@ export class ShardedSearch {
       return true;
     }
     if (m.type === 'error') w.error = m.message;
-    else w.parts[shard] = m.type === 'ranked' ? m.results : m.type === 'headings' ? m.hits : m.type === 'vocab' ? m.info : m.type === 'result' ? m.response : m;
+    else w.parts[shard] = m.type === 'ranked' ? m.results : m.type === 'headings' ? m.hits : m.type === 'vocab' ? m.info : m.type === 'mentions' ? m.items : m.type === 'result' ? m.response : m;
     if (--w.left === 0) {
       this.waiting.delete(m.id);
       w.resolve(w.parts);
@@ -256,6 +282,13 @@ export class ShardedSearch {
       warnings,
       indexed: sum.N,
     };
+  }
+
+  /** Unlinked mentions of `names` across all shards (as KnowledgeIndex.unlinkedMentions, merged). */
+  async mentions(names: string[], exclude: string, limit = 500): Promise<Mention[] | null> {
+    const r = await this.gather<Mention[]>((id) => ({ type: 'mentions', id, names, exclude, limit }));
+    if (!r) return null;
+    return r.parts.flat().sort(compareMentions).slice(0, limit);
   }
 
   /** Same contract as SearchEngine.headings (each shard's best `limit`, merged). */

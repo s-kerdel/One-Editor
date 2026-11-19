@@ -5,18 +5,22 @@ import { parseWikiLink } from '@shared/wikilinks';
 import { dirname, isMarkdown, normalize, stem } from '@shared/paths';
 import { app } from '../app/app';
 import { noteEdited, refreshTree } from '../app/documents';
-import { streamAllText } from '../app/workspace-text';
-import { KnowledgeIndex, extractNote, findHeadingLine, wikiLinkTextFor, applyEdits, type Mention, type TextEdit } from '../../knowledge/index';
+import { KnowledgeIndex, extractNote, findHeadingLine, findTagLine, wikiLinkTextFor, applyEdits, type Mention, type TextEdit } from '../../knowledge/index';
+import { searchClient, type NotesEvent } from '../search/client';
+import { logActivity } from '../app/activity';
 import { extractor } from './extractor';
 import { createRenameRewriter } from '../../knowledge/rename';
 import { applyTemplate, dailyNotePath, sanitizeNoteName } from '../../knowledge/templates';
 
-export const index = new KnowledgeIndex();
+// No note texts here: metadata + link snippets come from the search workers, which hold the text.
+export const index = new KnowledgeIndex({ retainText: false });
 /** Bumped (coalesced) whenever the index changes — panels read it to re-render. */
 export const kv = signal(0);
 export const building = signal(false);
 
 let generation = 0;
+/** Notes this big re-index only after a pause in typing. */
+const BIG_NOTE_CHARS = 256 * 1024;
 /** Text per extraction job during a build. */
 const EXTRACT_JOB_CHARS = 1 << 20;
 /** Notes up to this size are re-extracted in-thread on edit (well under 1 ms); bigger ones go to the worker. */
@@ -89,7 +93,7 @@ function updateNow(path: string, text: string) {
 
 /** Debounced/background update: big notes are extracted by the worker, small ones right here. */
 function updateSoon(path: string, text: string) {
-  if (!isMarkdown(path) || text.length <= INLINE_MAX_CHARS || index.text(path) === text) return updateNow(path, text);
+  if (!isMarkdown(path) || text.length <= INLINE_MAX_CHARS || index.sameText(path, text)) return updateNow(path, text);
   const v = stamp(path);
   void extractor.extract([{ path, text }]).then(
     ([info]) => stamps.get(path) === v && index.update(path, text, info),
@@ -102,68 +106,56 @@ function removeNow(path: string) {
   index.remove(path);
 }
 
-async function buildIndex() {
-  const gen = ++generation;
-  readyResolve?.();
-  readyPromise = new Promise((res) => (readyResolve = res));
-  const done = readyResolve!;
-  building.value = true;
-  index.clear();
-  index.setFiles(app.files.value);
-  try {
-    // Launch speed: never compete with boot/first paint.
-    await whenBooted();
-    await idle();
-    if (gen !== generation) return;
-    const seen: string[] = [];
-    const jobs: Promise<void>[] = [];
-    // Same paged read as the search indexer. Each ~1 MB page is extracted by the worker while the
-    // next one is read; the main thread only clones texts out and stores the results.
-    for await (const page of streamAllText()) {
-      if (gen !== generation) return;
-      let docs: Array<{ path: string; text: string }> = [];
-      let versions: number[] = [];
-      let chars = 0;
-      // ~1 MB per extraction job: a big page spreads over the extraction workers.
-      const flush = () => {
-        if (!docs.length) return;
-        const d = docs;
-        const v = versions;
-        docs = [];
-        versions = [];
-        chars = 0;
-        jobs.push(
-          extractor.extract(d).then((infos) => {
-            if (gen !== generation) return;
-            for (let i = 0; i < d.length; i++) if (stamps.get(d[i].path) === v[i]) index.update(d[i].path, d[i].text, infos[i]);
-          }),
-        );
-      };
-      for (const f of page) {
-        seen.push(f.path);
-        if (!isMarkdown(f.path)) continue; // knowledge = Markdown notes only
-        const text = liveContent(f.path) ?? f.content;
-        docs.push({ path: f.path, text });
-        versions.push(stamp(f.path));
-        if ((chars += text.length) >= EXTRACT_JOB_CHARS) flush();
-      }
-      flush();
-    }
-    await Promise.all(jobs);
-    if (gen !== generation) return;
-    index.setFiles([...app.files.value, ...seen]);
-  } catch (err) {
-    console.warn('[knowledge] index build failed', err);
-  } finally {
-    if (gen === generation) {
-      building.value = false;
-      if (bumpTimer) clearTimeout(bumpTimer);
-      bumpTimer = null;
-      kv.value++;
-      (window as any).__secEditKnowledgeReady = true;
-    }
-    done();
+let buildStart = 0;
+let buildNotes = 0;
+
+/** The index follows the search workers' notes stream: a rebuild there is a rebuild here. */
+function onNotes(e: NotesEvent) {
+  if (e.kind === 'start') {
+    generation = e.gen;
+    readyResolve?.();
+    readyPromise = new Promise((res) => (readyResolve = res));
+    building.value = true;
+    buildStart = performance.now();
+    buildNotes = 0;
+    index.clear();
+    index.setFiles(app.files.value);
+    return;
   }
+  if (e.kind === 'items') {
+    if (e.gen !== undefined && e.gen !== generation) return;
+    for (const it of e.items) {
+      if (app.docs.has(it.path)) continue; // the open note's live text wins (doc:changed)
+      stamp(it.path);
+      index.update(it.path, null, it.info, it.snippets);
+      buildNotes++;
+    }
+    for (const p of e.removed ?? []) if (!app.docs.has(p) && index.note(p)) removeNow(p);
+    return;
+  }
+  if (e.gen !== generation) return;
+  index.setFiles(app.files.value);
+  for (const d of app.docs.values()) if (isMarkdown(d.path) && !d.binary) updateNow(d.path, liveContent(d.path) ?? d.content);
+  building.value = false;
+  if (bumpTimer) clearTimeout(bumpTimer);
+  bumpTimer = null;
+  kv.value++;
+  (window as any).__secEditKnowledgeReady = true;
+  logActivity({ kind: 'knowledge', trigger: 'index', ms: performance.now() - buildStart, detail: `${index.size.toLocaleString()} notes` });
+  readyResolve?.();
+  readyResolve = null;
+}
+
+/** Unlinked mentions of a note in other notes (scanned by the search workers, which hold the text). */
+export async function unlinkedMentionsOf(path: string): Promise<Mention[]> {
+  const names = index.mentionNames(path);
+  return names.length ? searchClient.mentions(names, path) : [];
+}
+
+/** First line where `tag` occurs in a note (its live text, or read from disk). */
+export async function tagLineOf(path: string, tag: string): Promise<number | null> {
+  const text = liveContent(path) ?? (await app.backend.readFile(path).then((f) => f.content, () => null));
+  return text === null ? null : findTagLine(text, tag);
 }
 
 // ---------- text edits through the editor (undoable) or the backend ----------
@@ -199,6 +191,8 @@ export async function editFile(path: string, compute: (text: string) => TextEdit
   const next = applyEdits(file.content, edits);
   await app.backend.writeFile(path, next, { eol: file.eol });
   updateNow(path, next);
+  // Our own writes never echo back from the watcher: tell the search index (it serves mentions too).
+  app.events.emit('file:updated', path, next);
   return true;
 }
 
@@ -214,6 +208,7 @@ export async function createNote(path: string, content: string): Promise<boolean
     }
   }
   updateNow(path, content);
+  app.events.emit('file:updated', path, content);
   await refreshTree().catch(() => {});
   return true;
 }
@@ -279,12 +274,20 @@ export async function handleRenamed(from: string, to: string): Promise<number> {
   const moved = new Set(pairs.values());
   let candidates: string[];
   if (pairs.size === 1) {
+    // Only notes whose links name the file can need a rewrite (the index has no texts to scan).
     const needle = stem(from).toLowerCase();
     const encoded = encodeURI(stem(from)).toLowerCase();
     candidates = index.notes().filter((n) => {
       if (moved.has(n.path)) return true;
-      const t = (liveContent(n.path) ?? index.text(n.path) ?? '').toLowerCase();
-      return t.includes(needle) || t.includes(encoded);
+      const live = liveContent(n.path);
+      if (live !== undefined) {
+        const t = live.toLowerCase();
+        return t.includes(needle) || t.includes(encoded);
+      }
+      return n.links.some((l) => {
+        const t = l.target.toLowerCase();
+        return t.includes(needle) || t.includes(encoded);
+      });
     }).map((n) => n.path);
   } else candidates = index.notes().map((n) => n.path);
   for (const p of moved) if (isMarkdown(p) && !candidates.includes(p)) candidates.push(p);
@@ -293,7 +296,7 @@ export async function handleRenamed(from: string, to: string): Promise<number> {
   let i = 0;
   for (const path of candidates) {
     // Cheap pre-check on the indexed text so untouched closed files are never read from disk.
-    const known = liveContent(path) ?? index.text(path);
+    const known = liveContent(path);
     if (known !== undefined && !rewriter.edits(known, path).length) continue;
     try {
       if (await editFile(path, (text) => rewriter.edits(text, path))) changed++;
@@ -373,8 +376,9 @@ export function installIndexing() {
   index.onChange(scheduleBump);
   const pending = new Map<string, ReturnType<typeof setTimeout>>();
 
-  app.events.on('workspace:opened', () => void buildIndex());
-  app.events.on('index:stale', () => void buildIndex()); // ignore rules / size cap changed
+  // Builds (workspace opened, index settings changed) and disk changes arrive as note metadata
+  // from the search workers; editor edits are extracted here.
+  searchClient.onNotes(onNotes);
   app.events.on('tree:changed', () => {
     if (building.value) index.setFiles(app.files.value);
     else {
@@ -391,13 +395,18 @@ export function installIndexing() {
   app.events.on('doc:changed', (path, content) => {
     if (!isMarkdown(path)) return;
     clearTimeout(pending.get(path));
-    // Debounced: extraction is cheap, but panels re-render on every index change.
+    // Debounced: extraction is cheap, but panels re-render on every index change. A big note waits
+    // for a pause in typing: re-extracting 1 MB (and re-linking thousands of links) every 150 ms was
+    // most of the main-thread work while typing in it.
     pending.set(
       path,
-      setTimeout(() => {
-        pending.delete(path);
-        if (app.docs.has(path)) updateSoon(path, app.docs.get(path)!.content ?? content);
-      }, 150),
+      setTimeout(
+        () => {
+          pending.delete(path);
+          if (app.docs.has(path)) updateSoon(path, app.docs.get(path)!.content ?? content);
+        },
+        content.length > BIG_NOTE_CHARS ? 1200 : 150,
+      ),
     );
   });
   app.events.on('doc:saved', (path, content) => {
@@ -405,11 +414,7 @@ export function installIndexing() {
     pending.delete(path);
     updateSoon(path, content);
   });
-  app.events.on('doc:closed', (path) => {
-    // Unsaved edits may have been discarded: fall back to what's on disk.
-    if (!isMarkdown(path) || !index.note(path)) return;
-    app.backend.readFile(path).then((f) => !app.docs.has(path) && updateSoon(path, f.content), () => {});
-  });
+  // doc:closed: the search client re-reads the closed note from disk and its notes arrive above.
   app.events.on('file:updated', (path, content) => {
     if (content === undefined) {
       if (!app.docs.has(path)) removeNow(path);
@@ -420,5 +425,12 @@ export function installIndexing() {
   });
   app.events.on('file:renamed', (from, to) => void handleRenamed(from, to).catch((err) => console.warn('[knowledge] rename refactor failed', err)));
 
-  if (app.workspace.value) void buildIndex();
+  if (app.workspace.value && !(window as any).__secEditKnowledgeReady) {
+    building.value = true;
+    readyPromise = new Promise((res) => (readyResolve = res));
+  }
+  // The knowledge index is built by the search workers: make sure they run (after first paint).
+  void whenBooted()
+    .then(idle)
+    .then(() => searchClient.start());
 }

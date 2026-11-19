@@ -265,6 +265,27 @@ async function indexing(runs) {
         await sleep(100);
       }
     })();
+    // RPC latency (open a file + a trivial call, every 25 ms) and long tasks while the indexes build.
+    const probe = page.evaluate(async () => {
+      const a = window.__secEdit;
+      const files = a.files.value.filter((f) => f.endsWith('.md')).slice(0, 300);
+      const lt = [];
+      try {
+        new PerformanceObserver((l) => l.getEntries().forEach((e) => lt.push(Math.round(e.duration)))).observe({ type: 'longtask' });
+      } catch {}
+      const lat = [];
+      const ready = () => window.__secEditSearch?.status.value === 'ready' && window.__secEditKnowledgeReady === true;
+      for (let i = 0; !ready() && i < 20000; i++) {
+        const s = performance.now();
+        await a.backend.readFile(files[i % files.length]);
+        await a.backend.getWorkspace();
+        lat.push(performance.now() - s);
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      lat.sort((x, y) => x - y);
+      const q = (p) => Math.round(lat[Math.min(lat.length - 1, Math.floor(lat.length * p))] ?? 0);
+      return { probes: lat.length, p50: q(0.5), p95: q(0.95), max: q(1), longTasks: lt.length, longestTask: Math.max(0, ...lt) };
+    });
     const s = await page.waitForFunction(() => window.__secEditSearch?.status.value === 'ready' && window.__secEditSearch.indexed.value > 0, null, { timeout: 300000, polling: 20 }).then(() => Date.now() - t0);
     const k = await page.waitForFunction(() => window.__secEditKnowledgeReady === true, null, { timeout: 300000, polling: 20 }).then(() => Date.now() - t0);
     done = true;
@@ -279,9 +300,10 @@ async function indexing(runs) {
       const dt = (samples[b].t - samples[a].t) / 1000;
       if (dt >= 0.3) peak = Math.max(peak, (samples[b].ticks - samples[a].ticks) / HZ / dt);
     }
+    const rpc = await probe.catch(() => null);
     const info = await page.evaluate(() => ({ indexed: window.__secEditSearch.indexed.value, shards: window.__secEditSearch.shardCount?.value ?? 1 }));
     const mem = await snapshot(app, `index ${kind}`);
-    const r = { kind, readyMs: readyAt, searchReadyMs: s, knowledgeReadyMs: k, indexReadyMs: Math.max(s, k), indexed: info.indexed, shards: info.shards, cpuSeconds: Math.round(cpuS * 100) / 100, coresAvg: Math.round((cpuS / wallS) * 100) / 100, coresPeak: Math.round(peak * 100) / 100, pssTotalMB: mem.pssTotalMB, ussMB: mem.ussMB, isolatesMB: mem.isolatesMB };
+    const r = { kind, readyMs: readyAt, searchReadyMs: s, knowledgeReadyMs: k, indexReadyMs: Math.max(s, k), indexed: info.indexed, shards: info.shards, cpuSeconds: Math.round(cpuS * 100) / 100, coresAvg: Math.round((cpuS / wallS) * 100) / 100, coresPeak: Math.round(peak * 100) / 100, pssTotalMB: mem.pssTotalMB, ussMB: mem.ussMB, isolatesMB: mem.isolatesMB, rpc };
     console.log(`[index] ${JSON.stringify(r)}`);
     out.push(r);
     await app.close();

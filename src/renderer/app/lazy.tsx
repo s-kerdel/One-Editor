@@ -129,9 +129,10 @@ export function holdKeys(done: Promise<unknown>, maxWaitMs = 600): void {
       if (held?.token !== token) return finish(), true; // superseded by a newer hold
       const el = document.activeElement;
       // Focus moved into what was opened → that is the target. An element that already had focus
-      // counts after two frames (e.g. Mod-Shift-f pressed again inside the search box).
+      // counts after two frames (e.g. Mod-Shift-f pressed again inside the search box) — unless an
+      // overlay just opened: its input takes focus a render later, and the old one must not win.
       const moved = !!el && el !== document.body && el !== before;
-      if (!moved && !(frames >= 2 && isTextInput(el)) && performance.now() - t0 <= maxWaitMs) return false;
+      if (!moved && !(frames >= 2 && isTextInput(el) && !app.overlay.value) && performance.now() - t0 <= maxWaitMs) return false;
       finish();
       void release();
       return true;

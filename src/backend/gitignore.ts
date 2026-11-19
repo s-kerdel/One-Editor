@@ -76,6 +76,13 @@ function globToRegexSource(glob: string): string {
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 
+/** Serialised rule set (structured-clone friendly: sent from the indexer worker to the watcher). */
+export interface IgnoreSet {
+  base: string;
+  prefix: string;
+  rules: Array<{ source: string; flags: string; negate: boolean; dirOnly: boolean }>;
+}
+
 interface RuleSet {
   /** Folder (workspace-relative, '' = root) the patterns are relative to; may be outside the root ('../'). */
   base: string;
@@ -91,6 +98,16 @@ export class IgnoreStack {
 
   get size() {
     return this.sets.reduce((n, s) => n + s.rules.length, 0);
+  }
+
+  toJSON(): IgnoreSet[] {
+    return this.sets.map((s) => ({ base: s.base, prefix: s.prefix, rules: s.rules.map((r) => ({ source: r.re.source, flags: r.re.flags, negate: r.negate, dirOnly: r.dirOnly })) }));
+  }
+
+  static fromJSON(sets: IgnoreSet[], foldCase = false): IgnoreStack {
+    const st = new IgnoreStack(foldCase);
+    st.sets = sets.map((s) => ({ base: s.base, prefix: s.prefix, rules: s.rules.map((r) => ({ re: new RegExp(r.source, r.flags), negate: r.negate, dirOnly: r.dirOnly })) }));
+    return st;
   }
 
   /**

@@ -158,3 +158,6 @@ export interface PickerSpec {
 }
 
 export const picker = signal<PickerSpec | null>(null);
+
+/** Background work running now, shown in the status bar ("Indexing 4,210 / 18,000"); see activity.ts. */
+export const activityNow = signal<string | null>(null);

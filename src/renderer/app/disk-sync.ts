@@ -54,6 +54,7 @@ export async function handleFsEvents(events: FsEvent[]) {
     }
   }
   const reads: string[] = [];
+  const changed: string[] = [];
   for (const ev of events) {
     if (ev.type === 'unlink' || ev.type === 'unlinkDir') {
       const gone = ev.type === 'unlink' ? [ev.path] : filesUnder(findNode(oldTree, ev.path));
@@ -62,10 +63,14 @@ export async function handleFsEvents(events: FsEvent[]) {
         if (app.docs.has(p)) ui.setIn(ui.deletedOnDisk, p, true);
       }
     } else if (ev.type === 'add' || ev.type === 'change') {
-      reads.push(ev.path);
+      // Only open documents are read here (conflicts, reloads); the indexers re-read everything else
+      // themselves, coalesced and off this thread — a build writing 5,000 files costs one event.
+      if (app.docs.has(ev.path)) reads.push(ev.path);
+      else changed.push(ev.path);
     }
   }
-  // Bounded parallel reads: a folder dropped in can produce thousands of adds.
+  if (changed.length) app.events.emit('files:changed', changed);
+  // Bounded parallel reads.
   let i = 0;
   const worker = async () => {
     while (i < reads.length) await reconcileFile(reads[i++]);

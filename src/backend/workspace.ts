@@ -16,50 +16,28 @@ import { createExcludeMatcher, type ExcludeMatcher } from './exclude';
 import { createWatchBackend, defaultWatchMode, type WatchBackend, type WatchMode } from './watcher';
 import { BackendFailure } from './errors';
 import { relativeInside, resolveInside } from './pathsafe';
-import { IgnoreStack, globalExcludesPath, isLockfile, isMinified } from './gitignore';
-import { ReadPool, defaultReadThreads } from './readpool';
-import { TextPass } from './textpass';
-import { CacheWriter, TextCache, cacheFileFor } from './indexcache';
+import { isProbablyTextName } from './textnames';
+export { isProbablyTextName } from './textnames';
+import { IgnoreStack, isLockfile, isMinified } from './gitignore';
+import { defaultReadThreads } from './readpool';
+import { cacheFileFor } from './indexcache';
+import { DEFAULT_INDEX, MAX_INDEX_BYTES, type IndexOptions, type Stamp } from './indexer';
+import { LocalIndexerHost, WorkerIndexerHost, indexerSource, type IndexerHost, type Raw } from './indexer-host';
+import { fsDelayAsync } from './fsdelay';
 
 export { detectEol } from './textcodec';
+export { MAX_INDEX_BYTES, type IndexOptions } from './indexer';
 export { BackendFailure } from './errors';
 
-const TEXT_EXTS = new Set(
-  (
-    'md markdown mdx txt text rst adoc org log csv tsv json jsonc json5 yaml yml toml ini cfg conf env properties ' +
-    'php phtml inc js mjs cjs jsx ts mts cts tsx vue svelte astro css scss sass less html htm xml svg xsl ' +
-    'py rb go rs java kt kts scala c h cc cpp cxx hpp hh cs fs swift m mm dart lua pl pm r jl ex exs erl hrl ' +
-    'clj cljs edn hs elm ml mli nim zig v sol sql graphql gql proto sh bash zsh fish ps1 psm1 bat cmd ' +
-    'dockerfile makefile mk cmake gradle tf hcl nix lock gitignore gitattributes editorconfig htaccess twig blade'
-  ).split(' '),
-);
-const TEXT_NAMES = new Set(['dockerfile', 'makefile', 'readme', 'license', 'changelog', '.gitignore', '.env', '.htaccess', '.editorconfig']);
-export const MAX_INDEX_BYTES = 2 * 1024 * 1024;
 const MAX_OPEN_BYTES = 48 * 1024 * 1024;
 export const MAX_TREE_ENTRIES = 200_000;
 const MAX_DEPTH = 40;
 const isWin = process.platform === 'win32';
 // readAllTextPage sizing (content length per page).
-const PAGE_DEFAULT = 1 << 20;
-const PAGE_MIN = 64 << 10;
 const PAGE_MAX = 8 << 20;
-// Sync reads are 10–20× faster than libuv round-trips (≈40 µs each on WSL / Windows + Defender), so
-// indexing reads files synchronously in short bursts and yields in between.
-const SYNC_BURST_MS = 12;
-// One read slower than this → slow / network file system: switch to async so the process never stalls.
-const SLOW_READ_MS = 25;
-// O_NONBLOCK: opening a FIFO that replaced a file must not block (fstat then rejects it).
-const O_READ = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const yieldLoop = () => new Promise<void>((r) => setImmediate(r));
 
-export function isProbablyTextName(name: string): boolean {
-  const lower = name.toLowerCase();
-  if (TEXT_NAMES.has(lower)) return true;
-  const dot = lower.lastIndexOf('.');
-  if (dot === -1) return false;
-  return TEXT_EXTS.has(lower.slice(dot + 1));
-}
 
 const naturalCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 export const compareNodes = (a: TreeNode, b: TreeNode) => (a.kind !== b.kind ? (a.kind === 'dir' ? -1 : 1) : naturalCollator.compare(a.name, b.name));
@@ -94,20 +72,6 @@ export interface WorkspaceOptions {
   readThreads?: number;
 }
 
-export interface IndexOptions {
-  /** Honour .gitignore files, .git/info/exclude and the global git excludes file. */
-  respectGitignore?: boolean;
-  /** package-lock.json, yarn.lock, composer.lock, Cargo.lock, … */
-  skipLockfiles?: boolean;
-  /** *.min.js / *.min.css bundles and *.map source maps. */
-  skipMinified?: boolean;
-  /** Bigger files are not indexed. */
-  maxFileBytes?: number;
-}
-
-const DEFAULT_INDEX: Required<IndexOptions> = { respectGitignore: true, skipLockfiles: true, skipMinified: true, maxFileBytes: MAX_INDEX_BYTES };
-/** An idle index pass (consumer gone) is dropped after this long. */
-const PASS_IDLE_MS = 30_000;
 const foldCaseFs = isWin || process.platform === 'darwin';
 
 export class Workspace {
@@ -132,31 +96,59 @@ export class Workspace {
   private disposed = false;
   /** Bumped whenever the set of indexed paths changes (keeps the sorted text-file list cache honest). */
   private indexVersion = 0;
-  private textList: { version: string; list: string[] } | null = null;
-  /** Set once a single sync read was slow (network share): later reads go async. */
-  private slowFs = false;
   private indexOpts: Required<IndexOptions>;
   /** Folders holding a .gitignore / a .git (seen while walking; dotfiles are hidden from the index). */
   private ignoreDirs = new Set<string>();
   private repoDirs = new Set<string>();
   /** Bumped when ignore files may have changed. */
   private ignoreVersion = 0;
-  private ignore: { version: number; stack: IgnoreStack } | null = null;
   private readonly cacheFile: string | null;
-  private pool: ReadPool | null;
-  private pass: TextPass | null = null;
-  private passTimer: NodeJS.Timeout | null = null;
+  private readonly readThreads: number;
+  /** Indexing I/O (pass, cache, filters, decoding) lives here — a worker thread in the app. */
+  private host: IndexerHost | null = null;
+  private sentVersion = '';
+  /** Ignore rules as last computed by the indexer: the watcher drops events inside ignored folders. */
+  private hintIgnore: IgnoreStack | null = null;
+  private passCbs = new Set<() => void>();
+  /** Files opened / saved recently: the folder poller checks their mtimes (content edits keep folder mtimes). */
+  private hot: string[] = [];
+  private touchHot(rel: string) {
+    this.hot = [rel, ...this.hot.filter((p) => p !== rel)].slice(0, 64);
+  }
+  private readonly pollSource = {
+    children: (dir: string) => {
+      const out = new Set<string>();
+      const pre = dir ? dir + '/' : '';
+      for (const k of this.index.keys()) if (k.startsWith(pre) && k.length > pre.length && k.indexOf('/', pre.length) === -1) out.add(k.slice(pre.length));
+      return out;
+    },
+    hotFiles: () => this.hot,
+  };
+
+  /** Watch a folder (per-folder backends), unless it is git-ignored. */
+  private watchDir(rel: string) {
+    if (!this.watch?.wantsDirs) return;
+    if (rel && this.indexOpts.respectGitignore && this.hintIgnore?.ignored(rel, true)) return;
+    this.watch.addDir(rel);
+  }
+
+  /** Window hidden: the folder poller (WSL / network roots) holds still. */
+  setWatchPaused(on: boolean) {
+    this.watch?.pause?.(on);
+  }
+
+  /** Watcher hints dropped because they were inside ignored folders (tests, diagnostics). */
+  droppedHints = 0;
 
   constructor(root: string, opts: WorkspaceOptions = {}) {
     this.root = path.resolve(root);
     this.matcher = createExcludeMatcher(opts.exclude ?? ['node_modules', '.git'], !!opts.showHidden);
-    this.watchMode = opts.watchMode ?? defaultWatchMode();
+    this.watchMode = opts.watchMode ?? defaultWatchMode(this.root);
     this.debounceMs = opts.debounceMs ?? 80;
     this.pollMs = opts.pollMs ?? 4000;
     this.indexOpts = { ...DEFAULT_INDEX, ...definedOnly(opts.index ?? {}) };
     this.cacheFile = opts.cacheDir ? cacheFileFor(opts.cacheDir, this.root) : null;
-    const threads = opts.readThreads ?? defaultReadThreads();
-    this.pool = threads > 0 ? new ReadPool(threads) : null;
+    this.readThreads = opts.readThreads ?? defaultReadThreads(this.root);
   }
 
   info(): WorkspaceInfo {
@@ -170,8 +162,8 @@ export class Workspace {
   /** Changes what the indexers skip; takes effect on the next index pass. */
   setIndexOptions(opts: IndexOptions) {
     this.indexOpts = { ...DEFAULT_INDEX, ...definedOnly(opts) };
-    this.textList = null;
-    this.dropPass();
+    this.host?.setOptions(this.indexOpts);
+    this.sentVersion = ''; // ignore rules may now apply or not: refresh the watcher's copy
   }
 
   get indexOptions(): Readonly<Required<IndexOptions>> {
@@ -224,6 +216,7 @@ export class Workspace {
     const walk = async (absDir: string, relDir: string, depth: number, followed: string[]): Promise<TreeNode[]> => {
       let entries: fs.Dirent[];
       try {
+        await fsDelayAsync(); // tests: latency injection (slow bridge)
         entries = await fsp.readdir(absDir, { withFileTypes: true });
       } catch {
         return [];
@@ -285,11 +278,14 @@ export class Workspace {
       this.index = index;
       this.ignoreDirs = ignoreDirs;
       this.repoDirs = repoDirs;
+      const first = !this.indexed;
       this.indexed = true;
       this.syncWatchedDirs();
-    } else if (this.watch?.mode === 'perdir') {
-      this.watch.addDir(base);
-      for (const [k, v] of index) if (v.kind === 'dir' && isUnder(k, base)) this.watch.addDir(k);
+      // The indexers ask for text right after boot: start the indexer thread and its readers now.
+      if (first && this.cacheFile !== undefined && !this.disposed) void this.indexer().then((h) => h.warm(), () => {});
+    } else if (this.watch?.wantsDirs) {
+      this.watchDir(base);
+      for (const [k, v] of index) if (v.kind === 'dir' && isUnder(k, base)) this.watchDir(k);
     }
     const node: TreeNode = { name: base ? path.basename(absBase) : path.basename(this.root) || this.root, path: base, kind: 'dir', children };
     if (truncated) node.truncated = true;
@@ -308,6 +304,7 @@ export class Workspace {
   async readFile(rel: string): Promise<FileData> {
     const key = normalize(rel);
     const abs = this.abs(key);
+    await fsDelayAsync(); // tests: latency injection (slow bridge / antivirus)
     try {
       const st = await fsp.stat(abs);
       if (st.isDirectory()) throw new BackendFailure('EISDIR', `Is a folder: ${rel}`);
@@ -317,6 +314,7 @@ export class Workspace {
       const buf = await fsp.readFile(abs);
       const d = decode(buf);
       this.noteEntry(key, { kind: 'file', mtime: st.mtimeMs, size: st.size });
+      this.touchHot(key);
       const eol = detectEol(d.text);
       const data: FileData = { path: key, content: toLf(d.text), mtime: st.mtimeMs, eol, size: st.size };
       if (d.bom) data.bom = true;
@@ -420,7 +418,7 @@ export class Workspace {
       if (st) throw new BackendFailure('EEXIST', `Already exists: ${rel}`);
       await fsp.mkdir(abs, { recursive: true });
       this.noteEntry(key, { kind: 'dir' });
-      if (this.watch?.mode === 'perdir') this.watch.addDir(key);
+      this.watchDir(key);
     });
   }
 
@@ -496,116 +494,89 @@ export class Workspace {
    * file even if the tree changes in between (new files sorting before it arrive as watcher events).
    */
   async readAllTextPage(opts: TextPageOptions = {}): Promise<TextPage> {
+    const ix = await this.indexer();
+    const { stamps, ...page } = await ix.page(typeof opts.cursor === 'string' ? opts.cursor : null, opts.maxBytes);
+    this.applyStamps(stamps);
+    return page;
+  }
+
+  /** The same page as UTF-8 JSON bytes, untouched by this thread (the index channel forwards them). */
+  async readAllTextPageRaw(opts: TextPageOptions = {}): Promise<Uint8Array> {
+    const ix = await this.indexer();
+    const r: Raw = await ix.pageRaw(typeof opts.cursor === 'string' ? opts.cursor : null, opts.maxBytes);
+    this.applyStamps(r.stamps);
+    return r.body;
+  }
+
+  /** Incremental index update: current text of changed files, as UTF-8 JSON {files, skipped, gone}. */
+  async readIndexedFilesRaw(paths: string[]): Promise<Uint8Array> {
+    const ix = await this.indexer();
+    const r = await ix.readFilesRaw(paths.map(normalize).filter(Boolean));
+    this.applyStamps(r.stamps);
+    return r.body;
+  }
+
+  async readIndexedFiles(paths: string[]) {
+    const ix = await this.indexer();
+    const { stamps, ...r } = await ix.readFiles(paths.map(normalize).filter(Boolean));
+    this.applyStamps(stamps);
+    return r;
+  }
+
+  /** The last completed full pass: files read vs. served from the cache (`written`: its cache write). */
+  get lastPass() {
+    return this.host?.lastPass ?? null;
+  }
+
+  /** Called when a full index pass starts (tests, activity log). */
+  onPass(cb: () => void) {
+    this.passCbs.add(cb);
+    return () => this.passCbs.delete(cb);
+  }
+
+  private async indexer(): Promise<IndexerHost> {
     if (!this.indexed) await this.listTree();
-    const cursor = typeof opts.cursor === 'string' ? opts.cursor : null;
-    const want = Number.isFinite(opts.maxBytes) ? Math.min(PAGE_MAX, Math.max(PAGE_MIN, Number(opts.maxBytes))) : PAGE_DEFAULT;
-    if (this.pool?.available) {
-      try {
-        // Serialised: pages of one pass are cut in order, whoever asks.
-        const run = this.passChain.then(() => this.passPage(cursor, want));
-        this.passChain = run.catch(() => {});
-        return await run;
-      } catch {
-        this.dropPass(); // threads unavailable here: read in-thread below
-      }
-    }
-    const list = this.textPaths();
-    let i = cursor === null ? 0 : upperBound(list, cursor);
-    const files: FileData[] = [];
-    let bytes = 0;
-    const t0 = performance.now();
-    while (i < list.length && bytes < want) {
-      if (this.slowFs) {
-        // Bounded concurrency keeps Windows (antivirus-scanned) / network reads from thrashing.
-        const batch = list.slice(i, i + 16);
-        i += batch.length;
-        for (const f of await Promise.all(batch.map((p) => this.readIndexableAsync(p)))) {
-          if (f) files.push(f), (bytes += f.content.length);
+    if (!this.host) {
+      const cfg = { root: this.root, cacheFile: this.cacheFile, readThreads: this.readThreads, index: this.indexOpts, foldCase: foldCaseFs };
+      const src = indexerSource();
+      let host: IndexerHost | null = null;
+      if (src) {
+        try {
+          host = new WorkerIndexerHost(src, cfg);
+        } catch {
+          host = null; // no worker threads here: index in this thread
         }
-        if (performance.now() - t0 > 200) break;
-      } else {
-        const f = this.readIndexableSync(list[i++]);
-        if (f) files.push(f), (bytes += f.content.length);
-        if (performance.now() - t0 > SYNC_BURST_MS) break;
       }
+      this.host = host ?? new LocalIndexerHost(cfg);
+      this.host.onPassStart(() => this.passCbs.forEach((f) => f()));
     }
-    return { files, nextCursor: i < list.length ? list[i - 1] : null, total: list.length, done: i };
+    this.syncIndexPaths();
+    return this.host;
   }
 
-  private passChain: Promise<unknown> = Promise.resolve();
-  /** The last completed parallel pass: files read vs. served from the cache; `written` = its cache write. */
-  lastPass: { read: number; cached: number; written: Promise<void> } | null = null;
-
-  /** A page of the parallel pass (started, or restarted, when the cursor does not continue it). */
-  private async passPage(cursor: string | null, want: number): Promise<TextPage> {
-    let pass = this.pass;
-    if (!pass || pass.cursor !== cursor) {
-      this.dropPass();
-      const list = this.textPaths();
-      const start = cursor === null ? 0 : upperBound(list, cursor);
-      let cache: TextCache | null = null;
-      const file = this.cacheFile;
-      if (file) cache = await TextCache.load(file);
-      if (this.disposed) return { files: [], nextCursor: null, total: 0, done: 0 };
-      // Only a pass over every file can write a complete cache.
-      const makeWriter = file && start === 0 ? () => new CacheWriter(file) : null;
-      pass = this.pass = new TextPass(list, start, this.passHost, this.pool!, this.indexOpts.maxFileBytes, cache, makeWriter, this.pool!.threadCount);
-    } else pass.retarget(this.textPaths());
-    this.armPassTimer();
-    const files = await pass.page(want);
-    const finished = pass.finished;
-    if (finished && this.pass === pass) {
-      this.pass = null;
-      this.lastPass = { ...pass.stats, written: pass.written$ };
-    }
-    return { files, nextCursor: finished ? null : pass.cursor, total: pass.list.length, done: pass.head };
-  }
-
-  private readonly passHost = {
-    abs: (rel: string) => this.abs(rel),
-    decode: (rel: string, bytes: Uint8Array, mtime: number, size: number) => this.indexable(rel, bytes, { mtimeMs: mtime, size } as fs.Stats),
-    fromCache: (rel: string, mtime: number, size: number, cache: TextCache): FileData | null => {
-      this.noteEntry(rel, { kind: 'file', mtime, size });
-      const c = cache.get(rel);
-      if (!c || c.content === null) return null;
-      const d: FileData = { path: rel, content: c.content, mtime, eol: c.eol, size };
-      if (c.bom) d.bom = true;
-      if (c.encoding) d.encoding = c.encoding;
-      return d;
-    },
-  };
-
-  private armPassTimer() {
-    if (this.passTimer) clearTimeout(this.passTimer);
-    // Consumer gone (renderer reloaded mid-pass): free the read-ahead buffers.
-    this.passTimer = setTimeout(() => {
-      this.passTimer = null;
-      if (this.pass && Date.now() - this.pass.lastUsed >= PASS_IDLE_MS) this.dropPass();
-    }, PASS_IDLE_MS);
-    this.passTimer.unref?.();
-  }
-
-  private dropPass() {
-    this.pass?.close();
-    this.pass = null;
-  }
-
-  /** Text-looking, not ignored file paths in code-unit order (cached until paths or ignore rules change). */
-  textPaths(): string[] {
+  /** Sends the file list to the indexer when it changed (one array; it does all filtering and I/O). */
+  private syncIndexPaths() {
     const version = `${this.indexVersion}:${this.ignoreVersion}`;
-    if (this.textList?.version !== version) {
-      const o = this.indexOpts;
-      const ignore = o.respectGitignore ? this.ignoreStack() : null;
-      const list = this.filePaths().filter((p) => {
-        const name = p.slice(p.lastIndexOf('/') + 1);
-        if (!isProbablyTextName(name)) return false;
-        if (o.skipLockfiles && isLockfile(name)) return false;
-        if (o.skipMinified && isMinified(name)) return false;
-        return !ignore?.ignored(p);
-      });
-      this.textList = { version, list: list.sort(byCodeUnit) };
+    if (!this.host || version === this.sentVersion) return;
+    this.sentVersion = version;
+    this.host.setPaths({ version, files: this.filePaths(), ignoreDirs: [...this.ignoreDirs], repoDirs: [...this.repoDirs] });
+    const apply = (sets: Parameters<typeof IgnoreStack.fromJSON>[0]) => {
+      if (this.sentVersion !== version) return;
+      this.hintIgnore = sets.length ? IgnoreStack.fromJSON(sets, foldCaseFs) : null;
+      // Git-ignored folders (build output) need no watch at all: their events are dropped anyway.
+      if (this.hintIgnore && this.watch?.wantsDirs) for (const [k, v] of this.index) if (v.kind === 'dir' && this.hintIgnore.ignored(k, true) && !this.hintIgnore.ignored(parentOf(k), true)) this.watch.removeDir(k);
+    };
+    const rules = this.host.ignoreRules();
+    if (Array.isArray(rules)) apply(rules);
+    else rules.then(apply, () => {});
+  }
+
+  /** mtime + size of files the indexer examined: change detection after a rescan stays precise. */
+  private applyStamps(stamps: Stamp[]) {
+    for (const [p, mtime, size] of stamps) {
+      const e = this.index.get(p);
+      if (e?.kind === 'file' && (e.mtime !== mtime || e.size !== size)) this.index.set(p, { kind: 'file', mtime, size });
     }
-    return this.textList.list;
   }
 
   /** Is `rel` skipped by the indexers (ignored / generated)? The tree still shows it. */
@@ -613,109 +584,7 @@ export class Workspace {
     const name = rel.slice(rel.lastIndexOf('/') + 1);
     const o = this.indexOpts;
     if ((o.skipLockfiles && isLockfile(name)) || (o.skipMinified && isMinified(name))) return true;
-    return o.respectGitignore && this.ignoreStack().ignored(rel);
-  }
-
-  private outer: { prefix: string; files: Array<{ text: string; prefix: string }> } | null | undefined;
-
-  /** The repository the workspace sits inside (root is a subfolder of a checkout), if any. */
-  private outerRepo() {
-    if (this.outer !== undefined) return this.outer;
-    this.outer = null;
-    const gitignores: Array<{ dir: string }> = [];
-    // Like git: never look for a repository in or above GIT_CEILING_DIRECTORIES.
-    const fold = (p: string) => (foldCaseFs ? p.toLowerCase() : p);
-    const ceilings = new Set((process.env.GIT_CEILING_DIRECTORIES ?? '').split(path.delimiter).filter(Boolean).map((p) => fold(path.resolve(p))));
-    let dir = path.dirname(this.root);
-    for (let i = 0; i < 40 && dir && dir !== path.dirname(dir); i++, dir = path.dirname(dir)) {
-      if (ceilings.has(fold(dir))) break;
-      gitignores.push({ dir });
-      if (fs.existsSync(path.join(dir, '.git'))) {
-        const rel = (from: string) => path.relative(from, this.root).split(path.sep).join('/') + '/';
-        const files: Array<{ text: string; prefix: string }> = [];
-        const info = readSmallText(path.join(dir, '.git', 'info', 'exclude'));
-        if (info) files.push({ text: info, prefix: rel(dir) });
-        // Outermost first: deeper .gitignore files win.
-        for (const g of gitignores.reverse()) {
-          const t = readSmallText(path.join(g.dir, '.gitignore'));
-          if (t) files.push({ text: t, prefix: rel(g.dir) });
-        }
-        this.outer = { prefix: rel(dir), files };
-        break;
-      }
-    }
-    return this.outer;
-  }
-
-  private ignoreStack(): IgnoreStack {
-    if (this.ignore?.version === this.ignoreVersion) return this.ignore.stack;
-    const stack = new IgnoreStack(foldCaseFs);
-    // Precedence (later wins): global excludes < .git/info/exclude < .gitignore files, shallow → deep.
-    const outer = this.outerRepo();
-    const repos = [...this.repoDirs].sort((a, b) => depthOf(a) - depthOf(b));
-    const global = readSmallText(globalExcludesPath(readSmallText, process.env, os.homedir(), path.join));
-    if (global) {
-      stack.add('', global, outer?.prefix ?? '');
-      for (const r of repos) if (r) stack.add(r, global);
-    }
-    for (const f of outer?.files ?? []) if (f.prefix && !f.prefix.startsWith('../')) stack.add('', f.text, f.prefix);
-    for (const r of repos) {
-      const t = readSmallText(path.join(this.abs(r), '.git', 'info', 'exclude'));
-      if (t) stack.add(r, t);
-    }
-    for (const d of [...this.ignoreDirs].sort((a, b) => depthOf(a) - depthOf(b))) {
-      const t = readSmallText(path.join(this.abs(d), '.gitignore'));
-      if (t) stack.add(d, t);
-    }
-    this.ignore = { version: this.ignoreVersion, stack };
-    return stack;
-  }
-
-  private readIndexableSync(p: string): FileData | null {
-    const t = performance.now();
-    let fd = -1;
-    try {
-      fd = fs.openSync(this.abs(p), O_READ);
-      const st = fs.fstatSync(fd); // of the opened object: no stat→open race
-      if (!st.isFile() || st.size > this.indexOpts.maxFileBytes) return null;
-      const buf = Buffer.allocUnsafe(st.size);
-      let n = 0;
-      while (n < st.size) {
-        const r = fs.readSync(fd, buf, n, st.size - n, n);
-        if (!r) break;
-        n += r;
-      }
-      return this.indexable(p, buf.subarray(0, n), st);
-    } catch {
-      return null;
-    } finally {
-      if (fd !== -1) fs.closeSync(fd);
-      if (performance.now() - t > SLOW_READ_MS) this.slowFs = true;
-    }
-  }
-
-  private async readIndexableAsync(p: string): Promise<FileData | null> {
-    try {
-      const abs = this.abs(p);
-      const st = await fsp.stat(abs);
-      if (!st.isFile() || st.size > this.indexOpts.maxFileBytes) return null;
-      return this.indexable(p, await fsp.readFile(abs), st);
-    } catch {
-      return null;
-    }
-  }
-
-  /** Decoded file for the indexers, or null for binary content. Remembers the mtime like readFile. */
-  private indexable(key: string, buf: Uint8Array, st: fs.Stats): FileData | null {
-    const d = decode(buf);
-    this.noteEntry(key, { kind: 'file', mtime: st.mtimeMs, size: st.size });
-    if (d.binary) return null;
-    const content = toLf(d.text);
-    if (content.includes('\u0000')) return null;
-    const data: FileData = { path: key, content, mtime: st.mtimeMs, eol: detectEol(d.text), size: st.size };
-    if (d.bom) data.bom = true;
-    if (d.encoding !== 'utf8') data.encoding = d.encoding;
-    return data;
+    return o.respectGitignore && !!this.hintIgnore?.ignored(rel);
   }
 
   // ---- index bookkeeping ----------------------------------------------------------------------
@@ -727,7 +596,7 @@ export class Workspace {
       if (this.index.get(p)?.kind === 'dir') break;
       this.index.set(p, { kind: 'dir' });
       this.indexVersion++;
-      if (this.watch?.mode === 'perdir') this.watch.addDir(p);
+      this.watchDir(p);
     }
   }
 
@@ -749,7 +618,7 @@ export class Workspace {
     this.dropEntries(from);
     for (const [k, v] of moved) {
       this.noteEntry(k, v);
-      if (v.kind === 'dir' && this.watch?.mode === 'perdir') this.watch.addDir(k);
+      if (v.kind === 'dir') this.watchDir(k);
     }
   }
 
@@ -812,15 +681,15 @@ export class Workspace {
 
   private ensureWatcher() {
     if (this.watch || this.disposed) return;
-    this.watch = createWatchBackend(this.root, { hint: (rel) => this.queue(rel), rescan: () => this.requestRescan() }, this.watchMode, this.pollMs);
+    this.watch = createWatchBackend(this.root, { hint: (rel) => this.queue(rel), rescan: () => this.requestRescan() }, this.watchMode, this.pollMs, this.pollSource, this.matcher.names());
     if (this.indexed) this.syncWatchedDirs();
     else void this.listTree().catch(() => {});
   }
 
   private syncWatchedDirs() {
-    if (this.watch?.mode !== 'perdir') return;
-    this.watch.addDir('');
-    for (const [k, v] of this.index) if (v.kind === 'dir') this.watch.addDir(k);
+    if (!this.watch?.wantsDirs) return;
+    this.watchDir('');
+    for (const [k, v] of this.index) if (v.kind === 'dir') this.watchDir(k);
   }
 
   /** Resolves once queued hints have been processed (tests, and callers that want a settled state). */
@@ -840,6 +709,14 @@ export class Workspace {
     if (clean === '.gitignore' || clean.endsWith('/.gitignore') || /(?:^|\/)\.git\/info\/exclude$/.test(clean)) {
       if (clean.endsWith('.gitignore')) this.ignoreDirs.add(parentOf(clean));
       this.ignoreVersion++;
+      this.syncIndexPaths();
+    }
+    // Build output in a git-ignored folder (coverage/, target/ …): dropped before any stat or read.
+    // The ignored folder itself still shows up / disappears in the tree.
+    const parent = parentOf(clean);
+    if (parent && this.indexOpts.respectGitignore && this.hintIgnore?.ignored(parent, true)) {
+      this.droppedHints++;
+      return;
     }
     if (!clean || this.matcher.path(clean)) {
       if (!clean) this.requestRescan(); // event on the root itself
@@ -935,7 +812,7 @@ export class Workspace {
     if (kind === 'dir' && prev?.kind !== 'dir') {
       events.push({ type: 'addDir', path: rel });
       this.noteEntry(rel, { kind: 'dir' });
-      if (this.watch?.mode === 'perdir') this.watch.addDir(rel);
+      this.watchDir(rel);
       // A folder moved/copied in: report its contents too, so consumers never have to walk.
       const before = new Set(this.index.keys());
       await this.listTree(rel).catch(() => null);
@@ -1001,9 +878,8 @@ export class Workspace {
 
   dispose() {
     this.disposed = true;
-    this.dropPass();
-    this.pool?.close();
-    if (this.passTimer) clearTimeout(this.passTimer);
+    this.host?.dispose();
+    this.host = null;
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.closeWatcher();
     this.listeners.clear();
@@ -1014,30 +890,10 @@ function tooBigBinary(bytes: number) {
   return new BackendFailure('ETOOBIG', `File is too large (${(bytes / 1048576).toFixed(1)} MB; the limit is ${MAX_BINARY_BYTES / 1048576} MB)`);
 }
 
-function readSmallText(abs: string): string | null {
-  try {
-    const st = fs.statSync(abs);
-    return st.isFile() && st.size <= 1 << 20 ? fs.readFileSync(abs, 'utf8') : null;
-  } catch {
-    return null;
-  }
-}
-
 function definedOnly<T extends object>(o: T): Partial<T> {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
 }
 
-/** Index of the first entry > key in a sorted list. */
-function upperBound(list: readonly string[], key: string): number {
-  let lo = 0;
-  let hi = list.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
-    if (list[mid] <= key) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo;
-}
 
 export async function retryWin<T>(fn: () => Promise<T>): Promise<T> {
   // Windows: antivirus/indexer/Explorer briefly hold handles → EPERM/EBUSY/EACCES. Back off and retry.

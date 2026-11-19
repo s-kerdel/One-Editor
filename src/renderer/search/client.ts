@@ -7,8 +7,12 @@
 import { signal } from '@preact/signals';
 import { app } from '../app/app';
 import { streamAllTextPages } from '../app/workspace-text';
+import { activityNow, logActivity } from '../app/activity';
+import { webToken } from '../platform';
 import { ShardedSearch } from '../../search/shards';
-import type { FromWorker, HeadingQuery, ToWorker } from '../../search/protocol';
+import type { FeedSource } from '../../search/feeder';
+import type { FromWorker, HeadingQuery, NoteItem, ToWorker } from '../../search/protocol';
+import type { Mention } from '../../knowledge/index';
 import type { HeadingHit, SearchDoc, SearchOptions, SearchResponse } from '../../search/types';
 
 const WATCHDOG_MS = 8000;
@@ -19,11 +23,20 @@ const SLICE_CHARS = 1_000_000;
 const FILES_PER_SHARD = 800;
 /** While indexing, live results refresh at most this often. */
 const PROGRESS_BUMP_MS = 700;
+/** Feeder page size: parsed in a worker, so bigger pages just mean fewer round trips. */
+const FEED_PAGE_BYTES = 4 << 20;
+/** File events are coalesced this long before the changed files are re-read and re-indexed. */
+const REFRESH_DEBOUNCE_MS = 500;
 
 interface Port {
   post(m: ToWorker): void;
+  /** Hands MessagePorts to the worker (feeder ↔ peer shards). */
+  postPorts?(m: ToWorker, ports: MessagePort[]): void;
   terminate(): void;
 }
+
+/** Note metadata from the shards (the knowledge index is built from these: no text in this thread). */
+export type NotesEvent = { kind: 'start'; gen: number } | { kind: 'items'; gen?: number; items: NoteItem[]; removed?: string[] } | { kind: 'done'; gen: number };
 
 /** Workers to shard over: `search.workers` (1–16), else one per core but one, at most 8. */
 export function maxShards(): number {
@@ -50,7 +63,7 @@ class SearchClient {
   readonly progress = signal<{ done: number; total: number } | null>(null);
   readonly shardCount = signal(0);
   /** Last full build: engine time per shard (the critical path is the slowest) — perf guards, diagnostics. */
-  lastBuild: { shards: number; engineMs: number[]; wallMs: number } | null = null;
+  lastBuild: { shards: number; engineMs: number[]; wallMs: number; fed: boolean } | null = null;
 
   private ports: Port[] = [];
   private shards: ShardedSearch | null = null;
@@ -70,6 +83,59 @@ class SearchClient {
   private buildStart = 0;
   private lastBump = 0;
   private inline = false;
+  /** Shard 0 pulls the text itself (index channel) for the current build. */
+  private feeding = false;
+  private buildTrigger = 'workspace-open';
+  private notesCbs = new Set<(e: NotesEvent) => void>();
+  private refreshPending = new Set<string>();
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private refreshSeq = 0;
+  private refreshWaiters = new Map<number, { t0: number; paths: number }>();
+
+  /**
+   * Knowledge subscribes here: its index is rebuilt from these events. Subscribing after a build has
+   * started gets a replay (the shards re-extract from the text they hold) — nothing is missed.
+   */
+  onNotes(cb: (e: NotesEvent) => void): () => void {
+    this.notesCbs.add(cb);
+    if (this.shards && this.status.value !== 'idle') {
+      if (this.status.value === 'indexing') this.replayAfterBuild = true;
+      else this.replayNotes();
+    }
+    return () => this.notesCbs.delete(cb);
+  }
+
+  private replayAfterBuild = false;
+  private replaying = new Set<number>();
+
+  private replayNotes() {
+    if (!this.shards) return;
+    const gen = this.gen;
+    this.replaying = new Set();
+    this.notes({ kind: 'start', gen });
+    for (const p of this.ports) p.post({ type: 'replay', gen });
+  }
+
+  private notes(e: NotesEvent) {
+    for (const cb of this.notesCbs) {
+      try {
+        cb(e);
+      } catch (err) {
+        console.error('[search] notes listener failed', err);
+      }
+    }
+  }
+
+  /** Where shard 0 can fetch the workspace text itself: Electron app://, or the browser-mode server. */
+  private feedSource(): FeedSource | null {
+    if (this.inline || typeof Worker === 'undefined' || typeof app.backend?.readAllTextPage !== 'function') return null;
+    if (app.backend.kind === 'electron') {
+      const token = (window as unknown as { secEditBridge?: { indexToken?: string } }).secEditBridge?.indexToken;
+      return token ? { base: 'app://sec-edit/__index/', token, header: 'x-sec-edit-index' } : null;
+    }
+    if (app.backend.kind === 'web') return { base: new URL('./api/index/', location.href).toString(), token: webToken(), header: 'x-sec-edit-token' };
+    return null;
+  }
 
   /** Subscribe to app events (cheap; no worker yet). */
   wire() {
@@ -100,21 +166,31 @@ class SearchClient {
     app.events.on('doc:closed', (path) => {
       // Closing may discard unsaved edits: re-sync with disk.
       if (!this.shards) return;
+      if (this.feedSource()) return this.refreshPaths([path], 'doc-closed');
       app.backend
         .readFile(path)
         .then((f) => this.upsert(path, f.content, f.mtime))
         .catch(() => this.removePath(path));
     });
+    // Files changed on disk that are not open: re-read just those, coalesced (never a full pass).
+    app.events.on('files:changed', (paths) => this.refreshPaths(paths, 'fs-events'));
     // What gets indexed changed (ignore rules, size cap, excluded folders): rebuild.
     app.events.on('index:stale', () => {
+      this.buildTrigger = 'settings';
       if (this.shards) void this.reindex();
     });
+    // Hidden / minimised window: the feeder stops pulling pages until it is shown again.
+    document.addEventListener('visibilitychange', () => this.ports[0]?.post({ type: 'pause', on: document.visibilityState === 'hidden' }));
   }
 
-  /** Start the workers and build the index (idempotent). */
+  /**
+   * Start the workers and build the index (idempotent). The build's setup (workers, knowledge reset)
+   * runs in a task of its own: whoever calls this (the palette opening, a panel mounting) renders and
+   * takes focus first.
+   */
   start(): Promise<void> {
     if (this.starting) return this.starting;
-    this.starting = this.reindex();
+    this.starting = new Promise<void>((r) => setTimeout(r, 0)).then(() => this.reindex());
     return this.starting;
   }
 
@@ -128,6 +204,14 @@ class SearchClient {
     const ports: Port[] = [];
     for (let i = 0; i < n; i++) ports.push(this.createPort(i));
     this.ports = ports;
+    // Feeder wiring: shard 0 talks to every peer directly (documents never pass through this thread).
+    if (n > 1 && ports.every((p) => p.postPorts) && typeof MessageChannel !== 'undefined') {
+      for (let i = 1; i < n; i++) {
+        const ch = new MessageChannel();
+        ports[0].postPorts!({ type: 'peer', index: i }, [ch.port1]);
+        ports[i].postPorts!({ type: 'feedPort' }, [ch.port2]);
+      }
+    }
     this.shards = new ShardedSearch(ports);
     this.shardCount.value = n;
     this.shardWaiters.splice(0).forEach((f) => f());
@@ -146,7 +230,7 @@ class SearchClient {
           this.fallbackToInline();
         };
         this.mode.value = 'worker';
-        return { post: (m) => w.postMessage(m), terminate: () => w.terminate() };
+        return { post: (m) => w.postMessage(m), postPorts: (m, transfer) => w.postMessage(m, transfer), terminate: () => w.terminate() };
       } catch (err) {
         console.warn('[search] Worker unavailable, using in-thread search', err);
       }
@@ -193,12 +277,52 @@ class SearchClient {
       this.indexedBy.set(shard, { count: m.count, ms: m.ms });
       if (this.indexedBy.size < this.shards.n) return;
       const parts = [...this.indexedBy.values()];
+      if (this.feeding) this.finishFeed();
       this.indexed.value = parts.reduce((a, b) => a + b.count, 0);
       this.indexMs.value = performance.now() - this.buildStart;
-      this.lastBuild = { shards: this.shards.n, engineMs: parts.map((p) => Math.round(p.ms)), wallMs: Math.round(this.indexMs.value) };
+      this.lastBuild = { shards: this.shards.n, engineMs: parts.map((p) => Math.round(p.ms)), wallMs: Math.round(this.indexMs.value), fed: this.feeding };
       this.status.value = 'ready';
       this.progress.value = null;
+      activityNow.value = null;
+      logActivity({ kind: 'index', trigger: this.buildTrigger, ms: this.indexMs.value, detail: `${this.indexed.value.toLocaleString()} files · ${this.shards.n} shard${this.shards.n === 1 ? '' : 's'}${this.feeding ? '' : ' · via UI thread'}` });
+      this.buildTrigger = 'workspace-open';
+      this.notes({ kind: 'done', gen: m.gen });
+      if (this.replayAfterBuild) {
+        this.replayAfterBuild = false;
+        // A subscriber that joined mid-build saw only part of it.
+        this.replayNotes();
+      }
       this.readyWaiters.splice(0).forEach((f) => f());
+      this.bump();
+      return;
+    }
+    if (m.type === 'replayed') {
+      if (m.gen !== this.gen || !this.shards) return;
+      this.replaying.add(shard);
+      if (this.replaying.size === this.shards.n) this.notes({ kind: 'done', gen: m.gen });
+      return;
+    }
+    if (m.type === 'notes') {
+      if (m.gen !== undefined && m.gen !== this.gen) return;
+      this.notes({ kind: 'items', gen: m.gen, items: m.items, removed: m.removed });
+      return;
+    }
+    if (m.type === 'progress') {
+      if (m.gen !== this.gen) return;
+      this.setProgress(m.done, m.total);
+      return;
+    }
+    if (m.type === 'feedError') {
+      if (m.gen !== this.gen) return;
+      console.warn('[search] index channel failed, reading through the UI thread', m.message);
+      this.feeding = false;
+      void this.reindexVia(m.gen, false);
+      return;
+    }
+    if (m.type === 'refreshed') {
+      const w = this.refreshWaiters.get(m.id);
+      this.refreshWaiters.delete(m.id);
+      if (w) logActivity({ kind: 'index-update', trigger: 'fs-events', ms: performance.now() - w.t0, detail: `${w.paths} changed · ${m.files} re-indexed · ${m.removed} dropped${m.error ? ` · ${m.error}` : ''}` });
       this.bump();
       return;
     }
@@ -206,14 +330,125 @@ class SearchClient {
     if (m.type === 'error') console.warn('[search worker]', m.message);
   }
 
-  /** Full rebuild from disk, overlaying unsaved editor content. Pages stream into the shards as they arrive. */
+  /**
+   * Full rebuild, overlaying unsaved editor content. Normally shard 0 pulls the text from the backend
+   * itself and routes it to its peers (the UI thread never sees it); otherwise pages stream through here.
+   */
   async reindex() {
     const gen = ++this.gen;
     this.status.value = 'indexing';
     this.reindexing = true;
     this.indexedBy = new Map();
     this.buildStart = performance.now();
-    this.progress.value = { done: 0, total: 0 };
+    this.setProgress(0, 0);
+    this.notes({ kind: 'start', gen });
+    const src = app.workspace.value ? this.feedSource() : null;
+    if (src) {
+      this.ensureShards(shardsFor(app.files.value.length));
+      if (!this.inline && this.shards) {
+        this.feeding = true;
+        this.shards.reset(gen);
+        this.ports[0].post({ type: 'pause', on: document.visibilityState === 'hidden' });
+        this.ports[0].post({ type: 'feed', gen, src, shards: this.shards.n, maxBytes: FEED_PAGE_BYTES });
+        return;
+      }
+    }
+    this.feeding = false;
+    return this.reindexVia(gen, true);
+  }
+
+  /** After a fed build: open docs' live text and changes that arrived meanwhile win over the disk pass. */
+  private finishFeed() {
+    this.reindexing = false;
+    const ups = new Map<string, SearchDoc>();
+    for (const d of app.docs.values()) if (!d.binary) ups.set(d.path, { path: d.path, content: app.editor?.getContent(d.path) ?? d.content, mtime: d.mtime });
+    const gone: string[] = [];
+    for (const [p, d] of this.queued) {
+      if (d) ups.set(p, d);
+      else gone.push(p);
+    }
+    this.queued.clear();
+    if (gone.length) this.shards!.remove(gone);
+    if (ups.size) this.shards!.upsert([...ups.values()]);
+    if (this.refreshPending.size) this.scheduleRefresh();
+  }
+
+  private setProgress(done: number, total: number) {
+    this.progress.value = { done, total };
+    activityNow.value = total ? `Indexing ${done.toLocaleString()} / ${total.toLocaleString()}` : 'Indexing…';
+    // Progressive search: open panels re-run against what is indexed so far.
+    if (performance.now() - this.lastBump > PROGRESS_BUMP_MS) {
+      this.lastBump = performance.now();
+      this.bump();
+    }
+  }
+
+  private refreshFirst = 0;
+
+  /** Changed files (not open): coalesced, then re-read and re-indexed — never a full pass. */
+  refreshPaths(paths: string[], _trigger = 'fs-events') {
+    if (!this.shards) return;
+    if (!this.refreshPending.size) this.refreshFirst = performance.now();
+    for (const p of paths) this.refreshPending.add(p);
+    this.scheduleRefresh();
+  }
+
+  private scheduleRefresh() {
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    // A storm keeps pushing the batch back, but never more than 2 s.
+    const wait = Math.max(0, Math.min(REFRESH_DEBOUNCE_MS, this.refreshFirst + 2000 - performance.now()));
+    this.refreshTimer = setTimeout(() => this.flushRefresh(), wait);
+  }
+
+  private flushRefresh() {
+    this.refreshTimer = null;
+    if (this.reindexing || !this.shards) return; // picked up when the build finishes
+    // Open docs: their live text is authoritative (the editor reports its own changes).
+    const paths = [...this.refreshPending].filter((p) => !app.docs.has(p));
+    this.refreshPending.clear();
+    if (!paths.length) return;
+    const src = this.feedSource();
+    const id = ++this.refreshSeq;
+    if (src && !this.inline) {
+      this.refreshWaiters.set(id, { t0: performance.now(), paths: paths.length });
+      for (let i = 0; i < paths.length; i += 2000) {
+        const chunk = paths.slice(i, i + 2000);
+        this.ports[0].post({ type: 'refresh', id, src, paths: chunk, shardOf: this.shards.shardMap(chunk) });
+      }
+      return;
+    }
+    // No index channel (in-thread search, tests): read through the backend, a few at a time.
+    void (async () => {
+      const t0 = performance.now();
+      const docs: SearchDoc[] = [];
+      const gone: string[] = [];
+      for (let i = 0; i < paths.length; i += 8)
+        await Promise.all(
+          paths.slice(i, i + 8).map((p) =>
+            app.backend.readFile(p).then(
+              (f) => void (f.binary ? gone.push(p) : docs.push({ path: p, content: f.content, mtime: f.mtime })),
+              () => void gone.push(p),
+            ),
+          ),
+        );
+      if (docs.length) this.shards?.upsert(docs, true);
+      if (gone.length) this.shards?.remove(gone, true);
+      logActivity({ kind: 'index-update', trigger: 'fs-events', ms: performance.now() - t0, detail: `${paths.length} changed · via UI thread` });
+      this.bump();
+    })();
+  }
+
+  /** Mentions of a note (title / aliases) in other notes: the shards hold the text. */
+  async mentions(names: string[], exclude: string, limit = 500): Promise<Mention[]> {
+    void this.start();
+    await this.whenReady();
+    this.flushEdits();
+    if (!this.shards || !names.length) return [];
+    return (await this.watch(this.shards.mentions(names, exclude, limit), () => [])) ?? [];
+  }
+
+  /** The pre-feeder path: pages arrive here (UI thread) and are posted to the shards. */
+  private async reindexVia(gen: number, _initial: boolean) {
     let started = false;
     const begin = (total: number | undefined) => {
       started = true;
@@ -237,12 +472,7 @@ class SearchClient {
           }
           const docs: SearchDoc[] = page.files.map((f) => (seen.add(f.path), { path: f.path, content: live(f.path, f.content), mtime: f.mtime }));
           if (!(await this.sendDocs(gen, docs, false))) return;
-          if (page.total) this.progress.value = { done: page.done ?? seen.size, total: page.total };
-          // Progressive search: open panels re-run against what is indexed so far.
-          if (performance.now() - this.lastBump > PROGRESS_BUMP_MS) {
-            this.lastBump = performance.now();
-            this.bump();
-          }
+          if (page.total) this.setProgress(page.done ?? seen.size, page.total);
         }
       }
       if (!started) {
@@ -265,12 +495,14 @@ class SearchClient {
       this.queued.clear();
       if (gone.length) this.shards!.remove(gone);
       if (ups.length) this.shards!.upsert(ups);
+      if (this.refreshPending.size) this.scheduleRefresh();
     } catch (err) {
       console.error('[search] indexing failed', err);
       if (gen !== this.gen) return;
       if (!this.shards) this.ensureShards(1);
       this.status.value = 'error';
       this.progress.value = null;
+      activityNow.value = null;
       this.reindexing = false;
       // Don't leave searches hanging: they run against whatever is indexed (possibly nothing).
       this.readyWaiters.splice(0).forEach((f) => f());

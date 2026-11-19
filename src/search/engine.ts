@@ -108,6 +108,11 @@ export class SearchEngine {
     return this.docs.has(path);
   }
 
+  /** [path, text] of every document. */
+  *contents(): Generator<[string, string]> {
+    for (const [p, e] of this.docs) yield [p, e.content];
+  }
+
   getContent(path: string): string | undefined {
     return this.docs.get(path)?.content;
   }

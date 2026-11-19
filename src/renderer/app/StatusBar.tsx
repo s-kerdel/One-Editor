@@ -11,11 +11,15 @@ import { holdKeys } from './lazy';
 import { absolutePath, copyText, expandTo, revealInOs, revealInTree, revealLabel } from './fileops';
 import { openWorkspaceMenu } from './Shelf';
 import { isMarkdown } from '@shared/paths';
-import { countWords } from './wordcount';
+import type * as WordCount from './wordcount';
 import { gitUi } from '../git/install';
 import { varsStatus } from '../variables/slot';
+import { activityNow } from './ui';
 
-export { countWords };
+// The counter is its own tiny chunk: nothing to count before a note is shown (first paint stays lean).
+let wc: typeof WordCount | null = null;
+let wcLoading: Promise<unknown> | null = null;
+const countWords = (t: string) => wc!.countWords(t);
 
 /** Path of the open file as clickable crumbs: folder → reveal + expand it in the tree; file → reveal it. */
 function Breadcrumb({ path }: { path: string }) {
@@ -92,8 +96,12 @@ function selectionText(): string | null {
 function useWordCount(path: string | null, md: boolean) {
   const [count, setCount] = useState<{ words: number; chars: number; selected: boolean } | null>(null);
   const cursor = ui.cursorInfo.value;
+  const [loaded, setLoaded] = useState(!!wc);
   useEffect(() => {
-    if (!path || !md) return setCount(null);
+    if (!loaded && path && md) void (wcLoading ??= import('./wordcount').then((m) => (wc = m))).then(() => setLoaded(true));
+  }, [path, md]);
+  useEffect(() => {
+    if (!path || !md || !loaded) return setCount(null);
     let timer: ReturnType<typeof setTimeout> | null = null;
     const compute = () => {
       const sel = selectionText();
@@ -119,10 +127,10 @@ function useWordCount(path: string | null, md: boolean) {
       off();
       if (timer) clearTimeout(timer);
     };
-  }, [path, md]);
+  }, [path, md, loaded]);
   // Selection changes arrive via the cursor signal.
   useEffect(() => {
-    if (!path || !md) return;
+    if (!path || !md || !wc) return;
     const sel = selectionText();
     if (sel !== null || count?.selected) {
       const text = sel ?? app.editor?.getContent(path) ?? '';
@@ -194,6 +202,12 @@ export function StatusBar() {
       {GitBranch && <GitBranch />}
       {Vars && <Vars />}
       <span class="se-status-spacer" />
+      {/* After the spacer: it absorbs the width, so nothing else moves while this comes and goes. */}
+      {activityNow.value && (
+        <span class="se-status-item" data-testid="activity" aria-live="polite" style="font-variant-numeric:tabular-nums">
+          {activityNow.value}
+        </span>
+      )}
       {cur && doc && !doc.binary && (
         <span class="se-status-item" title="Line, column">
           Ln {cur.line + 1}, Col {cur.col + 1}

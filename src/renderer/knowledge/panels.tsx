@@ -7,7 +7,7 @@ import { app } from '../app/app';
 import { getCommand } from '../app/commands';
 import * as searchModule from '../search';
 import { extractHeadings, type Backlink, type Mention, type Snippet, type TagNode } from '../../knowledge/index';
-import { building, index, kv, linkMention, openLink } from './state';
+import { building, index, kv, linkMention, openLink, tagLineOf, unlinkedMentionsOf } from './state';
 import { Chevron, IconCollapse, IconExpand, IconFile, IconFilePlus, IconGraph, IconHash, IconLink, IconSearch } from './icons';
 
 // Section open/closed state survives switching sidebar tabs.
@@ -303,12 +303,16 @@ export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
   const outgoingCount = useMemo(() => (path ? new Set(index.outgoing(path).filter((o) => o.path !== path).map((o) => o.path ?? `?${o.link.target.toLowerCase()}`)).size : 0), [path, version]);
   const unresolved = useMemo(() => index.unresolvedLinks(), [version]);
 
-  // Unlinked mentions scan every note's text — keep it off the keystroke path.
+  // Unlinked mentions scan every note's text (in the search workers) — keep it off the keystroke path.
   const [mentions, setMentions] = useState<{ path: string; list: Mention[] } | null>(null);
   useEffect(() => {
     if (!path || !sections.unlinked) return;
-    const t = setTimeout(() => setMentions({ path, list: index.unlinkedMentions(path) }), mentions?.path === path ? 300 : 0);
-    return () => clearTimeout(t);
+    let live = true;
+    const t = setTimeout(() => void unlinkedMentionsOf(path).then((list) => live && setMentions({ path, list })), mentions?.path === path ? 300 : 0);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
   }, [path, version, sections.unlinked]);
   const mentionList = mentions && mentions.path === path ? mentions.list : null;
 
@@ -544,10 +548,9 @@ export function TagsPanel() {
                 key={p}
                 class={`se-kn-out${p === app.activePath.value ? ' current' : ''}`}
                 title={p}
-                onClick={() => {
-                  const line = index.tagLine(p, tag);
-                  void app.openFile(p, line === null ? undefined : { line });
-                }}
+                onClick={() =>
+                  void tagLineOf(p, tag).then((line) => app.openFile(p, line === null ? undefined : { line }))
+                }
               >
                 <span class="se-kn-ico">
                   <IconFile />

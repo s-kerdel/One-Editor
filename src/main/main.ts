@@ -7,6 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import crypto from 'node:crypto';
 import { RPC_METHODS, type Settings } from '../shared/api';
 import { BackendService, readJson, writeJson } from '../backend/service';
 import { BackendFailure } from '../backend/workspace';
@@ -18,7 +19,12 @@ import { VaultService, registerVaultIpc } from './vault';
 import { createRelaunch, frameOf, frameWindowOptions, initialOverlay, isDarkColor, parseOverlay, rememberOverlay, type TitleBarCache, type WindowFrame } from './frame';
 
 const tMainStart = performance.now(); // ms since process start (Node's timeOrigin)
+// More libuv threads (default 4) before the pool starts: on a WSL / network root every readdir or
+// open blocks one for milliseconds, and a tree walk must not starve the user's file opens.
+process.env.UV_THREADPOOL_SIZE ||= '16';
 const isTest = !!process.env.SEC_EDIT_TEST;
+/** Per-launch secret for app://sec-edit/__index/ (handed to the page through the preload). */
+const indexToken = crypto.randomBytes(16).toString('hex');
 const logTimings = isTest || !!process.env.SEC_EDIT_TIMINGS;
 if (process.env.SEC_EDIT_USER_DATA) app.setPath('userData', process.env.SEC_EDIT_USER_DATA);
 
@@ -204,7 +210,7 @@ function main() {
   });
 
   service.onFsEvents((events) => win?.webContents.send('fs:events', events));
-  service.onGitChanged(() => win?.webContents.send('git:changed'));
+  service.onGitChanged((e) => win?.webContents.send('git:changed', e));
   service.onSettingsChanged((s, patch) => {
     if ('theme' in patch || 'sidebarStyle' in patch) applyTheme(s);
   });
@@ -257,7 +263,7 @@ function main() {
         spellcheck: settings.spellcheck,
         backgroundThrottling: false,
         v8CacheOptions: 'bypassHeatCheck', // cache compiled JS on first run, not the third
-        additionalArguments: [`--sec-edit-frame=${frame}`], // read by the preload (bridge.frame)
+        additionalArguments: [`--sec-edit-frame=${frame}`, `--sec-edit-index-token=${indexToken}`], // read by the preload (bridge.frame / bridge.indexToken)
       },
     });
     const w = win;
@@ -305,6 +311,19 @@ function main() {
     w.on('move', queueSave);
     w.on('maximize', queueSave);
     w.on('unmaximize', queueSave);
+
+    // Minimised / hidden: let Chromium throttle the page (no frames for a blinking caret, timers
+    // ≥ 1 s, document.hidden → the search feeder pauses) and hold the folder poller of WSL / network
+    // roots. Off again when shown: terminals, autosave and indexing run at full speed in the foreground.
+    const background = (on: boolean) => {
+      if (w.isDestroyed()) return;
+      w.webContents.setBackgroundThrottling(on);
+      service.workspace?.setWatchPaused(on);
+    };
+    w.on('minimize', () => background(true));
+    w.on('hide', () => background(true));
+    w.on('restore', () => background(false));
+    w.on('show', () => background(false));
 
     // Give the renderer a chance to flush autosaves / ask about unsaved changes before closing.
     // The 4 s fallback only covers a renderer that never picks the request up (crashed, still booting).
@@ -357,6 +376,16 @@ function main() {
     protocol.handle(SCHEME, async (req) => {
       const route = routeAppUrl(req.url, rendererDir, path);
       if (route.kind === 'error') return new Response(route.message, { status: route.status });
+      // Text pages for the search workers: produced by the indexer thread as JSON bytes, only forwarded here.
+      if (route.kind === 'index') {
+        if (req.headers.get('x-sec-edit-index') !== indexToken) return new Response('forbidden', { status: 403 });
+        try {
+          const body = route.op === 'page' ? await service.indexPageRaw(route.params.get('cursor'), Number(route.params.get('maxBytes')) || undefined) : await service.indexFilesRaw(await req.json());
+          return new Response(body as Uint8Array<ArrayBuffer>, { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+        } catch (err) {
+          return new Response(String((err as Error)?.message ?? err), { status: err instanceof BackendFailure && err.code === 'NO_WORKSPACE' ? 409 : 500 });
+        }
+      }
       // Workspace files for the preview (images, PDFs…): app://sec-edit/__ws/<rel>
       if (route.kind === 'workspace') {
         try {

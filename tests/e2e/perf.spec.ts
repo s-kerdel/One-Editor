@@ -105,10 +105,11 @@ test('heavy libraries and workers load only when needed', async ({ page, ws }) =
   const knowledgeWorkers = () => workers.filter((w) => /^extract-worker-/.test(w));
   const otherWorkers = () => workers.filter((w) => !/^extract-worker-/.test(w));
   await ws.open(page);
-  // Idle after boot: search + knowledge + format stubs pull their chunks, the search worker indexes.
+  // Idle after boot: search + knowledge + format stubs pull their chunks, the search worker indexes —
+  // note metadata for the knowledge index included (no separate extraction worker for a build).
   await page.waitForFunction(() => (window as any).__secEditSearch?.status.value === 'ready' && (window as any).__secEditKnowledgeReady === true, null, { timeout: 15000 });
-  expect(otherWorkers().length, `only the search worker (+ knowledge extraction) runs after an idle boot (got ${workers.join(', ')})`).toBe(1);
-  expect(knowledgeWorkers().length, 'knowledge extraction runs in its worker').toBe(1);
+  expect(otherWorkers().length, `only the search worker runs after an idle boot (got ${workers.join(', ')})`).toBe(1);
+  expect(knowledgeWorkers().length, 'no extraction worker just for the build').toBe(0);
   expect(requested.filter((f) => HEAVY.test(f)), 'heavy chunks fetched without any user action').toEqual([]);
 
   // Plain typing in a prose note needs none of them either.
@@ -123,7 +124,7 @@ test('heavy libraries and workers load only when needed', async ({ page, ws }) =
   // …and the formatter arrives on demand.
   await page.keyboard.press('Shift+Alt+f');
   await expect.poll(() => otherWorkers().length, { timeout: 15000 }).toBe(2);
-  expect(knowledgeWorkers().length).toBe(1);
+  expect(knowledgeWorkers().length).toBe(0);
 });
 
 test('shortcuts pressed while a lazy chunk is still loading are queued, typed text included', async ({ page, ws }) => {

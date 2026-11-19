@@ -1,0 +1,7 @@
+.se-actlog { width: min(860px, 92vw); max-width: none; }
+.se-actlog-list { max-height: 60vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.se-actlog table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.se-actlog th, .se-actlog td { padding: 3px 8px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.se-actlog td:last-child { white-space: normal; color: var(--text-muted); }
+.se-actlog th { position: sticky; top: 0; background: var(--bg-elevated, var(--bg)); color: var(--text-muted); font-weight: 600; }
+.se-actlog .n { text-align: right; }

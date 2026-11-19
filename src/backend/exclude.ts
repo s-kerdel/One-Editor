@@ -7,6 +7,8 @@ export interface ExcludeMatcher {
   path(rel: string): boolean;
   /** Has path-style patterns ("docs/build") that need the full relative path to evaluate. */
   readonly rooted: boolean;
+  /** Plain excluded folder names (for watchers that can filter natively). */
+  names(): string[];
 }
 
 /** Our own temp files (atomic saves, case-only renames) must never surface anywhere. */
@@ -36,6 +38,7 @@ export function createExcludeMatcher(patterns: string[], showHidden: boolean): E
   };
   return {
     name,
+    names: () => [...names],
     rooted: rooted.length > 0,
     path(rel) {
       if (!rel) return false;

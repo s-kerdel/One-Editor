@@ -132,6 +132,8 @@ export type AppEvents = {
   'index:stale': () => void;
   /** {{variables}} data, active env / target or display setting changed (preview re-renders). */
   'variables:changed': () => void;
+  /** Files changed on disk that are not open (no content: indexers re-read them, coalesced, off the UI thread). */
+  'files:changed': (paths: string[]) => void;
 };
 
 class App {

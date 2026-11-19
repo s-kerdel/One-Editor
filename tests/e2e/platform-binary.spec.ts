@@ -105,16 +105,19 @@ test('the server refuses an oversized writeBinary body with a JSON error (not a 
   expect(fs.existsSync(path.join(ws.root, 'big.bin'))).toBe(false);
 });
 
-test('indexes stream in pages (no single readAllText) and knowledge extraction runs in a worker', async ({ page, ws }) => {
+test('indexes stream in pages straight to the search workers (never through the UI thread); knowledge metadata comes from them', async ({ page, ws }) => {
   const rpc = trackRpc(page);
+  // Shard 0 fetches the index channel itself (worker requests show up on the context).
+  const indexPages: string[] = [];
+  page.context().on('request', (r) => /\/api\/index\/page/.test(r.url()) && indexPages.push(r.url()));
   // A big note (> the in-thread threshold) so edits go through the worker too.
   const big = Array.from({ length: 900 }, (_, i) => `Line ${i} with [[kubernetes]] and #bulk text.`).join('\n');
   await ws.write('notes/big-links.md', `# Big\n\n${big}\n`);
   await ws.open(page);
   await page.waitForFunction(() => (window as any).__secEditSearch?.status.value === 'ready' && (window as any).__secEditKnowledgeReady === true, null, { timeout: 20000 });
-  expect(rpc.methods).toContain('readAllTextPage');
+  expect(indexPages.length, 'pages fetched by the search worker').toBeGreaterThan(0);
+  expect(rpc.methods, 'no text pages through the UI thread').not.toContain('readAllTextPage');
   expect(rpc.methods).not.toContain('readAllText');
-  expect(await page.evaluate(() => (window as any).__secEdit.knowledge.extractionMode())).toBe('worker');
   // Both indexes saw the content.
   const k = await page.evaluate(() => {
     const kn = (window as any).__secEdit.knowledge;
@@ -133,4 +136,6 @@ test('indexes stream in pages (no single readAllText) and knowledge extraction r
     .poll(() => page.evaluate(() => (window as any).__secEdit.knowledge.outgoing('notes/big-links.md').some((o: any) => o.path === 'notes/Daily notes.md')), { timeout: 8000 })
     .toBe(true);
   await expect.poll(() => page.evaluate(() => (window as any).__secEdit.knowledge.notesWithTag('freshtag'))).toEqual(['notes/big-links.md']);
+  // Edits of a big note are extracted in the extraction worker, not in-thread.
+  expect(await page.evaluate(() => (window as any).__secEdit.knowledge.extractionMode())).toBe('worker');
 });

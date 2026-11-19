@@ -90,6 +90,21 @@ export function makeSnippet(line: string, col: number, length: number): Snippet 
   return { text, start, end };
 }
 
+/** Context snippet of every link (its line, trimmed around the link): backlinks without keeping the text. */
+export function linkSnippets(text: string, links: readonly LinkRef[]): Snippet[] {
+  if (!links.length) return [];
+  const starts: number[] = [0];
+  const maxLine = links.reduce((m, l) => Math.max(m, l.line), 0);
+  for (let i = text.indexOf('\n'); i !== -1 && starts.length <= maxLine + 1; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+  const lineAt = (n: number) => {
+    const a = starts[n];
+    if (a === undefined) return '';
+    const b = starts[n + 1];
+    return text.slice(a, b === undefined ? text.length : b - 1).replace(/\r$/, '');
+  };
+  return links.map((l) => makeSnippet(lineAt(l.line), l.col, l.length));
+}
+
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const WIKI_RE = /!?\[\[[^\[\]\n]+?\]\]/g;
 const MD_LINK_RE = /!?\[(?:[^\[\]\\]|\\.)*\]\([^)\n]*\)/g;
@@ -107,17 +122,92 @@ interface Derived {
   unresolvedBy: Map<string, Set<string>>;
 }
 
+export function mentionNamesOf(n: Pick<NoteInfo, 'title' | 'aliases'>): string[] {
+  return [...new Set([n.title, ...n.aliases].map((s) => s.trim()).filter((s) => s.length >= 2))].sort((a, b) => b.length - a.length);
+}
+
+export interface MentionMatcher {
+  re: RegExp;
+  lowerNames: string[];
+}
+
+export function mentionMatcher(names: string[]): MentionMatcher {
+  return { re: new RegExp(`(?<![\\p{L}\\p{N}_])(?:${names.map(escapeRe).join('|')})(?![\\p{L}\\p{N}_])`, 'giu'), lowerNames: names.map((s) => s.toLowerCase()) };
+}
+
+export const compareMentions = (a: Mention, b: Mention) => a.from.localeCompare(b.from) || a.line - b.line || a.col - b.col;
+
+/** Unlinked mentions of `m`'s names in one note's text (appended to `out`, up to `limit`). */
+export function findMentions(text: string, from: string, m: MentionMatcher, limit: number, out: Mention[]): void {
+  const { re, lowerNames } = m;
+  // Cheap prefilter: most notes don't mention the name at all.
+  re.lastIndex = 0;
+  if (!re.test(text)) return;
+  scanLines(text, (line, lineNo, kind, masked) => {
+    if (kind !== 'text') return;
+    const ll = line.toLowerCase();
+    if (!lowerNames.some((s) => ll.includes(s))) return;
+    let clean = masked;
+    if (clean.indexOf('[[') !== -1) clean = clean.replace(WIKI_RE, blank);
+    if (clean.indexOf('](') !== -1) clean = clean.replace(MD_LINK_RE, blank);
+    clean = maskUrls(clean);
+    re.lastIndex = 0;
+    let x: RegExpExecArray | null;
+    while ((x = re.exec(clean))) {
+      out.push({ from, line: lineNo, col: x.index, length: x[0].length, text: x[0], context: makeSnippet(line, x.index, x[0].length) });
+      if (out.length >= limit) return false;
+    }
+  });
+}
+
+/** First line (0-based) where `tag` (or a nested tag) occurs in a note's text. */
+export function findTagLine(text: string, tag: string): number | null {
+  const t = tag.replace(/^#/, '').toLowerCase();
+  let found: number | null = null;
+  scanLines(text, (_line, lineNo, kind, masked) => {
+    if (kind !== 'text') return;
+    if (findTagsInLine(masked).some((x) => x.tag.toLowerCase() === t || x.tag.toLowerCase().startsWith(`${t}/`))) {
+      found = lineNo;
+      return false;
+    }
+  });
+  return found;
+}
+
 const sameList = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** FNV-1a of a note's text: "unchanged?" without keeping the text. */
+function textHash(t: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 0x01000193);
+  return (h ^ t.length) >>> 0;
+}
+
+export interface KnowledgeIndexOptions {
+  /**
+   * Keep every note's text (default). Without it the index holds only metadata + link context
+   * snippets — the app's renderer, which gets note metadata from the search workers; full-text
+   * features (unlinked mentions, tag lines) then come from those workers.
+   */
+  retainText?: boolean;
+}
 
 export class KnowledgeIndex implements KnowledgeApi {
   private readonly infos = new Map<string, NoteInfo>();
   private readonly texts = new Map<string, string>();
+  private readonly snippets = new Map<string, Snippet[]>();
+  private readonly hashes = new Map<string, number>();
+  private readonly retainText: boolean;
   private fileSet = new Set<string>();
   private derived: Derived | null = null;
   private unresolvedCache: { version: number; list: UnresolvedLink[] } | null = null;
   private tagCache: { version: number; map: Map<string, { tag: string; notes: Set<string> }> } | null = null;
   private readonly listeners = new Set<() => void>();
   version = 0;
+
+  constructor(opts: KnowledgeIndexOptions = {}) {
+    this.retainText = opts.retainText !== false;
+  }
 
   // ---------- mutation ----------
 
@@ -140,6 +230,8 @@ export class KnowledgeIndex implements KnowledgeApi {
       if (!keep.has(p)) {
         this.infos.delete(p);
         this.texts.delete(p);
+        this.snippets.delete(p);
+        this.hashes.delete(p);
         this.fileSet.delete(p);
         changed = true;
       }
@@ -149,11 +241,18 @@ export class KnowledgeIndex implements KnowledgeApi {
     }
   }
 
+  /** Same text as last indexed (without keeping texts: by hash). */
+  sameText(path: string, text: string): boolean {
+    if (this.retainText) return this.texts.get(path) === text;
+    return this.hashes.get(path) === textHash(text) && this.infos.has(path);
+  }
+
   /**
    * Add or re-index a file. Non-markdown files only join the file list. Returns false if unchanged.
-   * `info`: metadata already extracted from exactly this text (the extraction worker).
+   * `info`: metadata already extracted from exactly this text (a worker). `text` may be null when
+   * `info` and `snippets` come from a worker that had the text (the search shards).
    */
-  update(path: string, text: string, info?: NoteInfo): boolean {
+  update(path: string, text: string | null, info?: NoteInfo, snippets?: Snippet[]): boolean {
     const isNew = !this.fileSet.has(path);
     if (!isMarkdown(path)) {
       if (!isNew) return false;
@@ -162,10 +261,17 @@ export class KnowledgeIndex implements KnowledgeApi {
       this.touch();
       return true;
     }
-    if (this.texts.get(path) === text) return false;
+    if (text !== null && this.sameText(path, text)) return false;
     const old = this.infos.get(path);
-    info ??= extractNote(path, text);
-    this.texts.set(path, text);
+    if (!info) {
+      if (text === null) return false;
+      info = extractNote(path, text);
+    }
+    if (text !== null) {
+      if (this.retainText) this.texts.set(path, text);
+      else this.hashes.set(path, textHash(text));
+    } else this.hashes.delete(path);
+    this.snippets.set(path, snippets ?? (text !== null ? linkSnippets(text, info.links) : []));
     this.infos.set(path, info);
     this.fileSet.add(path);
     // A new file can change how any link resolves → full re-derive (lazy). Content edits only
@@ -180,6 +286,8 @@ export class KnowledgeIndex implements KnowledgeApi {
     const had = this.fileSet.delete(path);
     const hadNote = this.infos.delete(path);
     this.texts.delete(path);
+    this.snippets.delete(path);
+    this.hashes.delete(path);
     if (had || hadNote) {
       this.derived = null;
       this.touch();
@@ -199,12 +307,18 @@ export class KnowledgeIndex implements KnowledgeApi {
       this.fileSet.add(b);
       const text = this.texts.get(a);
       const info = this.infos.get(a);
+      const sn = this.snippets.get(a);
+      const hash = this.hashes.get(a);
       this.texts.delete(a);
       this.infos.delete(a);
-      if (text !== undefined && isMarkdown(b)) {
-        this.texts.set(b, text);
+      this.snippets.delete(a);
+      this.hashes.delete(a);
+      if ((text !== undefined || info) && isMarkdown(b)) {
+        if (text !== undefined) this.texts.set(b, text);
+        if (hash !== undefined) this.hashes.set(b, hash);
+        if (sn) this.snippets.set(b, sn);
         // Extraction depends on the text only (plus path/title): a folder move needn't re-parse every note.
-        this.infos.set(b, info ? { ...info, path: b, title: stem(b) } : extractNote(b, text));
+        this.infos.set(b, info ? { ...info, path: b, title: stem(b) } : extractNote(b, text!));
       }
     }
     if (moved.size) {
@@ -217,6 +331,8 @@ export class KnowledgeIndex implements KnowledgeApi {
   clear(): void {
     this.infos.clear();
     this.texts.clear();
+    this.snippets.clear();
+    this.hashes.clear();
     this.fileSet = new Set();
     this.derived = null;
     this.touch();
@@ -380,12 +496,11 @@ export class KnowledgeIndex implements KnowledgeApi {
       const links = this.infos.get(from)?.links;
       const res = d.resolved.get(from);
       if (!links || !res) continue;
-      let lines: string[] | null = null;
+      const sn = this.snippets.get(from);
       for (let i = 0; i < links.length; i++) {
         if (res[i] !== path) continue;
         const link = links[i];
-        lines ??= (this.texts.get(from) ?? '').split('\n');
-        out.push({ from, line: link.line, col: link.col, length: link.length, link, context: makeSnippet(lines[link.line] ?? '', link.col, link.length) });
+        out.push({ from, line: link.line, col: link.col, length: link.length, link, context: sn?.[i] ?? { text: '', start: 0, end: 0 } });
       }
     }
     return out.sort((a, b) => a.from.localeCompare(b.from) || a.line - b.line || a.col - b.col);
@@ -443,38 +558,24 @@ export class KnowledgeIndex implements KnowledgeApi {
     return map;
   }
 
+  /** Names a note is mentioned by (title + aliases), longest first. */
+  mentionNames(path: string): string[] {
+    const n = this.infos.get(path);
+    return n ? mentionNamesOf(n) : [];
+  }
+
   /** Plain-text occurrences of the note's title/aliases in other notes that aren't already links. */
   unlinkedMentions(path: string, limit = 500): Mention[] {
-    const n = this.infos.get(path);
-    if (!n) return [];
-    const names = [...new Set([n.title, ...n.aliases].map((s) => s.trim()).filter((s) => s.length >= 2))].sort((a, b) => b.length - a.length);
+    const names = this.mentionNames(path);
     if (!names.length) return [];
-    const re = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${names.map(escapeRe).join('|')})(?![\\p{L}\\p{N}_])`, 'giu');
-    const lowerNames = names.map((s) => s.toLowerCase());
+    const m = mentionMatcher(names);
     const out: Mention[] = [];
     for (const [from, text] of this.texts) {
       if (from === path) continue;
-      // Cheap prefilter: most notes don't mention the name at all.
-      re.lastIndex = 0;
-      if (!re.test(text)) continue;
-      scanLines(text, (line, lineNo, kind, masked) => {
-        if (kind !== 'text') return;
-        const ll = line.toLowerCase();
-        if (!lowerNames.some((s) => ll.includes(s))) return;
-        let clean = masked;
-        if (clean.indexOf('[[') !== -1) clean = clean.replace(WIKI_RE, blank);
-        if (clean.indexOf('](') !== -1) clean = clean.replace(MD_LINK_RE, blank);
-        clean = maskUrls(clean);
-        re.lastIndex = 0;
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(clean))) {
-          out.push({ from, line: lineNo, col: m.index, length: m[0].length, text: m[0], context: makeSnippet(line, m.index, m[0].length) });
-          if (out.length >= limit) return false;
-        }
-      });
+      findMentions(text, from, m, limit, out);
       if (out.length >= limit) break;
     }
-    return out.sort((a, b) => a.from.localeCompare(b.from) || a.line - b.line || a.col - b.col);
+    return out.sort(compareMentions);
   }
 
   tags(): TagNode[] {
@@ -514,20 +615,10 @@ export class KnowledgeIndex implements KnowledgeApi {
     return [...out].sort((a, b) => a.localeCompare(b));
   }
 
-  /** Lines where a tag occurs in a note (for jumping to it). */
+  /** Lines where a tag occurs in a note (for jumping to it). Needs the retained text. */
   tagLine(path: string, tag: string): number | null {
     const text = this.texts.get(path);
-    if (text === undefined) return null;
-    const t = tag.replace(/^#/, '').toLowerCase();
-    let found: number | null = null;
-    scanLines(text, (_line, lineNo, kind, masked) => {
-      if (kind !== 'text') return;
-      if (findTagsInLine(masked).some((x) => x.tag.toLowerCase() === t || x.tag.toLowerCase().startsWith(`${t}/`))) {
-        found = lineNo;
-        return false;
-      }
-    });
-    return found;
+    return text === undefined ? null : findTagLine(text, tag);
   }
 }
 

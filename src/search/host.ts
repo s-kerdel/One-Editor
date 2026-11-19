@@ -2,7 +2,22 @@
 // fallback when workers are unavailable. Searches run as generators that yield every few ms, so a newer
 // query (or cancel) arriving meanwhile aborts the stale one instead of queueing behind it.
 import { SearchEngine, type MatchRun } from './engine';
-import type { FromWorker, ToWorker } from './protocol';
+import type { FromWorker, NoteItem, ToWorker } from './protocol';
+import type { SearchDoc } from './types';
+import { extractNote } from '../knowledge/extract';
+import { findMentions, linkSnippets, mentionMatcher, type Mention } from '../knowledge/index';
+import { isMarkdown } from '@shared/paths';
+
+/** Metadata of the Markdown notes among `docs` (computed where the text already is). */
+export function notesOf(docs: readonly SearchDoc[]): NoteItem[] {
+  const out: NoteItem[] = [];
+  for (const d of docs) {
+    if (!isMarkdown(d.path)) continue;
+    const info = extractNote(d.path, d.content);
+    out.push({ path: d.path, info, snippets: linkSnippets(d.content, info.links) });
+  }
+  return out;
+}
 
 const SLICE_MS = 8;
 
@@ -41,17 +56,23 @@ export class SearchHost {
           const t0 = performance.now();
           this.engine.upsertMany(msg.docs);
           b.ms += performance.now() - t0;
+          const notes = notesOf(msg.docs);
+          if (notes.length) this.post({ type: 'notes', gen: msg.gen, items: notes });
           if (msg.done) {
             this.building = null;
             this.post({ type: 'indexed', gen: msg.gen, count: this.engine.size, ms: b.ms });
           }
           break;
         }
-        case 'upsert':
+        case 'upsert': {
           this.engine.upsertMany(msg.docs);
+          const notes = msg.notes ? notesOf(msg.docs) : [];
+          if (notes.length) this.post({ type: 'notes', items: notes });
           break;
+        }
         case 'remove':
           msg.paths.forEach((p) => this.engine.remove(p));
+          if (msg.notes) this.post({ type: 'notes', items: [], removed: msg.paths });
           break;
         case 'rename':
           this.engine.rename(msg.from, msg.to);
@@ -95,6 +116,24 @@ export class SearchHost {
         case 'vocab':
           this.post({ type: 'vocab', id: msg.id, info: this.engine.vocabInfo(msg.words) });
           break;
+        case 'replay': {
+          const docs: SearchDoc[] = [];
+          for (const [path, content] of this.engine.contents()) if (isMarkdown(path)) docs.push({ path, content });
+          for (let i = 0; i < docs.length; i += 500) this.post({ type: 'notes', gen: msg.gen, items: notesOf(docs.slice(i, i + 500)) });
+          this.post({ type: 'replayed', gen: msg.gen });
+          break;
+        }
+        case 'mentions': {
+          const m = mentionMatcher(msg.names);
+          const items: Mention[] = [];
+          for (const [p, content] of this.engine.contents()) {
+            if (p === msg.exclude || !isMarkdown(p)) continue;
+            findMentions(content, p, m, msg.limit, items);
+            if (items.length >= msg.limit) break;
+          }
+          this.post({ type: 'mentions', id: msg.id, items });
+          break;
+        }
       }
     } catch (err) {
       this.post({ type: 'error', id: 'id' in msg ? (msg as { id: number }).id : undefined, message: String((err as Error)?.message ?? err) });

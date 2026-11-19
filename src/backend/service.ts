@@ -24,6 +24,7 @@ import { BackendFailure, MAX_INDEX_BYTES, Workspace, retryWin, type IndexOptions
 import { platformTrash } from './trash';
 import { checkPdfRequest, looksLikePdf, withPdfExtension, writeFileAtomic } from './pdf-export';
 import { GitService, gitEnv, locateGit, type GitServiceOptions } from './git';
+import { GitMonitor, type GitMonitorEvent } from './git-monitor';
 import { diffTexts } from './git-compare';
 import { GIT_OPS } from '../shared/git';
 
@@ -131,8 +132,8 @@ export class BackendService {
   /** In-memory copy of export-dirs.json (workspace id → last PDF folder). */
   private exportDirs: Record<string, unknown> | null = null;
   /** Git for the open folder: created on the first git call (no spawn at launch). */
-  private gitSvc: GitService | null = null;
-  private gitListeners = new Set<() => void>();
+  private monitor: GitMonitor | null = null;
+  private gitListeners = new Set<(e: GitMonitorEvent) => void>();
   private gitUnsub: (() => void) | null = null;
 
   constructor(
@@ -200,7 +201,10 @@ export class BackendService {
     // The text cache lives with the app's data (never inside the folder); '' = off.
     const cacheDir = this.workspaceOptions.cacheDir === undefined ? defaultCacheDir(this.configDir) : this.workspaceOptions.cacheDir || undefined;
     this.workspace = new Workspace(resolved, { exclude: s.excludeGlobs, showHidden: s.showHiddenFiles, index: indexOptionsFrom(s), ...this.workspaceOptions, cacheDir });
-    this.unwatch = this.workspace.onEvents((e) => this.fsListeners.forEach((l) => l(e)));
+    this.unwatch = this.workspace.onEvents((e) => {
+      this.fsListeners.forEach((l) => l(e));
+      this.monitor?.trigger('fs', e.map((x) => x.path));
+    });
     const recent = (await this.recentWorkspaces()).filter((p) => !samePath(p, resolved));
     this.recent = [resolved, ...recent].slice(0, 20);
     void writeJson(this.recentFile, this.recent).catch(() => {});
@@ -245,19 +249,35 @@ export class BackendService {
     return this.ws().readFile(p);
   }
   writeFile(p: string, content: string, opts?: WriteOptions) {
-    return this.ws().writeFile(p, content, opts);
+    return this.ws()
+      .writeFile(p, content, opts)
+      .then((r) => (this.gitTouched('save', [p]), r));
   }
   createFile(p: string, content?: string) {
-    return this.ws().createFile(p, content);
+    return this.ws()
+      .createFile(p, content)
+      .then((r) => (this.gitTouched('fs', [p]), r));
   }
   createDir(p: string) {
-    return this.ws().createDir(p);
+    return this.ws()
+      .createDir(p)
+      .then((r) => (this.gitTouched('fs', [p]), r));
   }
   rename(a: string, b: string) {
-    return this.ws().rename(a, b);
+    return this.ws()
+      .rename(a, b)
+      .then((r) => (this.gitTouched('fs', [a, b]), r));
   }
 
   async remove(p: string, opts: RemoveOptions = {}) {
+    try {
+      await this.removeNow(p, opts);
+    } finally {
+      this.gitTouched('fs', [p]);
+    }
+  }
+
+  private async removeNow(p: string, opts: RemoveOptions) {
     const ws = this.ws();
     if (opts.permanent) return ws.remove(p);
     const hook = this.hooks.trash;
@@ -280,6 +300,19 @@ export class BackendService {
   readAllText() {
     return this.ws().readAllText();
   }
+
+  // ---- index channel (not RPC: the search workers fetch these directly; see main.ts / server.ts) ----
+
+  /** A page of the full index pass as UTF-8 JSON (a TextPage), produced off this thread. */
+  indexPageRaw(cursor: string | null, maxBytes?: number): Promise<Uint8Array> {
+    return this.ws().readAllTextPageRaw({ cursor, maxBytes });
+  }
+
+  /** Current text of changed files as UTF-8 JSON {files, skipped, gone} (incremental index updates). */
+  indexFilesRaw(paths: unknown): Promise<Uint8Array> {
+    if (!Array.isArray(paths) || paths.length > 20_000 || !paths.every((p) => typeof p === 'string')) throw new BackendFailure('EINVAL', 'paths must be an array of strings');
+    return this.ws().readIndexedFilesRaw(paths as string[]);
+  }
   readAllTextPage(opts?: TextPageOptions) {
     return this.ws().readAllTextPage(opts && typeof opts === 'object' ? opts : {});
   }
@@ -295,7 +328,9 @@ export class BackendService {
     }
     // Buffer.from silently skips invalid characters: corrupt input must fail, not write garbage.
     if (base64.length % 4 === 1 || !BASE64_RE.test(base64)) throw new BackendFailure('EINVAL', 'Content is not valid base64');
-    return ws.writeBinary(p, Buffer.from(base64, 'base64'));
+    const r = await ws.writeBinary(p, Buffer.from(base64, 'base64'));
+    this.gitTouched('save', [p]);
+    return r;
   }
 
   async revealInFolder(p: string) {
@@ -364,6 +399,8 @@ export class BackendService {
       this.workspace.setOptions({ exclude: next.excludeGlobs, showHidden: next.showHiddenFiles });
     }
     if (this.workspace && INDEX_KEYS.some((k) => k in patch)) this.workspace.setIndexOptions(indexOptionsFrom(next));
+    if ('git.wslRouting' in patch) this.disposeGit(); // the next git call rebuilds the monitor with the new routing
+    if ('git.refreshIndex' in patch) this.monitor?.setRefreshIndex(next['git.refreshIndex'] !== false);
     this.settingsListeners.forEach((l) => l(next, patch));
     await writeJson(this.settingsFile, next);
     return next;
@@ -392,35 +429,36 @@ export class BackendService {
     await this.hooks.openExternal?.(url);
   }
 
-  // ---- git (read-only status + source control), one validated entry point -----------------------
+  // ---- git (status + source control), one validated entry point ---------------------------------
 
-  private gitService(): GitService {
+  /** The folder's git monitor: repositories, status cadence, deltas. Created on the first git call. */
+  private gitMonitor(): GitMonitor {
     const ws = this.ws();
-    if (this.gitSvc?.root === ws.root) return this.gitSvc;
+    if (this.monitor?.root === ws.root) return this.monitor;
     this.disposeGit();
-    this.gitSvc = new GitService(ws.root, this.gitOptions);
-    if (this.gitListeners.size) this.gitUnsub = this.gitSvc.onChange(() => this.gitListeners.forEach((l) => l()));
-    return this.gitSvc;
+    const routing = this.settings?.['git.wslRouting'] === 'off' ? 'off' : (this.gitOptions.wsl?.mode ?? 'auto');
+    const opts: GitServiceOptions = { ...this.gitOptions, wsl: { ...this.gitOptions.wsl, mode: routing } };
+    this.monitor = new GitMonitor(ws.root, (root) => new GitService(root, opts), { refreshIndex: this.settings?.['git.refreshIndex'] !== false });
+    this.gitUnsub = this.monitor.onEvent((e) => this.gitListeners.forEach((l) => l(e)));
+    return this.monitor;
   }
 
   private disposeGit() {
     this.gitUnsub?.();
     this.gitUnsub = null;
-    this.gitSvc?.dispose();
-    this.gitSvc = null;
+    this.monitor?.dispose();
+    this.monitor = null;
   }
 
-  /** HEAD / index / refs changed (commit or checkout elsewhere), or a repository appeared. */
-  onGitChanged(cb: () => void): () => void {
+  /** New status version (fetch the delta), a run started / ended (spinner), a run finished (activity log). */
+  onGitChanged(cb: (e: GitMonitorEvent) => void): () => void {
     this.gitListeners.add(cb);
-    if (this.gitSvc && !this.gitUnsub) this.gitUnsub = this.gitSvc.onChange(() => this.gitListeners.forEach((l) => l()));
-    return () => {
-      this.gitListeners.delete(cb);
-      if (!this.gitListeners.size) {
-        this.gitUnsub?.();
-        this.gitUnsub = null;
-      }
-    };
+    return () => this.gitListeners.delete(cb);
+  }
+
+  /** Our own edits count as git triggers (the watcher never echoes them). */
+  private gitTouched(kind: 'save' | 'fs', paths: string[]) {
+    this.monitor?.trigger(kind, paths);
   }
 
   /** Every git operation (see GitOps in shared/git.ts); arguments are validated by GitService. */
@@ -434,46 +472,98 @@ export class BackendService {
     }
     if (!this.workspace) {
       if (op === 'status') return { ok: false, reason: 'no-repo' };
+      if (op === 'nudge' || op === 'visibility' || op === 'cancel') return null;
       throw new BackendFailure('NO_WORKSPACE', 'No folder is open');
     }
-    const g = this.gitService();
-    const [a, b] = args;
+    const m = this.gitMonitor();
+    await m.ready;
+    const [a, b, c] = args;
+    /** Repository-level operations: `repo` = its folder ('' / omitted: the only / first repository). */
+    const repo = (rel: unknown) => {
+      if (rel !== undefined && rel !== null && typeof rel !== 'string') throw new BackendFailure('EINVAL', 'Invalid repository');
+      const svc = m.service(rel);
+      if (!svc) throw new BackendFailure('EINVAL', `Not a repository in this folder: ${String(rel)}`);
+      return svc;
+    };
+    const optRepo = (o: unknown) => (o && typeof o === 'object' ? (o as { repo?: unknown }).repo : undefined);
+    const pathOf = (p: unknown) => {
+      if (typeof p !== 'string') throw new BackendFailure('EINVAL', 'Path must be a string');
+      return m.locate(p.replace(/\\/g, '/').replace(/^\/+/, ''));
+    };
+    /** Path lists → per repository (paths outside every repository are refused). */
+    const grouped = (paths: unknown) => {
+      if (!Array.isArray(paths)) throw new BackendFailure('EINVAL', 'Expected a list of paths');
+      const by = new Map<GitService, { rel: string; subs: string[] }>();
+      for (const p of paths) {
+        const l = pathOf(p);
+        if (!l) throw new BackendFailure('EINVAL', `Not inside a repository: ${String(p)}`);
+        const g = by.get(l.svc) ?? { rel: l.rel, subs: [] };
+        g.subs.push(l.sub);
+        by.set(l.svc, g);
+      }
+      return [...by];
+    };
+    const each = async (paths: unknown, fn: (svc: GitService, subs: string[], rel: string) => Promise<import('../shared/git').GitActionResult>) => {
+      let last: import('../shared/git').GitActionResult = { ok: true };
+      for (const [svc, g] of grouped(paths)) {
+        last = await fn(svc, g.subs, g.rel);
+        if (!last.ok) return last;
+      }
+      return last;
+    };
+    const ws = (rel: string, p: string) => (rel ? `${rel}/${p}` : p);
     switch (op) {
       case 'status':
-        return g.status();
-      case 'headFile':
-        return g.headFile(a as string, b ?? 'HEAD');
-      case 'diff':
-        return g.diff(a as string, b ?? 'HEAD');
+        return m.status((a ?? {}) as { since?: unknown; fresh?: unknown });
+      case 'nudge':
+        return void m.trigger(a === 'focus' ? 'focus' : 'open');
+      case 'visibility':
+        return void m.setVisible(String(a ?? ''), b !== false);
+      case 'headFile': {
+        const l = pathOf(a);
+        return l ? l.svc.headFile(l.sub, b ?? 'HEAD') : { content: null, oid: null };
+      }
+      case 'diff': {
+        const l = pathOf(a);
+        return l ? l.svc.diff(l.sub, b ?? 'HEAD') : null;
+      }
       case 'stage':
-        return g.stage(a);
+        return a === null ? repo(b).stage(null) : each(a, (svc, subs) => svc.stage(subs));
       case 'unstage':
-        return g.unstage(a);
+        return a === null ? repo(b).unstage(null) : each(a, (svc, subs) => svc.unstage(subs));
       case 'discard':
         // Untracked files go to the OS trash (recoverable), like a delete from the tree.
-        return g.discard(a, (rel) => this.remove(rel));
+        return each(a, (svc, subs, rel) => svc.discard(subs, (sub) => this.remove(ws(rel, sub))));
       case 'commit':
-        return g.commit(a);
+        return repo(optRepo(a)).commit(a);
       case 'lastMessage':
-        return g.lastMessage();
+        return repo(a).lastMessage();
       case 'fetch':
-        return g.fetch();
+        return repo(a).fetch();
       case 'pull':
-        return g.pull();
+        return repo(a).pull();
       case 'push':
-        return g.push();
+        return repo(a).push();
       case 'branches':
-        return g.branches();
+        return repo(a).branches();
+      case 'remoteBranches':
+        return repo(optRepo(a)).remoteBranches(a);
+      case 'branchDetails':
+        return repo(c).branchDetails(a, b);
       case 'createBranch':
-        return g.createBranch(a);
+        return repo(b).createBranch(a);
       case 'switchBranch':
-        return g.switchBranch(a);
+        return repo(b).switchBranch(a);
       case 'log':
-        return g.log(a);
-      case 'commitFiles':
-        return g.commitFiles(a, b);
+        return repo(optRepo(a)).log(a);
+      case 'commitFiles': {
+        const r = typeof c === 'string' ? c : '';
+        const res = await repo(c).commitFiles(a, b);
+        return r ? { ...res, files: res.files.map((f) => ({ ...f, path: ws(r, f.path), ...(f.from ? { from: ws(r, f.from) } : {}) })) } : res;
+      }
       case 'cancel':
-        return g.cancel(a);
+        for (const rel of m.repoRels) m.service(rel)?.cancel(a);
+        return null;
     }
   }
 

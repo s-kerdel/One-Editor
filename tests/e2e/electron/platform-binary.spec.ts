@@ -1,14 +1,16 @@
 // Platform features in the real Electron app: writeBinary over IPC (pasted image, byte-exact) and the
-// indexers' workers (search + knowledge extraction) loading from the app:// scheme.
+// search workers loading from the app:// scheme and fetching the workspace text themselves
+// (app://sec-edit/__index/, served by the indexer thread — never through the UI thread).
 import { test, expect, fs, path } from './fixture';
 
-test('pasting an image writes it byte-exact over IPC; both indexer workers run', async ({ el }) => {
+test('pasting an image writes it byte-exact over IPC; the search workers feed themselves over app://', async ({ el }) => {
   const notes = path.join(el.ws, 'notes');
   fs.writeFileSync(path.join(notes, 'paste-el.md'), '# Paste\n\n');
   const { page } = await el.launch();
   await page.waitForFunction(() => (window as any).__secEditSearch?.status.value === 'ready' && (window as any).__secEditKnowledgeReady === true, null, { timeout: 30000 });
   expect(await page.evaluate(() => (window as any).__secEditSearch.mode.value)).toBe('worker');
-  expect(await page.evaluate(() => (window as any).__secEdit.knowledge.extractionMode())).toBe('worker');
+  expect(await page.evaluate(() => (window as any).__secEditSearch.lastBuild?.fed), 'built from the app:// index channel').toBe(true);
+  expect(await page.evaluate(() => (window as any).__secEdit.knowledge.notes().length), 'knowledge metadata from the search workers').toBeGreaterThan(3);
 
   await page.evaluate(() => (window as any).__secEdit.openFile('notes/paste-el.md'));
   await expect(page.locator('.cm-content')).toContainText('Paste');

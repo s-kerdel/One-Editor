@@ -7,10 +7,13 @@ const CHANNELS = new Set(['fs:events', 'app:openRequest', 'app:closeRequest', 'g
 // The frame main created this window with (webPreferences.additionalArguments): the renderer styles
 // by what the window really has, not by the setting (which may have changed until a restart).
 const frame = process.argv.includes('--sec-edit-frame=integrated') ? 'integrated' : 'native';
+// Per-launch secret for app://sec-edit/__index/ (the search workers fetch text pages with it).
+const indexToken = process.argv.find((a) => a.startsWith('--sec-edit-index-token='))?.slice('--sec-edit-index-token='.length) ?? '';
 
 contextBridge.exposeInMainWorld('secEditBridge', {
   os: process.platform,
   frame,
+  indexToken,
   invoke: (method: string, args: unknown[]) => ipcRenderer.invoke(`rpc:${method}`, ...args),
   on: (channel: string, cb: (payload: unknown) => void) => {
     if (!CHANNELS.has(channel)) throw new Error(`Unknown channel ${channel}`);

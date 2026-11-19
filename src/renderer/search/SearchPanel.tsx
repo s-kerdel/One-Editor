@@ -62,11 +62,38 @@ export function runSearchNow() {
   void searchClient.search(q, opts, 'panel', { progressive: true }).then((r) => {
     if (!r || key !== lastKey) return; // superseded
     searching.value = false;
+    // A live refresh (edit elsewhere, index progress) that found the same rows: keep the rendered
+    // list — re-diffing hundreds of rows per refresh made typing in a big note stutter.
+    const sig = resultSignature(r);
+    const prev = response.value;
+    if (prev && key === shownKey && sig === shownSig && prev.partial === r.partial && prev.totalFiles === r.totalFiles && prev.totalMatches === r.totalMatches) return;
+    shownKey = key;
+    shownSig = sig;
     dismissed.value = new Set();
     response.value = r;
     renderLimit.value = RENDER_STEP;
     if (selected.value >= flatRows().length) selected.value = -1;
   });
+}
+
+let shownKey = '';
+let shownSig = 0;
+
+/** Cheap structural hash of what the list shows (paths, counts, rows). */
+function resultSignature(r: { results: SearchResult[] }): number {
+  let h = 0x811c9dc5;
+  const mix = (s: string) => {
+    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+  };
+  for (const x of r.results) {
+    mix(x.path);
+    h = Math.imul(h ^ x.totalMatches, 0x01000193);
+    for (const m of x.matches) {
+      h = Math.imul(h ^ (m.line * 31 + m.start * 7 + m.end), 0x01000193);
+      mix(m.lineText);
+    }
+  }
+  return h >>> 0;
 }
 
 function scheduleSearch(delay = DEBOUNCE_MS) {
@@ -90,15 +117,29 @@ export function installPanelEffects() {
     scheduleSearch(query.value.length <= 1 ? 140 : DEBOUNCE_MS);
   });
   // Live refresh when the index changes (edits, saves, external changes) while the panel is visible.
+  // While changes keep coming (typing in a note, indexing progress) it waits for a pause.
   let lastVersion = -1;
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastBump = 0;
   effect(() => {
     const v = searchClient.version.value;
     if (v === lastVersion) return;
     const first = lastVersion === -1;
     lastVersion = v; // always: a stale version would turn every later keystroke into a "refresh"
     if (first) return;
-    // Untracked + only when idle: typing is handled above, and its short debounce must not be replaced by this slower one.
-    if (!timer && untracked(() => !!query.value.trim() && panelVisible())) scheduleSearch(250);
+    const now = performance.now();
+    const burst = now - lastBump < 600;
+    lastBump = now;
+    // Untracked: typing in the query is handled above, and its short debounce must not be replaced by this slower one.
+    if (!untracked(() => !!query.value.trim() && panelVisible())) return;
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(
+      () => {
+        refreshTimer = null;
+        if (!timer) runSearchNow();
+      },
+      burst ? 800 : 250,
+    );
   });
 }
 
@@ -267,6 +308,9 @@ export function SearchPanel() {
   useEffect(() => {
     const el = input.current;
     if (!el) return;
+    // A panel that mounts late (lazy chunk after a reload) must not take focus from a dialog the user
+    // is already typing in (palette, settings).
+    if (app.overlay.value && focusTick.value === 0) return;
     el.focus();
     el.select();
   }, [focusTick.value]);

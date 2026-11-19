@@ -564,6 +564,14 @@ In the compare view: **Swap sides**, **Ignore whitespace**, **Copy as patch**, U
 - The remembered selection is kept **in memory only**, and dropped when you open another folder.
 - Don't want it in the menu? Settings → Editor → **Compare text**.
 
+### Big folders, several projects, WSL
+
+- **Repositories in WSL** (`\\wsl.localhost\Ubuntu\…`): git runs **inside the distro**, not through Windows. Much faster. Settings → Files → **Run git inside WSL** (Auto / Off). A distro without git (e.g. `docker-desktop`) uses Windows git.
+- **A folder with several projects** (each its own repository): marks and change bars work for all of them. The Git panel has a **repository picker** at the top. The status bar shows the repository of the open file.
+- **When does git run?** Only after something changed: a save (½ s later), files changing on disk (1½ s later), a commit / checkout elsewhere, or coming back to the window after 10 s. Never while the window is **minimised**: it catches up once when you return. Slow repositories are checked less often.
+- A small **spinner** next to the branch means git is working right now.
+- **Status slow after copying a project / a big checkout?** git keeps a timestamp cache. When status has to re-read many unchanged files, the app refreshes that cache once, when nothing else runs (like `git status` in a terminal would). **Files, staging and history stay as they are.** It waits while another git is busy (`index.lock`). Settings → Files → **Keep git status fast** (on by default).
+
 ### When git needs you
 
 Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses**. The error box has **Open in terminal**: the same git command is **typed for you** in the terminal, where git can ask. **You** press Enter. (Browser mode: **Copy command**.)
@@ -842,6 +850,8 @@ After a paste a small **"Paste as…"** chip appears for a few seconds. Ignore i
 | **A shell is missing in ▾** | Install it, then **▾ → Refresh list** |
 | **Claude Code says "Not installed"** | **Copy** the install command in the ▾ card, run it, check `claude --version`, then **Refresh list** |
 | **`` Ctrl+` `` does nothing** | Some keyboard layouts have no backtick key: palette → **"Terminal: Toggle panel"** |
+| **Git is slow on a `\\wsl.localhost` folder** | Settings → Files → **Run git inside WSL** must be **Auto**, and the distro needs git (`sudo apt install git` inside WSL) |
+| **Marks look stale after a big checkout** | Run `git status` once in a terminal: git then refreshes its index and every later check is fast again |
 | **No git marks / no branch in the status bar** | Is it a git repository (a `.git` folder here or above)? Is git installed (`git --version` in a terminal)? Settings → Files → **Git status** must be on |
 | **Compare with Clipboard says the browser blocked it** | Browser mode only: allow clipboard access for the page (address bar → site settings), then try again |
 | **"git refuses this repository (safe.directory)"** | The folder belongs to another user (USB stick, network drive). Run `git config --global --add safe.directory <folder>` in a terminal, if you trust it |

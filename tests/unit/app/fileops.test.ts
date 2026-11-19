@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from 'vitest';
 import { validateName } from '../../../src/renderer/app/fileops';
-import { countWords } from '../../../src/renderer/app/StatusBar';
+import { countWords } from '../../../src/renderer/app/wordcount';
 
 describe('validateName', () => {
   it('accepts normal names', () => {

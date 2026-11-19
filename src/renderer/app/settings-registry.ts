@@ -359,6 +359,32 @@ const defs: Draft[] = [
     control: { type: 'toggle' },
     enabledWhen: (s) => s['git.enabled'] !== false,
   },
+  {
+    key: 'git.wslRouting',
+    section: 'files',
+    label: 'Run git inside WSL',
+    description: 'For folders under \\\\wsl.localhost: use the distro’s own git (much faster). Off: Windows git.',
+    keywords: ['git', 'wsl', 'linux', 'ubuntu', 'slow', 'performance', 'windows'],
+    default: 'auto',
+    control: {
+      type: 'segmented',
+      options: [
+        { v: 'auto', label: 'Auto' },
+        { v: 'off', label: 'Off' },
+      ],
+    },
+    enabledWhen: (s) => s['git.enabled'] !== false,
+  },
+  {
+    key: 'git.refreshIndex',
+    section: 'files',
+    label: 'Keep git status fast',
+    description: 'Refresh git’s internal timestamp cache when status is slow. Files and staging stay as they are.',
+    keywords: ['git', 'index', 'slow', 'performance', 'refresh', 'update-index', 'cache'],
+    default: true,
+    control: { type: 'toggle' },
+    enabledWhen: (s) => s['git.enabled'] !== false,
+  },
 
   // ---- Search & indexing (read by the backend: service.ts indexOptionsFrom; workers by search/client.ts) ----
   {

@@ -733,6 +733,7 @@ export function createPreview(el: HTMLElement): PreviewController {
     }),
     app.events.on('active:changed', () => schedule(true)),
     app.events.on('file:updated', (p) => sourceChanged(p)),
+    app.events.on('files:changed', (paths) => paths.forEach(sourceChanged)),
     app.events.on('tree:changed', () => {
       const sig = app.files.value.join('\n');
       if (sig === filesSig) return;

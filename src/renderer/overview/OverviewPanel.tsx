@@ -31,6 +31,8 @@ import {
 
 // Big outlines (generated docs, 1 MB notes) stay responsive: rows beyond this are summarised.
 const MAX_ROWS = 1500;
+/** Links are re-rendered on every index change: a 1 MB note links thousands of notes. */
+const MAX_LINK_ROWS = 300;
 
 // ---------------------------------------------------------------- building blocks
 
@@ -437,7 +439,7 @@ function LinksSection({ path }: { path: string }) {
             <Icon name="ov-out" size={12} /> Links to <span class="se-ov-sub-n">{out.length}</span>
           </div>
           {out.length === 0 && <Hint>This note doesn’t link anywhere.</Hint>}
-          {out.map((o) => (
+          {(out.length > MAX_LINK_ROWS ? out.slice(0, MAX_LINK_ROWS) : out).map((o) => (
             <div
               key={o.key}
               class={`se-ov-row se-ov-link${o.path ? '' : ' unresolved'}`}
@@ -465,12 +467,13 @@ function LinksSection({ path }: { path: string }) {
               </button>
             </div>
           ))}
+          {out.length > MAX_LINK_ROWS && <Hint>{(out.length - MAX_LINK_ROWS).toLocaleString()} more links (Ctrl+Alt+G shows them in the graph).</Hint>}
           <div class="se-ov-sub">
             <Icon name="ov-back" size={12} /> Linked from <span class="se-ov-sub-n">{back.length}</span>
             {building && <span class="se-ov-busy" title="Indexing notes…" />}
           </div>
           {back.length === 0 && <Hint>{building ? 'Indexing…' : 'No notes link here yet.'}</Hint>}
-          {back.map((g) =>
+          {(back.length > MAX_LINK_ROWS ? back.slice(0, MAX_LINK_ROWS) : back).map((g) =>
             g.items.slice(0, 20).map((b, j) => (
               <div
                 key={`${g.from}:${b.line}:${b.col}`}
@@ -492,6 +495,7 @@ function LinksSection({ path }: { path: string }) {
               </div>
             )),
           )}
+          {back.length > MAX_LINK_ROWS && <Hint>{(back.length - MAX_LINK_ROWS).toLocaleString()} more notes link here — the Backlinks panel lists them all.</Hint>}
         </div>
       )}
     </Section>

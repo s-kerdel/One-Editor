@@ -9,6 +9,8 @@ export const HOST = 'sec-edit';
 export const APP_ORIGIN = `${SCHEME}://${HOST}`;
 /** Workspace files for the preview live under this prefix (served sandboxed). */
 export const WS_PREFIX = '/__ws/';
+/** Text pages for the search workers (they fetch them directly: never through the UI thread). */
+export const INDEX_PREFIX = '/__index/';
 /** PDF export documents: their own host (never "the app", so never a trusted IPC sender) in their own session. */
 export const PDF_HOST = 'sec-edit-pdf';
 
@@ -27,6 +29,7 @@ export function isPdfWindowRequestAllowed(url: string, resourceType: string): bo
 
 export type AppRoute =
   | { kind: 'workspace'; rel: string }
+  | { kind: 'index'; op: 'page' | 'files'; params: URLSearchParams }
   | { kind: 'renderer'; file: string }
   | { kind: 'error'; status: number; message: string };
 
@@ -46,6 +49,10 @@ export function routeAppUrl(rawUrl: string, rendererDir: string, p: PlatformPath
     return { kind: 'error', status: 400, message: 'bad url' };
   }
   if (pathname.startsWith(WS_PREFIX)) return { kind: 'workspace', rel: pathname.slice(WS_PREFIX.length) };
+  if (pathname.startsWith(INDEX_PREFIX)) {
+    const op = pathname.slice(INDEX_PREFIX.length);
+    return op === 'page' || op === 'files' ? { kind: 'index', op, params: u.searchParams } : { kind: 'error', status: 404, message: 'not found' };
+  }
   const root = p.resolve(rendererDir);
   const file = p.resolve(root, '.' + (pathname === '/' ? '/index.html' : pathname));
   if (file !== root && escapesRoot(p.relative(root, file), p)) return { kind: 'error', status: 403, message: 'forbidden' };

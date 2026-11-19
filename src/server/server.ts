@@ -107,7 +107,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     const payload = `data: ${JSON.stringify(events)}\n\n`;
     for (const res of sseClients) res.write(payload);
   });
-  service.onGitChanged(() => gitClients.forEach((r) => r.write('event: git\ndata: 1\n\n')));
+  service.onGitChanged((e) => gitClients.forEach((r) => r.write(`event: git\ndata: ${JSON.stringify(e)}\n\n`)));
   const ping = setInterval(() => [...sseClients, ...gitClients].forEach((r) => r.write(': ping\n\n')), 25000);
   ping.unref();
 
@@ -162,6 +162,17 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
             });
             stream.pipe(res);
           });
+          return;
+        }
+        // Text pages for the search workers (fetched by them directly, never through the UI thread).
+        if (url.pathname === '/api/index/page' && req.method === 'GET') {
+          const body = await service.indexPageRaw(url.searchParams.get('cursor'), Number(url.searchParams.get('maxBytes')) || undefined);
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(body);
+          return;
+        }
+        if (url.pathname === '/api/index/files' && req.method === 'POST') {
+          const body = await service.indexFilesRaw(JSON.parse((await readBody(req, DEFAULT_LIMIT)) || 'null'));
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(body);
           return;
         }
         const m = /^\/api\/rpc\/(\w+)$/.exec(url.pathname);

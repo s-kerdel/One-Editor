@@ -7,7 +7,6 @@
 // Uncompressed on purpose: inflating 26 MB cost ~250 ms before the first page; a CRC check is ~10 ms.
 // Truncated / corrupt / old-version files are ignored (full index).
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
@@ -65,14 +64,18 @@ export class TextCache {
   /** Reads + verifies a cache file; any problem → empty cache (full index). */
   static async load(file: string): Promise<TextCache> {
     try {
-      const raw = await fsp.readFile(file);
+      // Sync on purpose: this runs on the indexer's own thread, and async fs would queue behind (or
+      // in front of) the user's file opens in the process-wide libuv threadpool.
+      const raw = fs.readFileSync(file);
       if (raw.length < MAGIC.length + 6) throw new Error('short');
       const body = raw.subarray(0, raw.length - 4);
       if (zlib.crc32(body) !== raw.readUInt32LE(raw.length - 4)) throw new Error('checksum');
       const c = TextCache.parse(body);
       // LRU across workspaces: "last used" = mtime.
       const now = new Date();
-      void fsp.utimes(file, now, now).catch(() => {});
+      try {
+        fs.utimesSync(file, now, now);
+      } catch {}
       return c;
     } catch {
       return TextCache.empty();
@@ -153,31 +156,42 @@ export function encodeRecord(p: string, t: CachedText): Buffer {
 }
 
 /**
- * Streams a new cache while a full pass runs (records arrive in path order, so nothing is buffered
- * beyond zlib's window). `commit()` atomically replaces the old file; `abort()` drops the temp file.
+ * Streams a new cache while a full pass runs (records arrive in path order, buffered ~1 MB at a time).
+ * `commit()` atomically replaces the old file; `abort()` drops the temp file. Synchronous writes:
+ * the indexer runs on its own thread (see TextCache.load).
  */
 export class CacheWriter {
   private crc = 0;
-  private out: fs.WriteStream;
+  private fd: number;
   private tmp: string;
   private failed = false;
-  private done: Promise<void>;
+  private chunks: Buffer[] = [];
+  private pending = 0;
   records = 0;
 
   constructor(private readonly file: string) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     this.tmp = `${file}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-    this.out = fs.createWriteStream(this.tmp);
-    this.done = new Promise<void>((resolve) => {
-      this.out.on('close', resolve);
-      this.out.on('error', () => ((this.failed = true), resolve()));
-    });
+    this.fd = fs.openSync(this.tmp, 'w');
     this.write(MAGIC);
   }
 
   private write(b: Buffer) {
     this.crc = zlib.crc32(b, this.crc);
-    this.out.write(b);
+    this.chunks.push(b);
+    this.pending += b.length;
+    if (this.pending >= 1 << 20) this.flush();
+  }
+
+  private flush() {
+    if (!this.chunks.length || this.failed) return;
+    try {
+      fs.writeSync(this.fd, this.chunks.length === 1 ? this.chunks[0] : Buffer.concat(this.chunks));
+    } catch {
+      this.failed = true;
+    }
+    this.chunks = [];
+    this.pending = 0;
   }
 
   add(record: Buffer | undefined) {
@@ -192,37 +206,60 @@ export class CacheWriter {
     this.write(end);
     const crc = Buffer.alloc(4);
     crc.writeUInt32LE(this.crc, 0);
-    this.out.end(crc);
-    await this.done;
-    if (this.failed) {
-      await fsp.rm(this.tmp, { force: true }).catch(() => {});
-      return false;
+    this.chunks.push(crc);
+    this.flush();
+    try {
+      fs.closeSync(this.fd);
+    } catch {
+      this.failed = true;
+    }
+    if (!this.failed) {
+      // Windows: antivirus may hold the old file for a moment.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          fs.renameSync(this.tmp, this.file);
+          enforceBudget(path.dirname(this.file));
+          return true;
+        } catch {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20 * 2 ** attempt);
+        }
+      }
     }
     try {
-      await fsp.rename(this.tmp, this.file);
-    } catch {
-      await fsp.rm(this.tmp, { force: true }).catch(() => {});
-      return false;
-    }
-    void enforceBudget(path.dirname(this.file)).catch(() => {});
-    return true;
+      fs.rmSync(this.tmp, { force: true });
+    } catch {}
+    return false;
   }
 
   abort() {
+    if (this.failed && this.fd < 0) return;
     this.failed = true;
-    this.out.destroy();
-    void this.done.then(() => fsp.rm(this.tmp, { force: true }).catch(() => {}));
+    try {
+      fs.closeSync(this.fd);
+    } catch {}
+    this.fd = -1;
+    try {
+      fs.rmSync(this.tmp, { force: true });
+    } catch {}
   }
 }
 
 /** Keeps all caches together under the budget, dropping the least recently used first. */
-export async function enforceBudget(dir: string, budget = CACHE_BUDGET_BYTES): Promise<void> {
-  const names = (await fsp.readdir(dir)).filter((n) => n.endsWith('.bin'));
-  const files = await Promise.all(names.map(async (n) => ({ p: path.join(dir, n), st: await fsp.stat(path.join(dir, n)).catch(() => null) })));
-  const live = files.filter((f) => f.st).sort((a, b) => b.st!.mtimeMs - a.st!.mtimeMs);
-  let total = 0;
-  for (const f of live) {
-    total += f.st!.size;
-    if (total > budget) await fsp.rm(f.p, { force: true }).catch(() => {});
-  }
+export function enforceBudget(dir: string, budget = CACHE_BUDGET_BYTES): void {
+  try {
+    const names = fs.readdirSync(dir).filter((n) => n.endsWith('.bin'));
+    const files = names.map((n) => {
+      try {
+        return { p: path.join(dir, n), st: fs.statSync(path.join(dir, n)) };
+      } catch {
+        return { p: '', st: null };
+      }
+    });
+    const live = files.filter((f) => f.st).sort((a, b) => b.st!.mtimeMs - a.st!.mtimeMs);
+    let total = 0;
+    for (const f of live) {
+      total += f.st!.size;
+      if (total > budget) fs.rmSync(f.p, { force: true });
+    }
+  } catch {}
 }

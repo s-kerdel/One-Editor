@@ -4,6 +4,7 @@
 import { app } from '../app/app';
 import { escapeRegExp } from '../../search/text';
 import { searchClient } from './client';
+import { registerCommand } from '../app/commands';
 import { openPalette } from './Palette';
 import { SearchPanel, installPanelEffects, runSearchNow, stepResult } from './SearchPanel';
 import { focusTick, query, showReplace, useRegex } from './state';
@@ -62,6 +63,12 @@ export function installSearchImpl() {
   searchClient.wire();
   (globalThis as { __secEditSearch?: unknown }).__secEditSearch = searchClient; // E2E / debugging
   installPanelEffects();
+  registerCommand({
+    id: 'developer.activityLog',
+    title: 'Developer: Show activity log',
+    keywords: ['indexing', 'background', 'git', 'performance', 'debug'],
+    run: () => void import('../app/ActivityLog').then((m) => m.openActivityLog()),
+  });
 }
 
 /** "Rebuild search index". */
