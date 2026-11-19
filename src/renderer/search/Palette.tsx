@@ -30,6 +30,9 @@ interface Section {
 
 const MAX_FILES = 60;
 
+/** The previous file query's full match set: typing on (the query only grows) searches just these. */
+let narrow: { q: string; files: readonly string[]; matched: string[] } | null = null;
+
 function fileItems(q: string): Item[] {
   const files = app.files.value;
   const recent = getRecentFiles().filter((p) => files.includes(p));
@@ -38,7 +41,11 @@ function fileItems(q: string): Item[] {
     const rest = files.filter((p) => !rank.has(p));
     return [...recent.map((path) => ({ kind: 'file' as const, path, positions: [], recent: true })), ...rest.map((path) => ({ kind: 'file' as const, path, positions: [] }))].slice(0, MAX_FILES);
   }
-  const scored = fuzzyFilter(q, files, (p) => p, 400, { path: true });
+  // A query that extends the previous one matches a subset of its matches (same order → same ranking).
+  const pool = narrow && narrow.files === files && q.startsWith(narrow.q) ? narrow.matched : files;
+  const matched: string[] = [];
+  const scored = fuzzyFilter(q, pool, (p) => p, 400, { path: true, collect: matched });
+  narrow = { q, files, matched };
   const n = Math.max(1, q.replace(/\s/g, '').length);
   return scored
     .map(({ item, match }) => {

@@ -230,15 +230,28 @@ function normQuery(q: string, cs: boolean): string {
   return foldDiacritics(cs ? q : lowerAligned(q)).text;
 }
 
-export function fuzzyMatch(query: string, target: string, opts: FuzzyOptions = {}): FuzzyMatch | null {
-  const words = query.split(/\s+/).filter(Boolean);
-  if (!words.length) return { score: 0, positions: [] };
+/** The query side of a match, computed once per query (not once per candidate). */
+interface PreparedQuery {
+  /** Words, normalized like the targets (case-folded unless case-sensitive, diacritics folded). */
+  words: string[];
+  cs: boolean;
+  /** Non-space characters (path boost) and whether the query names a folder. */
+  chars: number;
+  slash: boolean;
+}
+
+function prepareQuery(query: string, opts: FuzzyOptions): PreparedQuery {
   const cs = opts.caseSensitive ?? /\p{Lu}/u.test(query);
-  const prep = prepare(target, cs);
+  return { words: query.split(/\s+/).filter(Boolean).map((w) => normQuery(w, cs)), cs, chars: query.replace(/\s/g, '').length, slash: query.includes('/') };
+}
+
+function matchPrepared(q: PreparedQuery, target: string): FuzzyMatch | null {
+  if (!q.words.length) return { score: 0, positions: [] };
+  const prep = prepare(target, q.cs);
   let score = 0;
   const pos = new Set<number>();
-  for (const w of words) {
-    const r = matchOne(normQuery(w, cs), prep.t, prep.tn);
+  for (const w of q.words) {
+    const r = matchOne(w, prep.t, prep.tn);
     if (!r) return null;
     score += r.score;
     for (const p of r.positions) pos.add(prep.map ? prep.map[p] : p);
@@ -246,26 +259,43 @@ export function fuzzyMatch(query: string, target: string, opts: FuzzyOptions = {
   return { score: score - target.length * 0.01, positions: [...pos].sort((a, b) => a - b) };
 }
 
-/** Path-aware: prefers hits in the file name (unless the query contains '/'). */
-export function fuzzyMatchPath(query: string, path: string, opts: FuzzyOptions = {}): FuzzyMatch | null {
-  const full = fuzzyMatch(query, path, opts);
-  if (!full || query.includes('/')) return full;
+function matchPathPrepared(q: PreparedQuery, path: string): FuzzyMatch | null {
+  const full = matchPrepared(q, path);
+  if (!full || q.slash) return full;
   const slash = path.lastIndexOf('/');
-  if (slash < 0) return { score: full.score + 12 * query.replace(/\s/g, '').length * 0.25, positions: full.positions };
-  const base = fuzzyMatch(query, path.slice(slash + 1), opts);
+  if (slash < 0) return { score: full.score + 12 * q.chars * 0.25, positions: full.positions };
+  const base = matchPrepared(q, path.slice(slash + 1));
   if (!base) return full;
-  const boosted = base.score + 3 * query.replace(/\s/g, '').length;
+  const boosted = base.score + 3 * q.chars;
   if (boosted >= full.score) return { score: boosted - path.length * 0.01, positions: base.positions.map((p) => p + slash + 1) };
   return full;
 }
 
-export function fuzzyFilter<T>(query: string, items: T[], key: (t: T) => string, limit = 100, opts?: FuzzyOptions & { path?: boolean }): Array<{ item: T; match: FuzzyMatch }> {
+export function fuzzyMatch(query: string, target: string, opts: FuzzyOptions = {}): FuzzyMatch | null {
+  return matchPrepared(prepareQuery(query, opts), target);
+}
+
+/** Path-aware: prefers hits in the file name (unless the query contains '/'). */
+export function fuzzyMatchPath(query: string, path: string, opts: FuzzyOptions = {}): FuzzyMatch | null {
+  return matchPathPrepared(prepareQuery(query, opts), path);
+}
+
+/**
+ * `collect`: every matching item (not just the top `limit`), in input order. A longer query typed after
+ * this one matches a subset of these: callers may pass them as `items` next time (same order → same ranking).
+ */
+export function fuzzyFilter<T>(query: string, items: readonly T[], key: (t: T) => string, limit = 100, opts?: FuzzyOptions & { path?: boolean; collect?: T[] }): Array<{ item: T; match: FuzzyMatch }> {
   const out: Array<{ item: T; match: FuzzyMatch; i: number; len: number }> = [];
-  const fn = opts?.path ? fuzzyMatchPath : fuzzyMatch;
+  // The query is prepared once: per candidate only the target side runs (quick open over 50k paths).
+  const q = prepareQuery(query, opts ?? {});
+  const fn = opts?.path ? matchPathPrepared : matchPrepared;
   for (let i = 0; i < items.length; i++) {
     const k = key(items[i]);
-    const m = fn(query, k, opts);
-    if (m) out.push({ item: items[i], match: m, i, len: k.length });
+    const m = fn(q, k);
+    if (m) {
+      out.push({ item: items[i], match: m, i, len: k.length });
+      opts?.collect?.push(items[i]);
+    }
   }
   out.sort((a, b) => b.match.score - a.match.score || a.len - b.len || a.i - b.i);
   return out.slice(0, limit).map(({ item, match }) => ({ item, match }));
