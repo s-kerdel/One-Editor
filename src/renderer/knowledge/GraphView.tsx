@@ -4,7 +4,7 @@ import { stem } from '@shared/paths';
 import { app } from '../app/app';
 import { buildGraph, type GraphNode } from '../../knowledge/graph';
 import { GraphRenderer } from './graph-canvas';
-import { building, index, kv, openLink } from './state';
+import { index, indexBusy, kv, openLink } from './state';
 import { IconClose } from './icons';
 
 export interface GraphViewProps {
@@ -111,7 +111,7 @@ export default function GraphView({ local: startLocal, onClose }: GraphViewProps
         <div class="se-kn-g-body">
           <canvas ref={canvasRef} class="se-kn-g-canvas" />
           {data.nodes.length === 0 && (
-            <div class="se-kn-g-empty">{building.value ? 'Indexing notes…' : local ? 'This note has no links yet.' : filter ? 'Nothing matches this filter.' : 'No notes to show.'}</div>
+            <div class="se-kn-g-empty">{indexBusy.value ? 'Indexing notes…' : local ? 'This note has no links yet.' : filter ? 'Nothing matches this filter.' : 'No notes to show.'}</div>
           )}
           <div class="se-kn-g-legend">
             <span>

@@ -261,8 +261,9 @@ describe('overview panel', () => {
     click(links[0].querySelector('.se-ov-mini'));
     expect(editor.reveal).toHaveBeenLastCalledWith({ line: L('[[Deploy'), col: 4 });
 
+    // Incoming links fill in when the (time-sliced) link derive completes; outgoing ones are exact at once.
+    await vi.waitFor(() => expect($$('.se-ov-back')).toHaveLength(2));
     const back = $$('.se-ov-back');
-    expect(back).toHaveLength(2);
     expect(back[0].querySelector('.se-ov-name')!.textContent).toBe('Incident log');
     expect(back[0].querySelector('mark')!.textContent).toBe('[[Runbook]]');
     click(back[1]);

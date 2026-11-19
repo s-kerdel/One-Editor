@@ -63,6 +63,12 @@ export function findWikiLinks(text: string): Array<WikiLink & { index: number; l
 }
 
 export type LinkResolver = (target: string, fromPath?: string) => string | null;
+/**
+ * A resolver whose file list can change in place (O(1)-ish per file instead of rebuilding over every
+ * file). Applying the same adds / removes in the same order gives exactly what a fresh resolver over
+ * the resulting list (in that order) gives — case twins included (the first spelling owns the path).
+ */
+export type MutableLinkResolver = LinkResolver & { addFile(path: string): void; removeFile(path: string): void };
 
 const depthThenLength = (a: string, b: string) => a.split('/').length - b.split('/').length || a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
 
@@ -71,7 +77,7 @@ const depthThenLength = (a: string, b: string) => a.split('/').length - b.split(
  * Order: exact workspace path → path relative to the linking note → same folder → shortest path whose
  * trailing segments / basename (with or without .md) match, case-insensitively → alias (if provided).
  */
-export function createLinkResolver(files: readonly string[], aliases?: ReadonlyMap<string, readonly string[]>): LinkResolver {
+export function createLinkResolver(files: readonly string[], aliases?: ReadonlyMap<string, readonly string[]>): MutableLinkResolver {
   const byPath = new Map<string, string>();
   const byName = new Map<string, string[]>(); // lower basename, and lower stem for markdown files
   const add = (key: string, f: string) => {
@@ -117,7 +123,7 @@ export function createLinkResolver(files: readonly string[], aliases?: ReadonlyM
   };
   // Hits that don't depend on the linking note (exact path / unique name) — most links in practice.
   const memo = new Map<string, string>();
-  return (target, fromPath) => {
+  const resolve = ((target: string, fromPath?: string): string | null => {
     if (!target) return fromPath ?? null;
     const cached = memo.get(target);
     if (cached !== undefined) return cached;
@@ -163,7 +169,44 @@ export function createLinkResolver(files: readonly string[], aliases?: ReadonlyM
     }
     const al = aliases?.get(target.trim().toLowerCase());
     return al ? pick(al, fromPath) : null;
+  }) as MutableLinkResolver;
+  const drop = (key: string, f: string) => {
+    const l = byName.get(key);
+    const i = l ? l.indexOf(f) : -1;
+    if (i === -1) return;
+    l!.splice(i, 1);
+    if (!l!.length) byName.delete(key);
   };
+  resolve.addFile = (f) => {
+    memo.clear();
+    const fl = f.toLowerCase();
+    const had = byPath.get(fl);
+    if (had === undefined) byPath.set(fl, f);
+    else if (had !== f) twins.add(f);
+    add(basename(fl), f);
+    if (isMarkdown(f)) add(stem(fl), f);
+  };
+  resolve.removeFile = (f) => {
+    memo.clear();
+    const fl = f.toLowerCase();
+    if (byPath.get(fl) === f) {
+      // The next spelling in list order takes the path over (as a fresh build would pick it).
+      let next: string | undefined;
+      for (const t of twins)
+        if (t.toLowerCase() === fl) {
+          next = t;
+          break;
+        }
+      if (next === undefined) byPath.delete(fl);
+      else {
+        byPath.set(fl, next);
+        twins.delete(next);
+      }
+    } else twins.delete(f);
+    drop(basename(fl), f);
+    if (isMarkdown(f)) drop(stem(fl), f);
+  };
+  return resolve;
 }
 
 // resolveWikiTarget is called per link by the editor/preview; cache the lookup tables per file-list

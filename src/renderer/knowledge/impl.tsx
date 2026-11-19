@@ -9,7 +9,7 @@ import { registerCommands } from '../app/commands';
 import { holdKeys } from '../app/lazy';
 import './knowledge.css';
 import { BacklinksPanel, OutlinePanel, TagsPanel, openSection } from './panels';
-import { building, index, insertTemplate, installIndexing, kv, openDailyNote, openLink, templateFiles, whenIndexed } from './state';
+import { index, indexBusy, insertTemplate, installIndexing, kv, openDailyNote, openLink, templateFiles, whenIndexed } from './state';
 import { searchClient } from '../search/client';
 import type { GraphViewProps } from './GraphView';
 import { extractor } from './extractor';
@@ -158,7 +158,7 @@ export function installKnowledgeImpl() {
   // ensure(): consumers that need the index (completion, overview) — builds it when on demand.
   const api = Object.assign(index, {
     whenReady: whenIndexed,
-    isBuilding: () => building.value,
+    isBuilding: () => indexBusy.value,
     changed: kv,
     openLink,
     extractionMode: () => extractor.mode,

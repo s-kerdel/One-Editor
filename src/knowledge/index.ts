@@ -2,7 +2,7 @@
 // contents on open and patched incrementally. Derived structures (resolved links, backlink map,
 // tag tree) are recomputed lazily on the first query after a change — cheap, because resolution is
 // map-based — so bursts of updates (typing, bulk file events) stay O(changed notes).
-import { createLinkResolver, type LinkResolver } from '@shared/wikilinks';
+import { createLinkResolver, type LinkResolver, type MutableLinkResolver } from '@shared/wikilinks';
 import { dirname, isMarkdown, normalize, stem } from '@shared/paths';
 import { extractNote, findTagsInLine, maskUrls, scanLines, type Heading, type LinkRef, type NoteInfo } from './extract';
 
@@ -113,7 +113,8 @@ const blank = (s: string) => ' '.repeat(s.length);
 interface Derived {
   /** lower-case alias → notes; mutated in place (the resolver reads it live). */
   aliases: Map<string, string[]>;
-  resolver: LinkResolver;
+  /** Follows file-set changes in place (applyFileChanges). */
+  resolver: MutableLinkResolver;
   /** Parallel to note.links. */
   resolved: Map<string, Array<string | null>>;
   /** target path → notes linking to it. */
@@ -129,6 +130,59 @@ interface Derived {
   groups: Map<string, UGroup> | null;
   /** Unresolved keys per note (with `groups`): dropping a note's entries never sweeps every group. */
   keysOf: Map<string, Set<string>> | null;
+  /**
+   * Name key (lower-case last path segment, see linkKeys) → notes with a link looked up by it. A new
+   * file can only change links the resolver finds by its name: exactly these are re-resolved.
+   */
+  nameRefs: Map<string, Set<string>>;
+  namesOf: Map<string, readonly string[]>;
+  /** Time-sliced derive: notes still to link (a snapshot) and the cursor; null when complete. */
+  order: string[] | null;
+  pos: number;
+}
+
+interface FileChanges {
+  /** Files that joined since the last apply: links naming them re-resolve. */
+  added: Set<string>;
+  /** Notes to re-link (their links resolved to a file that left). */
+  relink: Set<string>;
+  /** Every add / remove in order, replayed on the resolver (twins: the first spelling owns the path). */
+  ops: Array<[add: boolean, path: string]>;
+}
+
+/** File-set changes above this re-derive (time-sliced) instead of re-resolving link by link. */
+const BULK_FILE_CHANGES = 1000;
+/** Notes re-linked in place after file changes; more than this re-derives (time-sliced) instead. */
+const RELINK_MAX = 300;
+/** One time slice of a background derive. */
+const DERIVE_SLICE_MS = 8;
+
+/**
+ * The name a link is looked up by: the lower-case last segment of its (normalized) target. Bare
+ * names, path-like targets and exact / relative paths all end in that segment (normalize() drops
+ * leading `..`, so a relative resolution ends in the same segment as the target itself). '' = none.
+ */
+function linkKey(target: string): string {
+  let last = target.slice(target.lastIndexOf('/') + 1);
+  if (last === '' || last === '.' || last === '..' || target.includes('\\')) {
+    const t = normalize(target);
+    last = t.slice(t.lastIndexOf('/') + 1);
+  }
+  return last.toLowerCase();
+}
+
+/**
+ * Link keys that can find `path` by name. The resolver's byName holds basenames and note stems and is
+ * read under `<name>` and (no extension) `<name>.md`; so a link keyed K can reach `path` iff K is its
+ * basename or stem, or one of those minus a trailing `.md`.
+ */
+function fileKeys(path: string): string[] {
+  const lower = path.toLowerCase();
+  const b = lower.slice(lower.lastIndexOf('/') + 1);
+  const keys = new Set([b]);
+  if (isMarkdown(path)) keys.add(stem(lower));
+  for (const k of [...keys]) if (k.endsWith('.md')) keys.add(k.slice(0, -3));
+  return [...keys];
 }
 
 type USource = UnresolvedLink['sources'][number];
@@ -223,6 +277,12 @@ function textHash(t: string): number {
 
 export interface KnowledgeIndexOptions {
   /**
+   * Derive link data in time slices instead of all at once on the first query: called with a step
+   * function to run (repeatedly, yielding in between) until it returns true. Queries meanwhile see the
+   * links derived so far (`deriving` is true); the index notifies its listeners when complete.
+   */
+  scheduleDerive?: (step: () => boolean) => void;
+  /**
    * Keep every note's text (default). Without it the index holds only metadata + link context
    * snippets — the app's renderer, which gets note metadata from the search workers; full-text
    * features (unlinked mentions, tag lines) then come from those workers.
@@ -247,8 +307,13 @@ export class KnowledgeIndex implements KnowledgeApi {
   private readonly listeners = new Set<() => void>();
   version = 0;
 
+  private readonly scheduleDerive?: (step: () => boolean) => void;
+  /** File-set changes not yet applied to the derived links (applied on the next query, batched). */
+  private fileChanges: FileChanges | null = null;
+
   constructor(opts: KnowledgeIndexOptions = {}) {
     this.retainText = opts.retainText !== false;
+    this.scheduleDerive = opts.scheduleDerive;
   }
 
   // ---------- mutation ----------
@@ -259,8 +324,17 @@ export class KnowledgeIndex implements KnowledgeApi {
     // Indexed notes are files by definition, even if the tree hasn't caught up yet.
     for (const p of this.infos.keys()) next.add(p);
     if (next.size === this.fileSet.size && [...next].every((p) => this.fileSet.has(p))) return;
-    this.fileSet = next;
-    this.derived = null;
+    const prev = this.fileSet;
+    const added = this.derived ? [...next].filter((p) => !prev.has(p)) : [];
+    const removed = this.derived ? [...prev].filter((p) => !next.has(p)) : []; // never notes (kept above)
+    if (!this.derived || added.length + removed.length > BULK_FILE_CHANGES) {
+      this.fileSet = next;
+      this.rederive();
+    } else {
+      // In place: the set keeps the order the resolver saw files arrive in (case twins depend on it).
+      for (const p of removed) prev.delete(p), this.fileRemoved(p);
+      for (const p of added) prev.add(p), this.fileAdded(p);
+    }
     this.touch();
   }
 
@@ -270,17 +344,16 @@ export class KnowledgeIndex implements KnowledgeApi {
     let changed = false;
     for (const p of [...this.infos.keys()])
       if (!keep.has(p)) {
+        const old = this.infos.get(p);
         this.dropInfo(p);
         this.texts.delete(p);
         this.snippets.delete(p);
         this.hashes.delete(p);
         this.fileSet.delete(p);
+        this.fileRemoved(p, old);
         changed = true;
       }
-    if (changed) {
-      this.derived = null;
-      this.touch();
-    }
+    if (changed) this.touch();
   }
 
   /** Same text as last indexed (without keeping texts: by hash). */
@@ -299,7 +372,7 @@ export class KnowledgeIndex implements KnowledgeApi {
     if (!isMarkdown(path)) {
       if (!isNew) return false;
       this.fileSet.add(path);
-      this.derived = null;
+      this.fileAdded(path);
       this.touch();
       return true;
     }
@@ -316,22 +389,26 @@ export class KnowledgeIndex implements KnowledgeApi {
     this.snippets.set(path, snippets ?? (text !== null ? linkSnippets(text, info.links) : []));
     this.setInfo(path, info);
     this.fileSet.add(path);
-    // A new file can change how any link resolves → full re-derive (lazy). Content edits only
-    // affect this note's links (plus alias users), so patch in place: typing stays O(note).
-    if (isNew) this.derived = null;
-    else if (this.derived) this.patch(this.derived, path, old?.aliases ?? [], info.aliases);
+    // A new file re-resolves only the links that name it (fileAdded). Content edits only affect this
+    // note's links (plus alias users), so patch in place: typing stays O(note).
+    if (isNew) this.fileAdded(path);
+    else if (this.derived) {
+      // Patch resolves with the current file set: apply pending file changes first (unless they re-derive).
+      if (!this.fileChanges || this.applyFileChanges(this.derived)) this.patch(this.derived, path, old?.aliases ?? [], info.aliases);
+    }
     this.touch();
     return true;
   }
 
   remove(path: string): void {
     const had = this.fileSet.delete(path);
+    const old = this.infos.get(path);
     const hadNote = this.dropInfo(path);
     this.texts.delete(path);
     this.snippets.delete(path);
     this.hashes.delete(path);
     if (had || hadNote) {
-      this.derived = null;
+      this.fileRemoved(path, old);
       this.touch();
     }
   }
@@ -344,11 +421,13 @@ export class KnowledgeIndex implements KnowledgeApi {
       if (p === from) moved.set(p, to);
       else if (p.startsWith(prefix)) moved.set(p, `${to}/${p.slice(prefix.length)}`);
     }
+    const bulk = moved.size > BULK_FILE_CHANGES;
     for (const [a, b] of moved) {
       this.fileSet.delete(a);
       this.fileSet.add(b);
       const text = this.texts.get(a);
       const info = this.infos.get(a);
+      if (!bulk) this.fileRemoved(a, info);
       const sn = this.snippets.get(a);
       const hash = this.hashes.get(a);
       this.texts.delete(a);
@@ -362,11 +441,10 @@ export class KnowledgeIndex implements KnowledgeApi {
         // Extraction depends on the text only (plus path/title): a folder move needn't re-parse every note.
         this.setInfo(b, info ? { ...info, path: b, title: stem(b) } : extractNote(b, text!));
       }
+      if (!bulk) this.fileAdded(b);
     }
-    if (moved.size) {
-      this.derived = null;
-      this.touch();
-    }
+    if (bulk) this.rederive();
+    if (moved.size) this.touch();
     return moved;
   }
 
@@ -378,6 +456,7 @@ export class KnowledgeIndex implements KnowledgeApi {
     this.snippets.clear();
     this.hashes.clear();
     this.fileSet = new Set();
+    this.fileChanges = null;
     this.derived = null;
     this.touch();
   }
@@ -418,8 +497,68 @@ export class KnowledgeIndex implements KnowledgeApi {
 
   // ---------- derived ----------
 
+  /**
+   * The derived link data. Without `scheduleDerive` it is complete on return; with it, a derive in
+   * progress is returned as is (partial) — the scheduled steps finish it.
+   */
   private d(): Derived {
-    if (this.derived) return this.derived;
+    let d = this.derived ?? this.startDerive();
+    if (this.fileChanges && !this.applyFileChanges(d)) d = this.startDerive();
+    if (d.order && !this.scheduleDerive) this.deriveStep(Infinity);
+    return d;
+  }
+
+  /**
+   * Derived data with `path`'s own links resolved — exact even while a time-sliced derive is still
+   * running (linking one note is O(its links); the derive skips it later). Incoming links fill in.
+   */
+  private own(path: string): Derived {
+    const d = this.d();
+    if (d.order && !d.resolved.has(path)) {
+      const n = this.infos.get(path);
+      if (n) this.link(d, n);
+    }
+    return d;
+  }
+
+  /** A derive is in progress (time-sliced): link queries see partial results until it completes. */
+  get deriving(): boolean {
+    return !!this.derived?.order;
+  }
+
+  /** Finish a time-sliced derive now (callers that need every link, e.g. before a bulk rewrite). */
+  completeDerive(): void {
+    this.d();
+    this.deriveStep(Infinity);
+  }
+
+  /** Start deriving (time-sliced when scheduled) so the first panel open doesn't pay for it. */
+  warm(): void {
+    this.d();
+  }
+
+  /** Link notes for up to `budgetMs`; true when the derive is complete. */
+  deriveStep(budgetMs = DERIVE_SLICE_MS): boolean {
+    const d = this.derived;
+    if (!d?.order) return true;
+    if (this.fileChanges && !this.applyFileChanges(d)) {
+      this.startDerive(); // too much changed: start over (it schedules its own steps)
+      return true;
+    }
+    const t0 = performance.now();
+    const order = d.order;
+    while (d.pos < order.length) {
+      const n = this.infos.get(order[d.pos++]);
+      // Already linked: an edit / new file during the derive linked it with current data.
+      if (n && !d.resolved.has(n.path)) this.link(d, n);
+      if ((d.pos & 31) === 0 && performance.now() - t0 > budgetMs) return false;
+    }
+    d.order = null;
+    if (this.scheduleDerive) this.touch(); // panels re-read the complete links
+    return true;
+  }
+
+  private startDerive(): Derived {
     const aliases = new Map<string, string[]>();
     for (const n of this.infos.values())
       for (const a of n.aliases) {
@@ -428,9 +567,93 @@ export class KnowledgeIndex implements KnowledgeApi {
         if (l) l.push(n.path);
         else aliases.set(k, [n.path]);
       }
-    const d: Derived = { aliases, resolver: createLinkResolver([...this.fileSet], aliases), resolved: new Map(), incoming: new Map(), unresolvedBy: new Map(), outNotes: new Map(), groups: null, keysOf: null };
-    for (const n of this.infos.values()) this.link(d, n);
-    return (this.derived = d);
+    const d: Derived = {
+      aliases,
+      resolver: createLinkResolver([...this.fileSet], aliases),
+      resolved: new Map(),
+      incoming: new Map(),
+      unresolvedBy: new Map(),
+      outNotes: new Map(),
+      groups: null,
+      keysOf: null,
+      nameRefs: new Map(),
+      namesOf: new Map(),
+      order: [...this.infos.keys()],
+      pos: 0,
+    };
+    this.derived = d;
+    this.fileChanges = null; // a fresh derive starts from the current file set
+    if (this.scheduleDerive) this.scheduleDerive(() => this.derived !== d || this.deriveStep());
+    return d;
+  }
+
+  /** Drop the derived links: the next query derives again (time-sliced when scheduled). */
+  private rederive() {
+    this.derived = null;
+    this.fileChanges = null;
+  }
+
+  /** A file joined the file set: links naming it (and its own, for a note) re-resolve on the next query. */
+  private fileAdded(path: string) {
+    if (!this.derived) return;
+    const c = (this.fileChanges ??= { added: new Set(), relink: new Set(), ops: [] });
+    c.added.add(path);
+    c.ops.push([true, path]);
+    if (c.added.size + c.relink.size > BULK_FILE_CHANGES) this.rederive();
+  }
+
+  /**
+   * A file left the file set (`old`: its note info, when it was a note). Only links that resolved to
+   * it can resolve differently now (removing a candidate the resolver did not pick never changes its
+   * pick): they re-resolve on the next query; the note's own links are dropped now.
+   */
+  private fileRemoved(path: string, old?: NoteInfo) {
+    const d = this.derived;
+    if (!d) return;
+    const c = (this.fileChanges ??= { added: new Set(), relink: new Set(), ops: [] });
+    c.added.delete(path);
+    c.relink.delete(path);
+    c.ops.push([false, path]);
+    if (d.resolved.has(path)) this.unlink(d, path, old?.links);
+    for (const src of d.incoming.get(path) ?? []) if (src !== path) c.relink.add(src);
+    d.incoming.delete(path);
+    for (const a of old?.aliases ?? []) {
+      const l = d.aliases.get(a.toLowerCase());
+      const i = l ? l.indexOf(path) : -1;
+      if (i !== -1) l!.splice(i, 1);
+      if (l && !l.length) d.aliases.delete(a.toLowerCase());
+    }
+    if (c.added.size + c.relink.size > BULK_FILE_CHANGES) this.rederive();
+  }
+
+  /**
+   * Apply batched file-set changes: one resolver rebuild, then re-resolve just the affected notes.
+   * False when that is more than RELINK_MAX notes: the derived data was dropped (re-derive instead).
+   */
+  private applyFileChanges(d: Derived): boolean {
+    const c = this.fileChanges!;
+    this.fileChanges = null;
+    for (const [add, f] of c.ops) (add ? d.resolver.addFile : d.resolver.removeFile)(f);
+    const relink = c.relink;
+    for (const f of c.added) {
+      for (const k of fileKeys(f)) for (const src of d.nameRefs.get(k) ?? []) relink.add(src);
+      const n = this.infos.get(f);
+      if (n) {
+        this.aliasDelta(d, f, [], n.aliases, relink);
+        relink.add(f);
+      }
+    }
+    if (relink.size > RELINK_MAX) {
+      this.rederive();
+      return false;
+    }
+    for (const p of relink) {
+      const n = this.infos.get(p);
+      if (!n) continue;
+      if (d.resolved.has(p)) this.unlink(d, p, n.links);
+      this.link(d, n);
+    }
+    return true;
   }
 
   private link(d: Derived, n: NoteInfo) {
@@ -447,6 +670,29 @@ export class KnowledgeIndex implements KnowledgeApi {
       if (!r && l.target && d.groups) addUnresolved(d, n.path, l, key);
     }
     d.resolved.set(n.path, out);
+    let names: string[] | null = null;
+    for (const l of n.links) {
+      const k = l.target ? linkKey(l.target) : '';
+      if (!k) continue;
+      let set = d.nameRefs.get(k);
+      if (!set) d.nameRefs.set(k, (set = new Set()));
+      if (set.has(n.path)) continue;
+      set.add(n.path);
+      (names ??= []).push(k);
+    }
+    if (names) d.namesOf.set(n.path, names);
+  }
+
+  private unindexNames(d: Derived, path: string) {
+    const keys = d.namesOf.get(path);
+    if (!keys) return;
+    for (const k of keys) {
+      const set = d.nameRefs.get(k);
+      if (!set) continue;
+      set.delete(path);
+      if (!set.size) d.nameRefs.delete(k);
+    }
+    d.namesOf.delete(path);
   }
 
   /** The unresolved groups, built from the derived links on first use. */
@@ -494,11 +740,36 @@ export class KnowledgeIndex implements KnowledgeApi {
       else if (links?.[i]) d.unresolvedBy.get(links[i].target.toLowerCase())?.delete(path);
     }
     this.dropUnresolved(d, path);
+    this.unindexNames(d, path);
     d.resolved.delete(path);
   }
 
   private patch(d: Derived, path: string, oldAliases: readonly string[], newAliases: readonly string[]) {
     const affected = new Set<string>();
+    this.aliasDelta(d, path, oldAliases, newAliases, affected);
+    // The edited note's own old links must be unlinked by position, but its LinkRefs are already
+    // replaced: drop them via the keys recorded at link time, or (no groups yet) sweep the unresolved sets.
+    const res = d.resolved.get(path);
+    d.outNotes.delete(path);
+    if (res) {
+      for (const r of res) if (r) d.incoming.get(r)?.delete(path);
+      if (!this.dropUnresolved(d, path) && res.includes(null)) for (const set of d.unresolvedBy.values()) set.delete(path);
+      this.unindexNames(d, path);
+      d.resolved.delete(path);
+    }
+    affected.delete(path);
+    for (const p of affected) {
+      const n = this.infos.get(p);
+      if (!n) continue;
+      if (d.resolved.has(p)) this.unlink(d, p, n.links);
+      this.link(d, n);
+    }
+    const self = this.infos.get(path);
+    if (self) this.link(d, self);
+  }
+
+  /** Aliases of `path` changed: update the alias table; collect notes whose links may resolve differently. */
+  private aliasDelta(d: Derived, path: string, oldAliases: readonly string[], newAliases: readonly string[], affected: Set<string>) {
     if (!sameList(oldAliases, newAliases)) {
       const oldL = oldAliases.map((a) => a.toLowerCase());
       const newL = newAliases.map((a) => a.toLowerCase());
@@ -522,24 +793,6 @@ export class KnowledgeIndex implements KnowledgeApi {
         else d.aliases.set(a, [path]);
       }
     }
-    // The edited note's own old links must be unlinked by position, but its LinkRefs are already
-    // replaced: drop them via the keys recorded at link time, or (no groups yet) sweep the unresolved sets.
-    const res = d.resolved.get(path);
-    d.outNotes.delete(path);
-    if (res) {
-      for (const r of res) if (r) d.incoming.get(r)?.delete(path);
-      if (!this.dropUnresolved(d, path) && res.includes(null)) for (const set of d.unresolvedBy.values()) set.delete(path);
-      d.resolved.delete(path);
-    }
-    affected.delete(path);
-    for (const p of affected) {
-      const n = this.infos.get(p);
-      if (!n) continue;
-      this.unlink(d, p, n.links);
-      this.link(d, n);
-    }
-    const self = this.infos.get(path);
-    if (self) this.link(d, self);
   }
 
   private resolveRef(resolver: LinkResolver, l: LinkRef, from: string): string | null {
@@ -594,7 +847,7 @@ export class KnowledgeIndex implements KnowledgeApi {
 
   /** Notes `path` links to: resolved Markdown notes, unique, itself excluded. Don't mutate. */
   linksFrom(path: string): readonly string[] {
-    const d = this.d();
+    const d = this.own(path);
     const hit = d.outNotes.get(path);
     if (hit) return hit;
     const res = d.resolved.get(path);
@@ -628,7 +881,7 @@ export class KnowledgeIndex implements KnowledgeApi {
   outgoing(path: string): OutgoingLink[] {
     const n = this.infos.get(path);
     if (!n) return [];
-    const res = this.d().resolved.get(path) ?? [];
+    const res = this.own(path).resolved.get(path) ?? [];
     return n.links.map((link, i) => ({ link, path: res[i] ?? null }));
   }
 

@@ -18,7 +18,7 @@ import { Hint, Section } from '../overview/parts';
 import type { GraphNode } from '../../knowledge/graph';
 import type { LinkRef, Mention, NoteInfo } from '../../knowledge/index';
 import { localGraph, notesSharingTag, relatedNotes, sharedTags } from '../../knowledge/connections';
-import { building, index, kv, linkMention, linkMentions, openLink, unlinkedMentionsOf } from './state';
+import { index, indexBusy, kv, linkMention, linkMentions, openLink, unlinkedMentionsOf } from './state';
 import { GraphRenderer } from './graph-canvas';
 import './connections.css';
 
@@ -377,7 +377,7 @@ export function Connections({ path, live }: ConnectionsProps) {
   const t0 = performance.now();
   const version = kv.value;
   const deferred = indexDeferred.value;
-  const isBuilding = building.value;
+  const isBuilding = indexBusy.value;
   const collapsed = collapsedSections.value;
   const files = app.files.value;
   const info = deferred ? undefined : index.note(path);

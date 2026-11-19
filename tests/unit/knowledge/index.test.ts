@@ -327,3 +327,215 @@ describe('tag tree cache', () => {
     }
   });
 });
+
+describe('file-set changes re-resolve only what they can affect (incremental == fresh)', () => {
+  // Every resolver rule in play: case twins + "exact spelling wins", same name in several folders
+  // (same folder first, then shallowest / shortest), aliases (dangling links they satisfy, competing
+  // aliases), markdown relative links (exact paths only), attachments, ./ and ../ targets, path-like
+  // targets, `name.md` targets, a `.md.md` file, empty (self) targets.
+  const start: Record<string, string> = {
+    'README.md': '[[Note]] [[note]] [[NOTE]] [[a/Note]] [[Ghost]] [[img.png]] [[Plan.md]] [[x.md]] [[]] [rel](docs/guide.md) [img](assets/pic.png) [[a\\sub\\Deep]] [[a/sub/.]] [[deep/er/missing/..]]',
+    'a/Note.md': '---\naliases: [Ghost]\n---\n[[Note]] [[../README]] [[./sub/Deep]] [[sub/Deep]] [up](../README.md)',
+    'b/note.md': '[[Note]] [[Plan]] [[Missing]] [[Ghost]] [x](../c/plan.md)',
+    'a/sub/Deep.md': '[[Plan]] [[Note]] [[../Note]] [[..]]',
+    'docs/guide.md': '[[Plan]] [[img.png]] [[guide]] [[Twin]]',
+    'assets/pic.png': '',
+  };
+  const ops: Array<[string, (idx: KnowledgeIndex, cur: Record<string, string>) => void]> = [
+    ['create a closer same-name note', (i, c) => void i.update((c['a/Plan.md'] = '# plan in a', 'a/Plan.md'), c['a/Plan.md'])],
+    ['create the exact-spelling twin', (i, c) => void i.update((c['note.md'] = 'root twin', 'note.md'), c['note.md'])],
+    ['create the other twin spelling', (i, c) => void i.update((c['Note.md'] = 'Root Twin [[Twin]]', 'Note.md'), c['Note.md'])],
+    ['create a note that satisfies a dangling link', (i, c) => void i.update((c['deep/er/Missing.md'] = 'found', 'deep/er/Missing.md'), c['deep/er/Missing.md'])],
+    ['create a note with a competing alias', (i, c) => void i.update((c['Ghostly.md'] = '---\naliases: [ghost, Twin]\n---\nboo', 'Ghostly.md'), c['Ghostly.md'])],
+    ['create a note named like an alias (name beats alias)', (i, c) => void i.update((c['z/Ghost.md'] = 'real ghost', 'z/Ghost.md'), c['z/Ghost.md'])],
+    ['add an attachment through update', (i, c) => void i.update((c['img.png'] = '', 'img.png'), '')],
+    ['create a .md.md note', (i, c) => void i.update((c['q/x.md.md'] = 'odd', 'q/x.md.md'), c['q/x.md.md'])],
+    ['create the md-link target', (i, c) => void i.update((c['c/plan.md'] = 'c plan', 'c/plan.md'), c['c/plan.md'])],
+    ['delete the picked candidate', (i, c) => (delete c['a/Plan.md'], i.remove('a/Plan.md'))],
+    ['delete one twin', (i, c) => (delete c['note.md'], i.remove('note.md'))],
+    ['delete the aliased note', (i, c) => (delete c['a/Note.md'], i.remove('a/Note.md'))],
+    ['rename a note (links follow or break as fresh says)', (i, c) => ((c['b/Plan.md'] = c['b/note.md']), delete c['b/note.md'], void i.rename('b/note.md', 'b/Plan.md'))],
+    ['rename a folder', (i, c) => {
+      for (const k of Object.keys(c)) if (k.startsWith('a/')) (c[`moved/${k.slice(2)}`] = c[k]), delete c[k];
+      void i.rename('a', 'moved');
+    }],
+    ['file list adds and drops attachments', (i, c) => {
+      delete c['assets/pic.png'];
+      c['docs/img.png'] = '';
+      i.setFiles(Object.keys(c));
+    }],
+    ['prune a note the tree lost', (i, c) => (delete c['docs/guide.md'], i.prune(Object.keys(c)))],
+    ['re-create a deleted name in another folder', (i, c) => void i.update((c['e/Note.md'] = 'e', 'e/Note.md'), c['e/Note.md'])],
+  ];
+
+  const compare = (idx: KnowledgeIndex, cur: Record<string, string>, what: string) => {
+    const fresh = build(cur);
+    for (const f of Object.keys(cur)) {
+      expect(idx.outgoing(f).map((o) => o.path), `outgoing ${f} after: ${what}`).toEqual(fresh.outgoing(f).map((o) => o.path));
+      expect(idx.backlinks(f), `backlinks ${f} after: ${what}`).toEqual(fresh.backlinks(f));
+    }
+    expect(idx.unresolvedLinks(), `unresolved after: ${what}`).toEqual(fresh.unresolvedLinks());
+    expect(idx.unresolvedCount(), `unresolved count after: ${what}`).toBe(fresh.unresolvedLinks().length);
+  };
+
+  it('each create / delete / rename step, queried after every step', () => {
+    const cur = { ...start };
+    const idx = build(cur);
+    compare(idx, cur, 'start');
+    for (const [what, op] of ops) {
+      op(idx, cur);
+      compare(idx, cur, what);
+    }
+  });
+
+  it('several steps batched before the next query (one resolver rebuild)', () => {
+    const cur = { ...start };
+    const idx = build(cur);
+    idx.backlinks('README.md'); // derived
+    for (let k = 0; k < ops.length; k += 3) {
+      for (const [, op] of ops.slice(k, k + 3)) op(idx, cur);
+      compare(idx, cur, `batch ${k}`);
+    }
+  });
+
+  it('edits interleaved with pending file changes resolve against the current file set', () => {
+    const cur = { ...start };
+    const idx = build(cur);
+    idx.backlinks('README.md');
+    idx.update((cur['n/New.md'] = 'new', 'n/New.md'), cur['n/New.md']); // pending: added
+    idx.update('docs/guide.md', (cur['docs/guide.md'] = '[[New]] [[Plan]]')); // edit before any query
+    idx.remove('b/note.md'); // pending: removed
+    delete cur['b/note.md'];
+    idx.update('README.md', (cur['README.md'] = '[[note]] [[New]]'));
+    compare(idx, cur, 'interleaved');
+  });
+});
+
+describe('time-sliced derive (scheduleDerive)', () => {
+  function vault(n: number): Record<string, string> {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < n; i++) files[`f${i % 7}/Note ${i}.md`] = `---\naliases: [Al ${i % 50}]\n---\n[[Note ${(i * 7) % n}]] [[Al ${(i * 3) % 50}]] [[Gone ${i % 11}]] [up](../f${(i + 1) % 7}/Note%20${(i + 2) % n}.md)`;
+    return files;
+  }
+  const sliced = (files: Record<string, string>) => {
+    const steps: Array<() => boolean> = [];
+    const idx = new KnowledgeIndex({ scheduleDerive: (step) => void steps.push(step) });
+    idx.setFiles(Object.keys(files));
+    for (const [p, t] of Object.entries(files)) idx.update(p, t);
+    return { idx, steps };
+  };
+  const finish = (steps: Array<() => boolean>) => {
+    let n = 0;
+    while (steps.length) {
+      const step = steps[0];
+      if (step()) steps.shift();
+      if (++n > 1e6) throw new Error('derive never finished');
+    }
+    return n;
+  };
+  const same = (idx: KnowledgeIndex, cur: Record<string, string>) => {
+    const fresh = build(cur);
+    for (const f of Object.keys(cur)) expect(idx.backlinks(f), `backlinks ${f}`).toEqual(fresh.backlinks(f));
+    expect(idx.unresolvedLinks()).toEqual(fresh.unresolvedLinks());
+  };
+
+  it('queries during the derive see partial links, never block; complete == fresh; listeners told once done', () => {
+    const cur = vault(3000);
+    const { idx, steps } = sliced(cur);
+    let told = 0;
+    idx.onChange(() => told++);
+    idx.warm();
+    expect(idx.deriving).toBe(true);
+    expect(steps).toHaveLength(1);
+    const first = idx.backlinks('f0/Note 0.md'); // partial: no throw, no full derive
+    expect(idx.deriving).toBe(true);
+    expect(steps[0]()).toBe(false); // one slice, not the whole derive
+    const slices = finish(steps);
+    expect(slices).toBeGreaterThan(1);
+    expect(idx.deriving).toBe(false);
+    expect(told).toBe(1);
+    expect(first.length).toBeLessThanOrEqual(idx.backlinks('f0/Note 0.md').length);
+    same(idx, cur);
+  });
+
+  it('edits, new notes, deletions and renames during the derive', () => {
+    const cur = vault(1500);
+    const { idx, steps } = sliced(cur);
+    idx.warm();
+    steps[0]();
+    idx.update('f1/Note 1.md', (cur['f1/Note 1.md'] = '[[Note 2]] [[Gone 3]] [[Brand new]]'));
+    idx.update((cur['n/Brand new.md'] = '---\naliases: [Al 7]\n---\n[[Note 5]]', 'n/Brand new.md'), cur['n/Brand new.md']);
+    steps[0]();
+    idx.remove('f2/Note 2.md');
+    delete cur['f2/Note 2.md'];
+    idx.rename('f3/Note 3.md', 'f3/Renamed.md');
+    cur['f3/Renamed.md'] = cur['f3/Note 3.md'];
+    delete cur['f3/Note 3.md'];
+    finish(steps);
+    same(idx, cur);
+  });
+
+  it('completeDerive() finishes on demand', () => {
+    const cur = vault(800);
+    const { idx } = sliced(cur);
+    idx.warm();
+    idx.completeDerive();
+    expect(idx.deriving).toBe(false);
+    same(idx, cur);
+  });
+});
+
+describe('file changes that touch many notes fall back to a re-derive', () => {
+  const hubVault = () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 1000; i++) files[`n/Note ${i}.md`] = `[[Hub]] [[Note ${(i + 1) % 1000}]]`;
+    return files;
+  };
+  it('sync: creating a note 1,000 notes link to (over the re-link cap) == fresh', () => {
+    const cur = hubVault();
+    const idx = build(cur);
+    idx.backlinks('n/Note 0.md');
+    idx.update((cur['Hub.md'] = '# hub', 'Hub.md'), cur['Hub.md']);
+    expect(idx.backlinks('Hub.md')).toHaveLength(1000);
+    expect(idx.backlinks('Hub.md')).toEqual(build(cur).backlinks('Hub.md'));
+    idx.remove('Hub.md');
+    delete cur['Hub.md'];
+    expect(idx.unresolvedLinks()).toEqual(build(cur).unresolvedLinks());
+  });
+  it('sliced: the fallback re-derives in steps and ends == fresh', () => {
+    const cur = hubVault();
+    const steps: Array<() => boolean> = [];
+    const idx = new KnowledgeIndex({ scheduleDerive: (s) => void steps.push(s) });
+    idx.setFiles(Object.keys(cur));
+    for (const [p, t] of Object.entries(cur)) idx.update(p, t);
+    idx.completeDerive();
+    steps.length = 0;
+    idx.update((cur['Hub.md'] = '# hub', 'Hub.md'), cur['Hub.md']);
+    idx.backlinks('Hub.md'); // the query applies the change: over the cap → a new sliced derive
+    expect(idx.deriving).toBe(true);
+    while (steps.length) if (steps[0]()) steps.shift();
+    expect(idx.deriving).toBe(false);
+    expect(idx.backlinks('Hub.md')).toEqual(build(cur).backlinks('Hub.md'));
+  });
+});
+
+describe('time-sliced derive: the open note', () => {
+  it("a note's own outgoing links are exact while the derive is still running", () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 2000; i++) files[`n/Note ${i}.md`] = `[[Note ${(i * 13) % 2000}]] [[Missing ${i % 9}]]`;
+    const steps: Array<() => boolean> = [];
+    const idx = new KnowledgeIndex({ scheduleDerive: (s) => void steps.push(s) });
+    idx.setFiles(Object.keys(files));
+    for (const [p, t] of Object.entries(files)) idx.update(p, t);
+    idx.warm();
+    expect(idx.deriving).toBe(true);
+    const fresh = build(files);
+    for (const p of ['n/Note 1999.md', 'n/Note 1500.md']) {
+      expect(idx.outgoing(p).map((o) => o.path)).toEqual(fresh.outgoing(p).map((o) => o.path));
+      expect(idx.linksFrom(p)).toEqual(fresh.linksFrom(p));
+    }
+    expect(idx.deriving).toBe(true); // answered without finishing the derive
+    while (steps.length) if (steps[0]()) steps.shift();
+    expect(idx.backlinks('n/Note 1999.md')).toEqual(fresh.backlinks('n/Note 1999.md'));
+  });
+});

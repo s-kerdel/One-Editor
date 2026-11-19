@@ -1,6 +1,6 @@
 // Renderer-side knowledge state: the live index, its build/update lifecycle, and the write
 // actions (follow link, rename refactor, link a mention, daily notes, templates).
-import { signal } from '@preact/signals';
+import { computed, signal } from '@preact/signals';
 import { parseWikiLink } from '@shared/wikilinks';
 import { dirname, isMarkdown, normalize, stem } from '@shared/paths';
 import { app } from '../app/app';
@@ -14,10 +14,26 @@ import { createRenameRewriter } from '../../knowledge/rename';
 import { applyTemplate, dailyNotePath, sanitizeNoteName } from '../../knowledge/templates';
 
 // No note texts here: metadata + link snippets come from the search workers, which hold the text.
-export const index = new KnowledgeIndex({ retainText: false });
+// Link data derives in slices between tasks (10k notes: ~1 s of work that must not freeze the UI).
+export const index = new KnowledgeIndex({ retainText: false, scheduleDerive: (step) => void pumpDerive(step) });
 /** Bumped (coalesced) whenever the index changes — panels read it to re-render. */
 export const kv = signal(0);
 export const building = signal(false);
+/** Links are being derived (time-sliced); queries meanwhile see what is linked so far. */
+export const linking = signal(false);
+/** Still indexing, for UI hints ("Indexing notes…"); `building` alone drives the build lifecycle. */
+export const indexBusy = computed(() => building.value || linking.value);
+
+async function pumpDerive(step: () => boolean): Promise<void> {
+  await yieldTask(); // never inside the query (often a render) that started the derive
+  linking.value = true;
+  try {
+    while (!step()) await yieldTask();
+  } finally {
+    linking.value = index.deriving; // a newer derive keeps its own pump
+  }
+  if (!index.deriving) kv.value++; // panels re-read the complete links now
+}
 
 let generation = 0;
 /** Notes this big re-index only after a pause in typing. */
@@ -188,6 +204,7 @@ function applyNotes(e: NotesEvent) {
   if (bumpTimer) clearTimeout(bumpTimer);
   bumpTimer = null;
   kv.value++;
+  index.warm(); // derive the links now, in slices, so the first panel open has them
   (window as any).__secEditKnowledgeReady = true;
   logActivity({ kind: 'knowledge', trigger: 'index', ms: performance.now() - buildStart, detail: `${index.size.toLocaleString()} notes` });
   readyResolve?.();

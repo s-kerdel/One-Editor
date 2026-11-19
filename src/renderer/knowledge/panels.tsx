@@ -7,7 +7,7 @@ import { app } from '../app/app';
 import { getCommand } from '../app/commands';
 import * as searchModule from '../search';
 import { extractHeadings, type Backlink, type Mention, type Snippet, type TagNode } from '../../knowledge/index';
-import { building, index, kv, linkMention, openLink, tagLineOf, unlinkedMentionsOf } from './state';
+import { index, indexBusy, kv, linkMention, openLink, tagLineOf, unlinkedMentionsOf } from './state';
 import { notesWithoutIncoming, orphanNotes } from '../../knowledge/connections';
 import { searchClient } from '../search/client';
 
@@ -295,7 +295,7 @@ function MentionRow({ m, target }: { m: Mention; target: string }) {
 /** Folder-wide note lists (orphans, no incoming links): capped, the count says how many there are. */
 const MAX_NOTE_ROWS = 300;
 function NoteList({ paths, empty }: { paths: string[]; empty: string }) {
-  if (!paths.length) return <Empty>{building.value ? indexingText() : empty}</Empty>;
+  if (!paths.length) return <Empty>{indexBusy.value ? indexingText() : empty}</Empty>;
   return (
     <div class="se-kn-items flat">
       {paths.slice(0, MAX_NOTE_ROWS).map((p) => (
@@ -356,7 +356,7 @@ export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
 
   const head = (
     <PanelHead title="Backlinks" sub={path ? stem(path) : null}>
-      {building.value && <span class="se-kn-busy" title="Indexing notes…" />}
+      {indexBusy.value && <span class="se-kn-busy" title="Indexing notes…" />}
       {onOpenGraph && path && (
         <button class="se-kn-btn" title="Open local graph" aria-label="Open local graph" onClick={onOpenGraph}>
           <IconGraph />
@@ -398,10 +398,10 @@ export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
   const folderSections = (
     <>
       {unresolvedSection}
-      <Section id="orphans" title="Orphan notes" count={building.value && !unlinkedNotes.orphans.length ? null : unlinkedNotes.orphans.length}>
+      <Section id="orphans" title="Orphan notes" count={indexBusy.value && !unlinkedNotes.orphans.length ? null : unlinkedNotes.orphans.length}>
         <NoteList paths={unlinkedNotes.orphans} empty="Every note links somewhere or is linked from somewhere." />
       </Section>
-      <Section id="noIncoming" title="Notes without incoming links" count={building.value && !unlinkedNotes.noIncoming.length ? null : unlinkedNotes.noIncoming.length}>
+      <Section id="noIncoming" title="Notes without incoming links" count={indexBusy.value && !unlinkedNotes.noIncoming.length ? null : unlinkedNotes.noIncoming.length}>
         <NoteList paths={unlinkedNotes.noIncoming} empty="Every note is linked from another note." />
       </Section>
     </>
@@ -421,7 +421,7 @@ export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
       {head}
       <Section id="linked" title="Linked mentions" count={backlinks.length}>
         {backlinks.length === 0 ? (
-          <Empty>{building.value ? indexingText() : 'No notes link here yet.'}</Empty>
+          <Empty>{indexBusy.value ? indexingText() : 'No notes link here yet.'}</Empty>
         ) : (
           groupBy(backlinks).map(([from, items]) => (
             <FileGroup key={from} path={from} count={items.length}>
@@ -557,7 +557,7 @@ export function TagsPanel() {
   return (
     <div class="se-kn se-kn-tags">
       <PanelHead title="Tags">
-        {building.value && <span class="se-kn-busy" title="Indexing notes…" />}
+        {indexBusy.value && <span class="se-kn-busy" title="Indexing notes…" />}
         <button class="se-kn-btn text" title="Toggle sort order" onClick={() => setSort(sort === 'name' ? 'count' : 'name')}>
           {sort === 'name' ? 'A–Z' : 'Count'}
         </button>
@@ -565,7 +565,7 @@ export function TagsPanel() {
       {tree.length > 6 && <input class="se-kn-filter" type="search" placeholder="Filter tags…" value={filter} onInput={(e) => setFilter((e.target as HTMLInputElement).value)} />}
       {tree.length === 0 ? (
         <Empty>
-          {building.value ? (
+          {indexBusy.value ? (
             indexingText()
           ) : (
             <>
