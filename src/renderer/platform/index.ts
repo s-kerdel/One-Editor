@@ -1,5 +1,5 @@
 // Picks the backend transport at runtime: Electron preload bridge, else the local HTTP server.
-import type { BackendApi, FsEvent, RpcMethod } from '@shared/api';
+import type { BackendApi, FsEvent, GpuStatus, RpcMethod } from '@shared/api';
 import { RPC_METHODS, isExternalUrl } from '@shared/api';
 
 export class RpcError extends Error {
@@ -23,6 +23,7 @@ type Bridge = {
   approveClose(ok: boolean): void;
   setTitleBarOverlay?(o: { color: string; symbolColor: string; height: number }): void;
   relaunch?(): Promise<unknown>;
+  gpuStatus?(): Promise<unknown>;
 };
 
 function build(kind: 'electron' | 'web', os: string, call: (m: RpcMethod, args: unknown[]) => Promise<unknown>, extra: Partial<BackendApi>): BackendApi {
@@ -53,6 +54,8 @@ function electronBackend(bridge: Bridge): BackendApi {
       frame: bridge.frame === 'integrated' ? 'integrated' : 'native',
       setTitleBarOverlay: bridge.setTitleBarOverlay && ((o) => bridge.setTitleBarOverlay!(o)),
       relaunch: bridge.relaunch && (async () => void (await bridge.relaunch!())),
+      // Older main processes have no handler: invoke rejects → null (the dialog still shows the renderer's view).
+      gpuStatus: bridge.gpuStatus && (() => bridge.gpuStatus!().then((r) => (r as GpuStatus | null) ?? null, () => null)),
     },
   );
 }

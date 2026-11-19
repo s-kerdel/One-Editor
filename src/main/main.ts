@@ -17,6 +17,7 @@ import { APP_ORIGIN, SCHEME, isAppNavigation, isExternalUrl, pathsFromArgs, rout
 import { renderPdf } from './pdf-window';
 import { TerminalService, loadNodePty, registerTerminalIpc } from './terminal';
 import { VaultService, registerVaultIpc } from './vault';
+import { registerGpuIpc } from './gpu';
 import { createRelaunch, frameOf, frameWindowOptions, initialOverlay, isDarkColor, parseOverlay, rememberOverlay, type TitleBarCache, type WindowFrame } from './frame';
 
 const tMainStart = performance.now(); // ms since process start (Node's timeOrigin)
@@ -202,6 +203,7 @@ function main() {
     backend: () => (process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os'),
   });
   registerVaultIpc(ipcMain, vault, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
+  registerGpuIpc(ipcMain, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   ipcMain.handle('app:toggleDevTools', (e) => trustedSender(e) && win?.webContents.toggleDevTools());
   // Settings → Window frame → "Restart now": through the normal close flow (never loses edits).
   ipcMain.handle('app:relaunch', (e) => {

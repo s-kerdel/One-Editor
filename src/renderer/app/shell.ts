@@ -198,5 +198,6 @@ export function installShell() {
     { id: 'view.zoomOut', title: 'View: Zoom out', keys: isElectron ? ['Mod--', 'Mod-_', 'Mod-Shift-_'] : undefined, when: () => isElectron, run: () => zoom(-1) },
     { id: 'view.zoomReset', title: 'View: Reset zoom', keys: isElectron ? ['Mod-0'] : undefined, when: () => isElectron, run: () => zoom(0) },
     { id: 'app.devtools', title: 'Developer: Toggle developer tools', keys: isElectron ? ['F12'] : undefined, when: () => isElectron, run: () => void app.backend.toggleDevTools?.() },
+    { id: 'app.gpuStatus', title: 'Developer: Show GPU status', keywords: ['hardware acceleration', 'graphics'], run: () => void import('./gpu-status').then((m) => m.showGpuStatus()) },
   ]);
 }

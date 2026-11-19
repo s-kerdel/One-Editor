@@ -264,8 +264,18 @@ export interface BackendApi {
   setTitleBarOverlay?(o: { color: string; symbolColor: string; height: number }): void;
   /** Restart the app through the normal close flow (unsaved changes are flushed / asked about first). */
   relaunch?(): Promise<void>;
+  /** How Chromium uses the GPU in this window ("Developer: Show GPU status"); null if unavailable. */
+  gpuStatus?(): Promise<GpuStatus | null>;
   /** Git status + source control: one entry point, every operation validated by the backend (shared/git.ts). */
   git?<K extends GitOp>(op: K, ...args: Parameters<GitOps[K]>): Promise<ReturnType<GitOps[K]>>;
+}
+
+/** Electron's app.getGPUFeatureStatus() (e.g. gpu_compositing: enabled | disabled_software), the GPUs and
+ *  the GPU-related command-line switches in effect. */
+export interface GpuStatus {
+  features: Record<string, string>;
+  devices: string[];
+  switches: string[];
 }
 
 /** Links the app hands to the OS (default browser / mail client). Anything else — file:, javascript:,

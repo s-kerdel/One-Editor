@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('secEditBridge', {
   setTitleBarOverlay: (o: { color: string; symbolColor: string; height: number }) =>
     ipcRenderer.send('app:titleBarOverlay', { color: String(o?.color), symbolColor: String(o?.symbolColor), height: Number(o?.height) }),
   relaunch: () => ipcRenderer.invoke('app:relaunch'),
+  gpuStatus: () => ipcRenderer.invoke('app:gpuStatus'),
   // Integrated terminal (term:* channels, validated in main/terminal.ts).
   terminal: terminalBridge(ipcRenderer),
   // Secrets vault for {{variables}} (vault:* channels, validated in main/vault.ts).
