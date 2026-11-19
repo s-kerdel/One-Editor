@@ -111,6 +111,7 @@ there only if it must beat the shell.
 7. Keep the renderer secure: `contextIsolation`, sandboxed preload, DOMPurify on all rendered HTML, no `eval`.
 8. No new top-level frameworks (no React/Vue/Tailwind). Small focused libs are fine.
 9. Code comments explain *why*, briefly.
+10. **Stay inside the project.** Temp files, test workspaces and outputs go in `<project>/.tmp/<area>/` only. Never write outside the project (no `/tmp`, no Windows side via `/mnt/c` or `%TEMP%`, no user folders) and never run Windows executables via WSL interop. If a test truly needs that (e.g. real NTFS), stop and ask the lead, who asks the user first.
 
 ## Running Playwright in parallel
 Also pass a private results dir, or parallel runs clobber `test-results/`:
