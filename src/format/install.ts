@@ -3,6 +3,7 @@
 import { app } from '../renderer/app/app';
 import { registerCommands } from '../renderer/app/commands';
 import { setBeforeSave } from '../renderer/app/documents';
+import { trimForSave } from '../renderer/whitespace/save';
 import { updateSettings } from '../renderer/app/settings';
 import { formatterForPath, languageForPath } from '../shared/languages';
 import { formatInWorker } from './client';
@@ -241,6 +242,8 @@ function installFormatOnSave() {
     };
   }
   setBeforeSave(async (path, content) => {
+    // Trailing whitespace (../renderer/whitespace) on every save; an autosave spares the caret's line.
+    content = await trimForSave(path, content, { explicit: explicitSave > 0 });
     // Explicit saves were formatted above (cursor-preserving). This hook only covers saves
     // that bypass the wrapper when autosave is off, i.e. every save is deliberate.
     if (explicitSave > 0 || !app.settings.value.formatOnSave || app.settings.value.autosave) return content;

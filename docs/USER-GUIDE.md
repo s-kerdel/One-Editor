@@ -162,9 +162,25 @@ Numbered lists **renumber themselves** as you edit.
 | **An image** (screenshot, file) | Saved as an attachment, inserted as `![[name.png]]` |
 | **Rich text** (web page, Word, Google Docs) | Clean Markdown |
 | **A file from the tree** | A `[[link]]` or `![[embed]]` |
-| Anything with `Ctrl+Shift+V` | Plain text |
+| **Terminal / AI output** padded with spaces | **Trailing spaces removed** from every line (also tabs, NBSP); blank lines at the end dropped |
+| Anything with `Ctrl+Shift+V` | **Exactly as copied**: plain text, no trimming, no conversion |
 
 **Where attachments go:** Settings → Attachments. Default is the `attachments/` folder.
+
+### Trailing whitespace
+
+**On by default, and quiet:** pasted text loses its trailing spaces; saving cleans only the lines you edited.
+
+| When | What happens | Setting (Editor → Trailing whitespace) |
+|---|---|---|
+| **Paste** | Trailing spaces off every pasted line | **Trim pasted text** — notes / code files: On |
+| **Save** | Trailing spaces off the **lines you edited** since opening / last save. Other lines are never touched → **no noise in git diffs** | **Trim on save** — Off / **Edited lines** / All lines |
+| **Autosave while you type** | The line with the cursor is skipped (your space survives). It is cleaned when the cursor leaves it or on `Ctrl+S` | — |
+| **Any time** | Palette or right-click → **Trim trailing whitespace** (selection, else the whole file) | — |
+
+- **Markdown hard breaks stay:** two spaces at a line end before a line with text. Turn off: **Keep Markdown hard breaks**. Code blocks and frontmatter are always trimmed.
+- **`.editorconfig` wins:** `trim_trailing_whitespace = true` → all lines, `= false` → never.
+- **Undo** after a save undoes your edit, not the cleanup.
 
 ### Embeds
 
@@ -611,6 +627,9 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | Word wrap | On |
 | | Spellcheck | Off |
 | | Smart paste | Off |
+| | Trim pasted text (notes / code files) | On / On |
+| | Trim on save (notes / code files) | Edited lines / Edited lines |
+| | Keep Markdown hard breaks | On |
 | **Files** | Autosave | On |
 | | Autosave delay | 800 ms |
 | | Show hidden files | Off |

@@ -137,7 +137,7 @@ npm run serve -- ~/notes --open
 | `Ctrl+1` … `Ctrl+6` | Heading 1 … 6 |
 | `Ctrl+Enter` | Toggle checkbox |
 | `Tab` / `Shift+Tab` | Indent / outdent list item |
-| `Ctrl+Shift+V` | Paste as plain text |
+| `Ctrl+Shift+V` | Paste exactly as copied (plain text, trailing spaces kept) |
 
 ### Git
 

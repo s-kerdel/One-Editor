@@ -36,6 +36,7 @@ import { editorContextMenu } from './context-menu';
 import { focusMode, typewriter } from './focus';
 import { gitEditor } from '../git/gutter';
 import { variableChips, variableCompletion, variablesEditor } from '../variables/cm';
+import { whitespaceEditor } from '../whitespace/cm';
 // Git change navigation for the palette (../git/index loads them from this chunk: no extra gutter chunk).
 export { nextChange, previousChange, peekChangeAtCursor, revertChangeAtCursor } from '../git/gutter';
 
@@ -200,6 +201,7 @@ export function createEditor(parent: HTMLElement): EditorController {
     of(attrsComp, attrs(!!settings?.spellcheck && isMdView(path))),
     updateListener,
     contextMenu,
+    whitespaceEditor(), // trims pasted terminal padding; Ctrl+Shift+V = exactly as copied
     codeFolding({ placeholderText: '…' }),
     Prec.high(keymap.of(commonKeymap)),
     keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap, ...completionKeymap]),

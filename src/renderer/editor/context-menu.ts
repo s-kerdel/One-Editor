@@ -20,6 +20,7 @@ import { addIcons } from '../app/icons';
 import { codeAt } from './widgets';
 import { isRunnableFence } from '../terminal/run';
 import { codeAction, fenceInfoAt } from '../variables/cm';
+import { trimWhitespaceCommand } from '../whitespace/cm';
 import { compareMenuItems } from '../git/compare-menu';
 
 // Menu-only icons, registered from this lazy chunk so they cost nothing at startup.
@@ -244,11 +245,11 @@ export function buildEditorMenu(view: EditorView, opts: { markdown: boolean; tar
     items.push(...compare);
   }
 
+  // Text clean-up: trailing whitespace (selection, else the file), then formatting.
+  sep();
+  items.push({ label: hasSel ? 'Trim trailing whitespace in selection' : 'Trim trailing whitespace', run: run((v) => trimWhitespaceCommand(v)) });
   const fmt = getCommand('format.document');
-  if (fmt) {
-    sep();
-    items.push({ label: 'Format document', icon: 'braces', keys: keys('Shift-Alt-f'), disabled: !!fmt.when && !fmt.when(), run: run(() => void runCommand('format.document')) });
-  }
+  if (fmt) items.push({ label: 'Format document', icon: 'braces', keys: keys('Shift-Alt-f'), disabled: !!fmt.when && !fmt.when(), run: run(() => void runCommand('format.document')) });
   if (opts.markdown && getCommand('preview.exportPdf')) {
     sep();
     items.push({ label: 'Export to PDF…', icon: 'exportPdf', run: () => void runCommand('preview.exportPdf') });

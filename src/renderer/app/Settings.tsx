@@ -513,8 +513,11 @@ export function SettingsOverlay() {
                 <section data-section={sec.id}>
                   <h3>{sec.title}</h3>
                   {sec.blurb && <p class="se-set-blurb">{sec.blurb}</p>}
-                  {rows.map((def) => (
-                    <SettingRow key={def.key} def={def} s={s} />
+                  {rows.map((def, i) => (
+                    <>
+                      {def.group && def.group !== rows[i - 1]?.group && <h4 class="se-set-group">{def.group}</h4>}
+                      <SettingRow key={def.key} def={def} s={s} />
+                    </>
                   ))}
                 </section>
               );

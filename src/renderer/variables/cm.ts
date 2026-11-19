@@ -9,6 +9,7 @@ import type { CompletionContext, CompletionResult } from '@codemirror/autocomple
 import { basename, normalize } from '@shared/paths';
 import { app } from '../app/app';
 import { findPathCandidates } from '../terminal/links';
+import { pastedText, pasteIsRaw } from '../whitespace/cm';
 import { afterBootIdle, lazy } from '../app/lazy';
 import { docPath } from '../editor/host';
 import type { CodeHeaderVars, VariablesApi, VarsProvider } from './api';
@@ -275,10 +276,12 @@ const pasteUi = lazy<PasteUi>(() => import('./smartpaste-ui'));
 
 const smartPaste = [
   EditorView.domEventHandlers({
-    paste(e) {
-      if (!smartPasteOn()) return false;
+    paste(e, view) {
+      // Ctrl+Shift+V pastes exactly as copied: no chip either.
+      if (!smartPasteOn() || pasteIsRaw()) return void (lastPaste = null), false;
       const dt = e.clipboardData;
-      lastPaste = dt ? { text: dt.getData('text/plain').replace(/\r\n?/g, '\n'), vscode: dt.getData('vscode-editor-data') || null, at: Date.now() } : null;
+      // What CodeMirror will insert: the text after the trailing-whitespace trim (../whitespace).
+      lastPaste = dt ? { text: pastedText(dt.getData('text/plain'), view.state.facet(docPath)), vscode: dt.getData('vscode-editor-data') || null, at: Date.now() } : null;
       if (lastPaste?.text) void pasteUi.load().catch(() => {}); // warm while CodeMirror inserts
       return false; // the normal paste (paste.ts / CodeMirror) always happens first
     },

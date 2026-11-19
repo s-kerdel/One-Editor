@@ -63,6 +63,8 @@ export interface SettingDef {
   desktopOnly?: boolean;
   /** Greyed out unless this predicate holds for the current settings. */
   enabledWhen?: (s: Record<string, unknown>) => boolean;
+  /** Sub-heading inside the section (consecutive settings with the same group sit under it). */
+  group?: string;
 }
 
 const D = DEFAULT_SETTINGS;
@@ -313,6 +315,71 @@ const defs: Draft[] = [
     label: 'Compare text',
     description: 'Right-click: compare text with the clipboard or with a selection you marked earlier.',
     keywords: ['diff', 'compare', 'clipboard', 'selection', 'git'],
+    default: true,
+    control: { type: 'toggle' },
+  },
+  // ---- Editor → Trailing whitespace (src/renderer/whitespace) ----
+  {
+    key: 'editor.trimPaste.markdown',
+    section: 'editor',
+    group: 'Trailing whitespace',
+    label: 'Trim pasted text in notes',
+    description: 'Strip trailing spaces from each pasted line (terminal padding). Ctrl+Shift+V pastes as copied.',
+    keywords: ['trailing', 'spaces', 'whitespace', 'paste', 'terminal', 'strip', 'markdown'],
+    default: true,
+    control: { type: 'toggle' },
+  },
+  {
+    key: 'editor.trimPaste.code',
+    section: 'editor',
+    group: 'Trailing whitespace',
+    label: 'Trim pasted text in code files',
+    description: 'The same for code files.',
+    keywords: ['trailing', 'spaces', 'whitespace', 'paste', 'terminal', 'strip', 'code'],
+    default: true,
+    control: { type: 'toggle' },
+  },
+  {
+    key: 'editor.trimOnSave.markdown',
+    section: 'editor',
+    group: 'Trailing whitespace',
+    label: 'Trim on save in notes',
+    description: 'Edited lines only = no noise in git diffs. A .editorconfig trim_trailing_whitespace wins.',
+    keywords: ['trailing', 'spaces', 'whitespace', 'save', 'strip', 'markdown', 'editorconfig'],
+    default: 'changed',
+    control: {
+      type: 'segmented',
+      options: [
+        { v: 'off', label: 'Off' },
+        { v: 'changed', label: 'Edited lines' },
+        { v: 'all', label: 'All lines' },
+      ],
+    },
+  },
+  {
+    key: 'editor.trimOnSave.code',
+    section: 'editor',
+    group: 'Trailing whitespace',
+    label: 'Trim on save in code files',
+    description: 'The same for code files. Autosave never trims the line you are typing on.',
+    keywords: ['trailing', 'spaces', 'whitespace', 'save', 'strip', 'code', 'editorconfig'],
+    default: 'changed',
+    control: {
+      type: 'segmented',
+      options: [
+        { v: 'off', label: 'Off' },
+        { v: 'changed', label: 'Edited lines' },
+        { v: 'all', label: 'All lines' },
+      ],
+    },
+  },
+  {
+    key: 'editor.trimOnSave.keepMarkdownBreaks',
+    section: 'editor',
+    group: 'Trailing whitespace',
+    label: 'Keep Markdown hard breaks',
+    description: 'Two trailing spaces before text (a Markdown hard break) survive trimming; code blocks don’t.',
+    keywords: ['hard break', 'two spaces', 'br', 'markdown', 'trailing'],
     default: true,
     control: { type: 'toggle' },
   },
