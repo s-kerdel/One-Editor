@@ -1,2 +1,2 @@
-<!-- sec-edit mark: white # on black, geometric strokes. Edit, then: npm run icons -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect x="8" y="8" width="240" height="240" rx="48" fill="#0f0f10"/><rect x="9.5" y="9.5" width="237" height="237" rx="46.5" fill="none" stroke="#fff" stroke-opacity=".1" stroke-width="3"/><g fill="none" stroke="#ffffff" stroke-width="26" stroke-linecap="round"><path d="M109 56L87 200"/><path d="M169 56L147 200"/><path d="M56 98H200"/><path d="M56 158H200"/></g></svg>
+<!-- One mark (48 px and up): a point-symmetric '1' — constant stroke, 51° diagonals, flat cuts, white on teal. Edit, then: npm run icons -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect x="8" y="8" width="240" height="240" rx="48" fill="#00A3BA"/><polygon points="115,50 141,50 141,164.7 164.2,136 197.7,136 141,206 115,206 115,91.3 91.8,120 58.3,120" fill="#ffffff"/></svg>
