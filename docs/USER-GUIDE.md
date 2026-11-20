@@ -39,6 +39,8 @@
 | Switch tabs | `Ctrl+Tab` (most recently used first) |
 | **Go back / forward** | `Alt+←` / `Alt+→` (macOS: `Cmd+[` / `Cmd+]`), or the **mouse side buttons** anywhere in the window |
 
+**A workspace stays inside its folder.** A link in it (symlink, Windows junction) that points **outside** the folder is not shown, opened, searched or written through. Links to places **inside** the folder work as before. Need that other folder? Open it itself.
+
 **Go back returns to where you were**: the previous file (reopened if you closed it), or the spot before a big jump (find, go to line, outline, a click far away). PDFs go back to the page before a link or a typed page. Typing and small cursor moves are not steps.
 
 ### Sidebar styles
@@ -487,6 +489,27 @@ The nearest config file above the edited file is used.
 | **Footnotes** | `text[^1]` and `[^1]: note` |
 | **Task lists** | `- [ ]` (clickable in the preview) |
 
+### Images from the internet
+
+A note can show images from a web address (`![](https://…)`). Loading one tells that server **you opened the note** (and your IP address). So by default they **don't load**:
+
+| You see | Do this |
+|---|---|
+| A bar: **"This note loads images from the internet"** | **Load** = this note, until you restart · **Always for this folder** = remembered for the folder |
+| A dashed box where the image goes | That image, not loaded yet |
+
+- **Default for every folder:** Settings → Preview → **Images from the internet**: **Ask** (the bar) · **Always load** · **Never load** (no bar).
+- **Change a folder's choice:** palette → **"Images from the internet: …"** (always load / never load / use the default).
+- Same rule in **live preview**, link previews, embeds and **exports** (HTML / PDF show the dashed box instead).
+- Images **from your folder** always show.
+
+### Copy and Run show what you get
+
+- **Copy** / **Run** take the code from the **note's text**, never from what the page draws.
+- A code block with **hidden characters** (invisible or text-direction marks) gets a **"hidden characters"** badge: what you copy differs from what you see.
+- Shell code blocks **wrap long lines**, so nothing hides off to the right.
+- HTML in a note can't make its own Copy / Run buttons or cover the app.
+
 ### Export
 
 | Command (in `Ctrl+Shift+P`) | Result |
@@ -508,7 +531,7 @@ The nearest config file above the edited file is used.
 | **Theme** | Always **light** on white paper, also with the dark app theme |
 | **Code** | Same colours as the preview. Long lines **wrap**, nothing is cut off |
 | **Math, diagrams** | Math as real typeset formulas. **Mermaid** diagrams as sharp vector graphics |
-| **Images** | Images from your folder are **embedded** (`![](img.png)`, `![[img.png]]`). `https://` images too |
+| **Images** | Images from your folder are **embedded** (`![](img.png)`, `![[img.png]]`). `https://` images only when the note may load them ([Images from the internet](#images-from-the-internet)) |
 | **Links** | Stay **clickable**. Headings become **PDF bookmarks** |
 | **Page breaks** | Headings never end a page. Short code blocks, table rows, images and callouts are not split |
 | **Not included** | The properties block (frontmatter). Videos and audio become a small label |
@@ -598,7 +621,19 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 
 ## 8. Git
 
-**Open a folder that is a git repository. That's it.** sec-edit uses **your installed git**, so your login, SSH keys and Windows Credential Manager just work. No git installed? Git features stay hidden (one hint tells you).
+**Open a folder that is a git repository, and trust it once.** sec-edit uses **your installed git**, so your login, SSH keys and Windows Credential Manager just work. No git installed? Git features stay hidden (one hint tells you).
+
+### Trust a folder first
+
+**Git is off until you trust the folder.** A repository's own settings can make git run programs (hooks, filters), so a folder from someone else starts with no git at all: no marks, no branch, no change bars.
+
+1. The status bar shows **Git: not trusted**. Click it (or press `Ctrl+Shift+G`).
+2. The panel asks: *"This folder is a git repository… Trust this folder?"*
+3. Click **Trust**. Git appears. **Not now** leaves it off.
+
+- **Asked once per folder.** Remembered on this computer, not inside the folder.
+- **Change your mind:** Source control panel → **⋯** → **Stop trusting this folder** (also in the branch menu).
+- **Folders you already used** before this version stay trusted.
 
 ### See what changed
 
@@ -755,6 +790,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | **Attachments** | Save pasted files to | One folder in the workspace |
 | | Attachments folder | `attachments` |
 | **Preview** | Single line breaks | Off |
+| | Images from the internet | Ask |
 | **Export** | PDF page size | A4 |
 | | PDF margins | Normal |
 | | Page numbers (desktop only) | On |
@@ -822,14 +858,16 @@ Settings are **global**, not per folder.
 | **Who can connect** | **This computer** (default, 127.0.0.1 only) · **Network (LAN)** |
 
 - **The link holds a secret key.** Without it the server refuses every request. Share it only with people you trust.
-- **Network (LAN) is opt-in, and asked every time:** anyone on your network with the link can **read and edit** this folder. It is plain HTTP: trusted networks only, not public Wi-Fi.
+- **What the link opens:** the files of **this folder** (read, change, delete — git included) and the **app settings** you share with the desktop (theme, editor…). **Not** other folders on this computer, not the terminal, not your secrets.
+- **The key stays in that browser tab** (not a cookie, not in image addresses). A new tab needs the link again. **Open** starts the browser with a one-time link.
+- **Network (LAN) is opt-in, and asked every time:** anyone on your network with the link gets the above. It is plain HTTP: trusted networks only, not public Wi-Fi.
 - **Windows:** the first network start shows a **firewall prompt** for sec-edit. Allow **Private networks** only.
 - **Nothing starts on its own.** Opening another folder stops it. Quitting sec-edit stops it.
 - **Own tabs:** the browser keeps its own open tabs, tree and layout per folder (the first visit starts from the desktop's). The desktop's stay as they were.
 - **Settings are shared:** a change in the browser shows up in the desktop app at once, and the other way round.
 - **Same folder, same port:** the browser remembers things per address (environment pick, recent files). So a folder gets its last port again. If that port is taken, the info box says so: browser state for this folder then starts empty.
 - **In the browser:** no terminal · secrets of `{{variables}}` stay in that tab's memory only · PDF export = the browser's print dialog · one server at a time.
-- **Without the desktop app:** `Start web server.cmd` (Windows) or `start-web.sh` (Linux) next to the program.
+- **Without the desktop app:** `Start web server.cmd` (Windows) or `start-web.sh` (Linux) next to the program. Started that way on this computer, the browser can switch folders; with `--host` (another address) it serves that one folder only.
 
 ---
 
@@ -952,6 +990,7 @@ vars:
 
 - **Mark a secret:** list it under `secrets:`, or write `vault` / `vault:<key>` as its value.
 - **Set it:** click its `🔒 name` chip, or copy the command once and type it in the form.
+- **A `vault:<key>` secret is shared between folders.** The first time **another** folder uses one, sec-edit asks: *"This folder wants to use the secret … Allow?"* Say **Allow** only for a folder you trust. Asked once per folder. Plain `vault` secrets belong to their folder and are never asked about.
 - **Browser mode keeps secrets in memory** on purpose: they never reach the server or a file. Linux without a keyring does the same.
 
 ### Problems

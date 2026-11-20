@@ -36,6 +36,9 @@
   text-rendering: optimizeLegibility;
   outline: none;
   user-select: text;
+  /* Note content stays inside its box: nothing in it (whatever its classes / position) may paint over the
+     app — fixed and absolute descendants are positioned and clipped here (UI redress guard). */
+  contain: paint;
 }
 .se-preview > .se-sec:first-child > :first-child,
 .se-preview > :first-child:not(.se-sec) { margin-top: 0; }
@@ -139,6 +142,10 @@
 .se-preview .se-code-tools { position: absolute; top: 5px; right: 6px; z-index: 1; display: flex; align-items: center; gap: 2px; padding-left: 10px; border-radius: var(--radius, 6px); background: linear-gradient(90deg, transparent, var(--code-bg) 10px); font: 11px/1 var(--font-ui, var(--font-text)); color: var(--text-faint); user-select: none; }
 .se-preview .se-code[data-fence='diff'] .se-code-tools { background: none; }
 .se-preview .se-code-lang { padding: 0 4px; letter-spacing: 0.02em; }
+/* Invisible / bidi characters in the block: what Copy / Run hand out differs from what is drawn. */
+.se-preview .se-code-warn { padding: 2px 6px; border-radius: var(--radius-pill, 999px); background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); font-weight: 600; cursor: help; }
+/* Shell commands wrap: a long line must not hide its tail off to the right of what you run. */
+.se-preview.markdown-body .se-code:is([data-fence='bash'], [data-fence='sh'], [data-fence='shell'], [data-fence='zsh'], [data-fence='fish'], [data-fence='console'], [data-fence='powershell'], [data-fence='pwsh'], [data-fence='ps1'], [data-fence='cmd'], [data-fence='bat'], [data-fence='batch']) pre > code { width: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .se-preview .se-code-copy { width: 26px; height: 26px; padding: 0; border: 0; border-radius: var(--radius, 6px); background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0; transition: opacity 0.12s, background-color 0.12s; }
 .se-preview .se-code-copy::before { content: ''; display: block; width: 14px; height: 14px; margin: auto; background: currentColor; -webkit-mask: var(--se-i-copy) center / contain no-repeat; mask: var(--se-i-copy) center / contain no-repeat; }
 .se-preview .se-code:hover .se-code-copy, .se-preview .se-code-copy:focus-visible, .se-preview .se-code-copy.is-copied { opacity: 1; }
@@ -161,6 +168,12 @@ html[data-theme='light'] .se-preview .se-code code span { color: var(--shiki-lig
 .se-preview .se-code .line.se-diff-add { background: rgba(46, 160, 67, 0.2); }
 .se-preview .se-code .line.se-diff-del { background: rgba(248, 81, 73, 0.2); }
 .se-preview .se-code .line.se-diff-hunk { background: var(--accent-soft); }
+
+/* ---------- images from the internet (./remote): placeholder keeps the size, the bar offers to load ---------- */
+.se-preview img.se-remote-blocked { display: inline-block; min-width: 2.4em; min-height: 1.6em; max-width: 100%; padding: 0.2em 0.5em; border: 1px dashed var(--border); border-radius: var(--radius-sm, 5px); color: var(--text-muted); font-size: 0.85em; vertical-align: middle; }
+.se-remote-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 14px; border-bottom: 1px solid var(--border); background: var(--bg-elev); color: var(--text-muted); font: 13px / 1.4 var(--font-ui, var(--font-text)); }
+.se-remote-bar[hidden] { display: none; }
+.se-remote-bar > span { margin-right: auto; }
 
 /* ---------- tables ---------- */
 .se-preview .se-table-wrap { margin: 1.2em 0; overflow-x: auto; scrollbar-width: thin; }
@@ -235,7 +248,8 @@ html[data-theme='light'] .se-preview [data-callout='quote'] { --se-callout: 110,
 /* ---------- print ---------- */
 @media print {
   @page { margin: 18mm 16mm; }
-  .se-print-hide { display: none !important; }
+  .se-print-hide, .se-remote-bar { display: none !important; }
+  .se-preview { contain: none; }
   html, body, .se-print-path { display: block !important; position: static !important; width: auto !important; height: auto !important; min-height: 0 !important; max-height: none !important; overflow: visible !important; border: 0 !important; background: #fff !important; flex: none !important; }
   html { color-scheme: light !important; }
   .se-preview {

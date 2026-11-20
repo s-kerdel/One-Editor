@@ -58,11 +58,21 @@ describe('cli --ipc', () => {
     if (m?.type !== 'ready') return;
     expect(m.port).toBeGreaterThanOrEqual(4317);
     const base = `http://127.0.0.1:${m.port}/`;
-    expect((await fetch(base)).status).toBe(401);
+    // The page is a static shell (no token in it, no cookie); without the token no data comes back.
+    const shell = await fetch(base);
+    expect(shell.headers.get('set-cookie')).toBeNull();
+    expect(await shell.text()).not.toContain(m.token);
     expect((await fetch(`${base}api/rpc/getWorkspace`, { method: 'POST', body: '{}' })).status).toBe(403);
-    const page = await fetch(`${base}?token=${m.token}`);
-    expect(page.status).toBe(200);
-    expect(await page.text()).toContain(`<meta name="sec-edit-token" content="${m.token}">`);
+    const ok = await fetch(`${base}api/rpc/getWorkspace`, { method: 'POST', headers: { 'x-sec-edit-token': m.token }, body: '{"args":[]}' });
+    expect((await ok.json()).ok).toBe(true);
+    // --ipc pins the server to its folder: the rest of the machine stays out.
+    const other = await fetch(`${base}api/rpc/openWorkspace`, { method: 'POST', headers: { 'x-sec-edit-token': m.token }, body: JSON.stringify({ args: [dir] }) });
+    expect((await other.json()).error.code).toBe('EACCES');
+    // A one-time launch link for the parent's "Open in browser" (no token on a command line).
+    r.child.send({ type: 'launch' });
+    const launch = (await new Promise((res) => r.child.once('message', res))) as { type: string; url: string };
+    expect(launch.type).toBe('launch');
+    expect(launch.url).toMatch(/\?launch=[a-f0-9]{32}$/);
     expect(r.out.join('')).not.toContain(m.token);
     r.child.send({ type: 'stop' });
     expect(await r.exited).toBe(0);

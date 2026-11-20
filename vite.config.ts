@@ -26,13 +26,19 @@ function pdfjsAssets(): Plugin {
   };
 }
 
+/** index.html's CSP runs scripts from app://sec-edit/assets/ only (the server rewrites it for its origin);
+ *  the dev server serves /src, /@vite, … from its own origin. */
+function devCsp(): Plugin {
+  return { name: 'sec-edit-dev-csp', apply: 'serve', transformIndexHtml: (html) => html.replace(/app:\/\/sec-edit\/assets\/ app:\/\/sec-edit\/theme-boot\.js/, "'self'") };
+}
+
 // Renderer build. base './' so Electron can load it via file://
 export default defineConfig({
   root: fileURLToPath(new URL('./src/renderer', import.meta.url)),
   base: './',
   resolve: { alias: { '@shared': fileURLToPath(new URL('./src/shared', import.meta.url)) } },
   esbuild: { jsx: 'automatic', jsxImportSource: 'preact' },
-  plugins: [pdfjsAssets()],
+  plugins: [pdfjsAssets(), devCsp()],
   worker: { format: 'es' },
   build: {
     outDir: process.env.SEC_EDIT_RENDERER_OUT || fileURLToPath(new URL('./dist/renderer', import.meta.url)),

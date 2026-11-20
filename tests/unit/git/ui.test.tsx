@@ -67,10 +67,29 @@ describe('GitBranchItem', () => {
     expect(el.innerHTML).toBe('');
   });
 
+  it('an untrusted repository: a quiet "Git: not trusted" that opens the panel; nothing for a plain folder', async () => {
+    const un = (repoLikely?: boolean) => {
+      const store = new GitStore({ gitStatus: async () => ({ ok: false as const, reason: 'untrusted' as const, ...(repoLikely ? { repoLikely } : {}) }), gitHeadFile: async () => ({ content: null, oid: null }) });
+      return store.refreshNow().then(() => store);
+    };
+    const el = host();
+    const repo = await un(true);
+    const plain = await un();
+    act(() => render(<GitBranchItem store={repo} />, el));
+    const btn = el.querySelector<HTMLButtonElement>('[data-testid="git-untrusted"]')!;
+    expect(btn.textContent).toBe('Git: not trusted');
+    expect(el.querySelector('[data-testid="git-branch"]')).toBeNull();
+    app.sidebarPanel.value = 'files';
+    btn.click();
+    expect(app.sidebarPanel.value).toBe('git');
+    act(() => render(<GitBranchItem store={plain} />, el));
+    expect(el.innerHTML).toBe('');
+  });
+
   it('menu: copy branch, show changes (count), diff with last commit', async () => {
     const store = await storeWith(status());
     const items = branchMenuItems(store, 'notes/a.md');
-    expect(items.map((i) => i.label ?? '—')).toEqual(['Copy branch name', 'Show changes (2)', 'Diff with last commit', 'Open source control', '—', '↑2  ↓1  origin/feature/x']);
+    expect(items.map((i) => i.label ?? '—')).toEqual(['Copy branch name', 'Show changes (2)', 'Diff with last commit', 'Open source control', 'Stop trusting this folder', '—', '↑2  ↓1  origin/feature/x']);
     items[1].run!();
     expect(store.changesOnly.value).toBe(true);
     expect(branchMenuItems(store, 'new.md')[1].label).toBe('Show all files');

@@ -24,12 +24,14 @@ import { BackendFailure, MAX_INDEX_BYTES, Workspace, retryWin, type IndexOptions
 import { platformTrash } from './trash';
 import { withFileLock } from './filelock';
 import { checkPdfRequest, looksLikePdf, withPdfExtension, writeFileAtomic } from './pdf-export';
-import { GitService, gitEnv, locateGit, type GitServiceOptions } from './git';
-import { GitMonitor, type GitMonitorEvent } from './git-monitor';
+import { GitService, gitEnv, hasDotGitAbove, locateGit, type GitServiceOptions } from './git';
+import { GitMonitor, findNestedRepos, type GitMonitorEvent } from './git-monitor';
+import { GitTrust } from './git-trust';
 import { diffTexts } from './git-compare';
 import { GIT_OPS } from '../shared/git';
 import { ProcessExplorer, registerProcessSource } from './processes';
 import type { ProcRequest, ProcSnapshot } from '../shared/processes';
+import { winSystemExe } from './winsys';
 
 export function defaultConfigDir(): string {
   if (process.env.SEC_EDIT_CONFIG_DIR) return process.env.SEC_EDIT_CONFIG_DIR;
@@ -150,6 +152,10 @@ export class BackendService {
   private monitor: GitMonitor | null = null;
   private gitListeners = new Set<(e: GitMonitorEvent) => void>();
   private gitUnsub: (() => void) | null = null;
+  /** Folders git may run in (app data, see git-trust.ts); the verdict for the open folder is kept until it changes. */
+  private trustStore: GitTrust | null = null;
+  private trustOf: { root: string; trusted: Promise<boolean> } | null = null;
+  private repoLikely: { root: string; at: number; p: Promise<boolean> } | null = null;
 
   constructor(
     readonly configDir: string = defaultConfigDir(),
@@ -212,7 +218,8 @@ export class BackendService {
 
   async openWorkspace(absPath: string) {
     const resolved = path.resolve(absPath);
-    const st = await fsp.stat(resolved).catch(() => null);
+    // Git trust migrates from the recent list as it was BEFORE this open adds to it.
+    const [st] = await Promise.all([fsp.stat(resolved).catch(() => null), this.gitTrust().ready()]);
     if (!st?.isDirectory()) throw new BackendFailure('ENOENT', `Not a folder: ${absPath}`);
     // A WSL root on Windows tells "Notes" from "notes": only fold where the open folder does.
     if (this.workspace && (this.workspace.foldsCase ? samePath(this.workspace.root, resolved) : this.workspace.root === resolved)) return this.workspace.info();
@@ -360,13 +367,13 @@ export class BackendService {
   }
 
   async revealInFolder(p: string) {
-    const abs = this.ws().abs(p);
+    const abs = await this.ws().real(p, 'entry');
     if (this.hooks.revealInFolder) return void (await this.hooks.revealInFolder(abs));
     // Server mode: best effort with the platform's file manager.
     const win = process.platform === 'win32';
     // explorer.exe has its own parser: it needs `/select,"C:\a b\x.md"` verbatim — Node's default quoting
     // ("/select,C:\a b\x.md") makes it open Documents instead. `"` cannot occur in a Windows path.
-    const [cmd, args] = win ? ['explorer.exe', [`/select,"${abs}"`]] : process.platform === 'darwin' ? ['open', ['-R', abs]] : ['xdg-open', [path.dirname(abs)]];
+    const [cmd, args] = win ? [winSystemExe('explorer.exe'), [`/select,"${abs}"`]] : process.platform === 'darwin' ? ['open', ['-R', abs]] : ['xdg-open', [path.dirname(abs)]];
     await new Promise<void>((resolve, reject) =>
       execFile(cmd, args as string[], { windowsHide: true, windowsVerbatimArguments: win }, (err) => (err && !win ? reject(new BackendFailure('EIO', 'No file manager available')) : resolve())),
     );
@@ -549,6 +556,62 @@ export class BackendService {
     return this.monitor;
   }
 
+  private gitTrust(): GitTrust {
+    return (this.trustStore ??= new GitTrust(path.join(this.configDir, 'git-trust.json'), { recent: () => this.recentWorkspaces() }));
+  }
+
+  /** May git run in the open folder? (The user's "Trust" — see git-trust.ts.) */
+  private gitTrusted(): Promise<boolean> {
+    const ws = this.ws();
+    if (this.trustOf?.root !== ws.root) {
+      const trusted = ws.detectCase().then(() => this.gitTrust().isTrusted(ws.root, ws.foldsCase)).catch(() => false);
+      const mine = (this.trustOf = { root: ws.root, trusted });
+      // Only "trusted" is kept: "not yet" is asked again (another window of the app may have said Trust since).
+      void trusted.then((ok) => !ok && this.trustOf === mine && (this.trustOf = null));
+    }
+    return this.trustOf.trusted;
+  }
+
+  /** Looks like a repository on disk (a `.git` here, above, or in a folder below)? Nothing is run to find out. */
+  private looksLikeRepo(): Promise<boolean> {
+    const root = this.ws().root;
+    // Briefly cached (status is asked for in bursts); `git init` in a terminal shows up on the next look.
+    if (this.repoLikely?.root !== root || Date.now() - this.repoLikely.at > 3000)
+      this.repoLikely = { root, at: Date.now(), p: (async () => hasDotGitAbove(root) || (await findNestedRepos(root, { maxRepos: 1 })).length > 0)().catch(() => false) };
+    return this.repoLikely.p;
+  }
+
+  /** What an untrusted folder answers: "no git here" for reads the UI makes by itself, a refusal for everything else. */
+  private async untrustedReply(op: string): Promise<unknown> {
+    switch (op) {
+      case 'status':
+        return { ok: false, reason: 'untrusted', ...((await this.looksLikeRepo()) ? { repoLikely: true } : {}) };
+      case 'nudge':
+      case 'visibility':
+      case 'cancel':
+        return null;
+      case 'headFile':
+        return { content: null, oid: null };
+      case 'diff':
+        return null;
+      case 'hunks':
+        return { mode: 'file', reason: 'unavailable' };
+      default:
+        throw new BackendFailure('EACCES', 'Git is off in this folder until you trust it (Source control panel)');
+    }
+  }
+
+  private async setGitTrust(on: boolean): Promise<boolean> {
+    const ws = this.ws();
+    await ws.detectCase();
+    await this.gitTrust().set(ws.root, ws.foldsCase, on);
+    this.trustOf = null;
+    if (!on) this.disposeGit(); // running git stops with it: no monitor, no watchers, nothing queued
+    // Every client of this backend (other browser tabs) looks again.
+    this.gitListeners.forEach((l) => l({} as GitMonitorEvent));
+    return on;
+  }
+
   private disposeGit() {
     this.gitUnsub?.();
     this.gitUnsub = null;
@@ -602,6 +665,9 @@ export class BackendService {
       if (op === 'nudge' || op === 'visibility' || op === 'cancel') return null;
       throw new BackendFailure('NO_WORKSPACE', 'No folder is open');
     }
+    // The trust gate: before any GitService exists, so an untrusted folder never spawns git.
+    if (op === 'trust' || op === 'untrust') return this.setGitTrust(op === 'trust');
+    if (!(await this.gitTrusted())) return this.untrustedReply(op);
     const m = this.gitMonitor();
     await m.ready;
     const [a, b, c] = args;

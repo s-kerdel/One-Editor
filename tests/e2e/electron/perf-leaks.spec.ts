@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import type { Page } from '@playwright/test';
 import { test, expect, path } from './fixture';
+import { trustRepo } from '../git-helpers';
 
 const CYCLES = 200;
 
@@ -60,6 +61,7 @@ test.skip(process.platform !== 'linux', 'counts shells via /proc');
 test(`${CYCLES} cycles of tabs, terminals, git pane, preview and settings: no heap / DOM growth, no stray shells`, async ({ el }) => {
   test.setTimeout(600_000);
   execFileSync('git', ['init', '-q'], { cwd: el.ws });
+  trustRepo(el.ws); // the user's "Trust" (no git runs in a folder without it)
   const home = path.join(el.tmp, 'home');
   await fsp.mkdir(home, { recursive: true });
   await fsp.writeFile(path.join(home, '.bashrc'), 'PS1="term$ "\n');

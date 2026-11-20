@@ -9,9 +9,9 @@ import { renderMarkdown } from '../../../src/renderer/preview/markdown';
 const FILES = ['notes/report.md', 'notes/img/chart.png', 'assets/logo.svg', 'notes/clip.mp4', 'notes/doc.pdf'];
 const PNG = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
 
-function render(src: string) {
+function render(src: string, remote = true) {
   const el = document.createElement('div');
-  el.innerHTML = renderMarkdown(src, { path: 'notes/report.md', files: FILES, sourceLines: false });
+  el.innerHTML = renderMarkdown(src, { path: 'notes/report.md', files: FILES, sourceLines: false, remote });
   return el;
 }
 
@@ -98,6 +98,13 @@ describe('inlineImages', () => {
     expect(el.querySelector('img[loading]')).toBeNull(); // lazy images might never load in a hidden window
     expect(el.querySelector('img')!.getAttribute('width')).toBeNull();
     expect(el.querySelectorAll('img')[1].getAttribute('width')).toBe('200');
+  });
+
+  it('remote images the note may not load are labelled placeholders on paper too', async () => {
+    const el = render('![remote](https://example.com/a.png)', false);
+    await inlineImages(el, async () => PNG);
+    expect(el.querySelectorAll('img')).toHaveLength(0);
+    expect(el.querySelector('.se-pdf-missing')!.textContent).toBe('Image: remote');
   });
 
   it('missing, unreadable, oversized or non-image files become a labelled placeholder (no broken icon)', async () => {

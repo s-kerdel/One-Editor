@@ -12,8 +12,11 @@ class FakeChild extends EventEmitter {
   stderr = new EventEmitter();
   sent: unknown[] = [];
   kills: Array<string | undefined> = [];
+  port = 4317;
   send(m: unknown) {
     this.sent.push(m);
+    // Like cli.ts: a one-time launch link for "Open".
+    if ((m as { type?: string })?.type === 'launch') queueMicrotask(() => this.emit('message', { type: 'launch', url: `http://127.0.0.1:${this.port}/?launch=${'c'.repeat(32)}` }));
     return true;
   }
   kill(sig?: string) {
@@ -21,6 +24,7 @@ class FakeChild extends EventEmitter {
     return true;
   }
   ready(port = 4317) {
+    this.port = port;
     this.emit('message', { type: 'ready', port, token: TOKEN });
   }
   exit(code: number | null = 0, signal: string | null = null) {
@@ -78,6 +82,9 @@ describe('options and handshake validation', () => {
     expect(parseChildMessage({ type: 'ready', port: 4317, token: `${TOKEN}"><script>` })).toBeNull();
     expect(parseChildMessage({ type: 'ready', port: 0, token: TOKEN })).toBeNull();
     expect(parseChildMessage({ type: 'error', code: 'EADDRINUSE', message: 'Port 4317 is in use' })).toEqual({ type: 'error', code: 'EADDRINUSE', message: 'Port 4317 is in use' });
+    const launch = `http://127.0.0.1:4317/?launch=${'a'.repeat(32)}`;
+    expect(parseChildMessage({ type: 'launch', url: launch })).toEqual({ type: 'launch', url: launch });
+    for (const url of ['https://evil.example/?launch=' + 'a'.repeat(32), `${launch}&x=1`, 'http://127.0.0.1:4317/?token=' + 'a'.repeat(32)]) expect(parseChildMessage({ type: 'launch', url })).toBeNull();
     expect(parseChildMessage({ type: 'error' })).toBeNull();
     expect(parseChildMessage('ready')).toBeNull();
     expect(parseChildMessage(null)).toBeNull();
@@ -262,7 +269,9 @@ describe('WebServerService', () => {
     const s = await p;
     await t.svc.open(s.urls[0].url);
     for (const bad of ['https://evil.example/', 'file:///etc/passwd', `http://127.0.0.1:4317/?token=${TOKEN}&x=1`, 42]) await expect(t.svc.open(bad)).rejects.toMatchObject({ code: 'EACCES' });
-    expect(t.opened).toEqual([s.urls[0].url]);
+    // The browser gets a one-time launch link from the child, never the token on its command line.
+    expect(t.opened).toEqual([`http://127.0.0.1:4317/?launch=${'c'.repeat(32)}`]);
+    expect(t.children[0].sent).toContainEqual({ type: 'launch' });
   });
 });
 

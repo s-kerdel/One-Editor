@@ -7,18 +7,19 @@ import { noteEdited } from '../app/documents';
 import { fileUrl } from '../platform';
 import { isMarkdown } from '@shared/paths';
 import { parseWikiLink, resolveWikiTarget } from '@shared/wikilinks';
-import { renderCodeFile, renderFragment, renderMarkdown, resolveLocalPath, slugify, type RenderOptions } from './markdown';
+import { fenceAt, renderCodeFile, renderFragment, renderMarkdown, resolveLocalPath, slugify, type RenderOptions } from './markdown';
 import { sectionSource, splitSections, type Section } from './sections';
-import { codeText, createEnhancer, enhanceAll } from './enhance';
-import { expandEmbeds, invalidateEmbeds, type EmbedContext } from './embeds';
+import { createEnhancer, enhanceAll } from './enhance';
+import { embedSourceOf, expandEmbeds, invalidateEmbeds, type EmbedContext } from './embeds';
+import { allowNoteRemote, remoteAllowed, remoteAsks, setFolderRemote } from './remote';
 import { isRunnableFence } from '../terminal/run';
 
 /** Desktop app: a "Run in terminal" button on shell code blocks (live preview only — exports render
  *  fresh markdown, so they never carry it). */
 function addRunButtons(root: ParentNode, path: string | null): void {
-  // {{variables}} blocks (data-raw): "Copy / Run for targets…" when the note has targets.
+  // {{variables}} blocks (data-vars): "Copy / Run for targets…" when the note has targets.
   if (path && app.variables?.hasTargets(path)) {
-    for (const tools of root.querySelectorAll<HTMLElement>('.se-code[data-raw] > .se-code-tools')) {
+    for (const tools of root.querySelectorAll<HTMLElement>('.se-code[data-vars] > .se-code-tools')) {
       if (tools.querySelector('.se-code-multi')) continue;
       const b = document.createElement('button');
       b.className = 'se-code-multi';
@@ -60,6 +61,8 @@ interface Sec extends Section {
   rendered: boolean;
   dirty: boolean;
   diffable: boolean;
+  /** Holds remote media the policy kept out (the "loads images from the internet" bar). */
+  blocked: boolean;
 }
 type Anchor = { line: number; top: number };
 
@@ -71,7 +74,8 @@ const SYNC_BUDGET_MS = 45;
 const PUMP_SLICE_MS = 20;
 const HUGE_SECTIONS = 120;
 
-export function renderOptionsFor(path: string, o: { export?: boolean } = {}): RenderOptions {
+/** `host`: the note an embed of `path` is shown in ("Load" on a note also loads what it embeds). */
+export function renderOptionsFor(path: string, o: { export?: boolean; host?: string } = {}): RenderOptions {
   return {
     path,
     files: app.files.value,
@@ -81,6 +85,7 @@ export function renderOptionsFor(path: string, o: { export?: boolean } = {}): Re
     },
     breaks: app.settings.value['preview.lineBreaks'] === true,
     vars: app.variables?.renderHook(path, o),
+    remote: remoteAllowed(path) || (!!o.host && remoteAllowed(o.host)),
   };
 }
 
@@ -100,7 +105,7 @@ async function readNote(path: string): Promise<string | null> {
 }
 export const embedContext: EmbedContext = {
   read: readNote,
-  render: (src, path) => renderMarkdown(src, { ...renderOptionsFor(path), sourceLines: false, frontmatter: false }),
+  render: (src, path, host) => renderMarkdown(src, { ...renderOptionsFor(path, { host }), sourceLines: false, frontmatter: false }),
   renderFile: renderCodeFile,
 };
 
@@ -143,7 +148,30 @@ export function createPreview(el: HTMLElement): PreviewController {
   const doc = document.createElement('div');
   doc.className = 'se-preview markdown-body';
   doc.tabIndex = -1; // focusable so keyboard scrolling targets the preview after a click
-  el.replaceChildren(doc);
+  // Remote images were kept out (./remote): the email-client bar. Outside the document: never content.
+  const bar = document.createElement('div');
+  bar.className = 'se-remote-bar';
+  bar.setAttribute('role', 'status');
+  bar.hidden = true;
+  const barText = document.createElement('span');
+  barText.textContent = 'This note loads images from the internet';
+  const barButton = (label: string, run: () => void) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'se-btn small';
+    b.textContent = label;
+    b.addEventListener('click', run);
+    return b;
+  };
+  bar.append(
+    barText,
+    barButton('Load', () => curPath && allowNoteRemote(curPath)),
+    barButton('Always for this folder', () => setFolderRemote('allow')),
+  );
+  el.replaceChildren(bar, doc);
+  const syncBar = () => {
+    bar.hidden = !(remoteAsks() && secs.some((s) => s.blocked));
+  };
 
   const enhancer = createEnhancer(el);
   const scrollCbs = new Set<(l: number) => void>();
@@ -164,15 +192,18 @@ export function createPreview(el: HTMLElement): PreviewController {
 
   function fill(sec: Sec, interactive = false): void {
     const src = sectionSource(sec, sec.defs);
-    const frag = renderFragment(src, { ...renderOptionsFor(curPath ?? ''), frontmatter: sec.first });
+    const opts = { ...renderOptionsFor(curPath ?? ''), frontmatter: sec.first };
+    const remote = !!opts.remote;
+    const frag = renderFragment(src, opts);
     const lines = sec.text.split('\n');
     for (const child of Array.from(frag.children) as Sigged[]) {
       const l = child.getAttribute('data-line');
       const e = child.getAttribute('data-end');
       if (l === null || e === null) continue;
       const block = lines.slice(Number(l), Number(e)).join('\n');
-      // Blocks with {{placeholders}} also depend on the variables (epoch bumps when they change).
-      child[SIG] = `${child.tagName}\n${block}${block.includes('{{') ? `\n\u0000${epoch}` : ''}`;
+      // Blocks with {{placeholders}} also depend on the variables (epoch bumps when they change), every
+      // block on the remote-media decision (an image placeholder must not be reused once allowed).
+      child[SIG] = `${child.tagName}\n${block}${block.includes('{{') ? `\n\u0000${epoch}` : ''}\u0000${remote ? 1 : 0}`;
     }
     const diffable = !NO_DIFF_RE.test(src);
     if (sec.rendered && sec.diffable && diffable) patchChildren(sec.el, frag);
@@ -180,6 +211,7 @@ export function createPreview(el: HTMLElement): PreviewController {
     sec.rendered = true;
     sec.dirty = false;
     sec.diffable = diffable;
+    sec.blocked = !!sec.el.querySelector('.se-remote-blocked');
     sec.el.style.minHeight = '';
     // Size estimate used while the section is off-screen and was never laid out (huge-document mode).
     sec.el.style.containIntrinsicBlockSize = `auto ${Math.max(1, sec.lines) * 24}px`;
@@ -193,7 +225,10 @@ export function createPreview(el: HTMLElement): PreviewController {
     const path = curPath;
     if (!path) return;
     await expandEmbeds(root, embedContext, [path]);
-    if (curPath === path && !disposed) enhancer.scan(root);
+    if (curPath !== path || disposed) return;
+    enhancer.scan(root);
+    for (const s of secs) if (s.rendered && !s.blocked) s.blocked = !!s.el.querySelector('.se-remote-blocked');
+    syncBar();
   }
 
   /** Document-wide unique heading ids (sections are rendered independently). */
@@ -231,7 +266,10 @@ export function createPreview(el: HTMLElement): PreviewController {
       fill(sec);
     }
     if (more) pumpTimer = setTimeout(pump, 0);
-    else fixHeadingIds();
+    else {
+      fixHeadingIds();
+      syncBar();
+    }
   }
 
   function fillAll(): void {
@@ -239,6 +277,7 @@ export function createPreview(el: HTMLElement): PreviewController {
     pumpTimer = undefined;
     for (const sec of secs) if (sec.dirty) fill(sec);
     fixHeadingIds();
+    syncBar();
   }
 
   function clear(): void {
@@ -246,6 +285,7 @@ export function createPreview(el: HTMLElement): PreviewController {
     secs = [];
     curPath = null;
     doc.replaceChildren();
+    bar.hidden = true;
   }
 
   function render(path: string, markdown: string): void {
@@ -278,7 +318,7 @@ export function createPreview(el: HTMLElement): PreviewController {
         const host = document.createElement('div');
         host.className = 'se-sec';
         doc.insertBefore(host, before);
-        sec = { ...s, first: i === 0, epoch, defs, el: host, rendered: false, dirty: true, diffable: false };
+        sec = { ...s, first: i === 0, epoch, defs, el: host, rendered: false, dirty: true, diffable: false, blocked: false };
         secOf.set(host, sec);
       }
       dirty.push(sec);
@@ -304,6 +344,7 @@ export function createPreview(el: HTMLElement): PreviewController {
     for (let j = k; j < dirty.length; j++) if (!dirty[j].rendered) dirty[j].el.style.minHeight = `${Math.max(1, dirty[j].lines) * 1.6}em`;
     if (k < dirty.length) pumpTimer ??= setTimeout(pump, 0);
     else if (dirty.length) fixHeadingIds();
+    syncBar();
     lastMs = performance.now() - t0;
     doc.dataset.renderMs = lastMs.toFixed(1);
     if (switched && isSplit()) requestAnimationFrame(syncFromEditor);
@@ -541,10 +582,7 @@ export function createPreview(el: HTMLElement): PreviewController {
     if (app.docs.get(path) && app.docs.get(path)!.content !== next && (ed?.getContent(path) ?? next) === next) noteEdited(path, next);
   }
 
-  async function copyCode(btn: HTMLElement): Promise<void> {
-    const block = btn.closest('.se-code');
-    if (!block) return;
-    const text = codeText(block);
+  async function copyText(btn: HTMLElement, text: string): Promise<void> {
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -568,11 +606,43 @@ export function createPreview(el: HTMLElement): PreviewController {
     }, 1400);
   }
 
+  /** Where a code block's text comes from: the markdown that was rendered (a section, or an embedded note),
+   *  never the page — what raw HTML draws must not decide what Copy / Run hand out. null: no such block. */
+  function blockSource(block: HTMLElement): { code: string; info: string; path: string } | null {
+    const line = block.dataset.srcLine === undefined ? NaN : Number(block.dataset.srcLine);
+    const body = block.closest('.se-embed-body');
+    if (body) {
+      const src = embedSourceOf(body);
+      if (!src) return null;
+      if (src.file) return block.parentElement === body ? { code: src.text, info: '', path: src.path } : null;
+      const f = Number.isInteger(line) ? fenceAt(src.text, line, { frontmatter: false }) : null;
+      return f && { ...f, path: src.path };
+    }
+    const sec = secOf.get(block.closest('.se-sec') as Element);
+    if (!sec || !curPath || !Number.isInteger(line)) return null;
+    const f = fenceAt(sectionSource(sec, sec.defs), line, { frontmatter: sec.first });
+    return f && { ...f, path: curPath };
+  }
+
+  function codeAction(btn: HTMLElement): void {
+    const block = btn.closest<HTMLElement>('.se-code');
+    const src = block && blockSource(block);
+    if (!block || !src) return void app.toast('This code block is not in the note any more — try again', 'error');
+    // {{variables}} (data-vars): copy / run resolve placeholders (real secret values, missing ones asked for).
+    const vars = block.hasAttribute('data-vars') ? app.variables : undefined;
+    const ctx = { path: src.path, info: src.info };
+    if (btn.matches('.se-code-multi')) return void app.variables?.forTargets(src.code, ctx);
+    if (btn.matches('.se-code-run')) return void (vars ? vars.runCode(src.code, ctx) : app.runInTerminal?.(src.code, { lang: block.dataset.fence }));
+    if (vars) return void vars.copyCode(src.code, ctx).then((ok) => ok && flashCopied(btn));
+    void copyText(btn, src.code);
+  }
+
   function findAnchor(id: string): HTMLElement | null {
     const esc = (s: string) => CSS.escape(s);
     const slug = slugify(id);
+    // Ids / names from the note are prefixed by the sanitizer (DOM clobbering guard): footnotes, <a name>.
     return (
-      doc.querySelector<HTMLElement>(`[id="${esc(id)}"], a[name="${esc(id)}"]`) ??
+      doc.querySelector<HTMLElement>(`[id="${esc(id)}"], [id="user-content-${esc(id)}"], a[name="${esc(id)}"], a[name="user-content-${esc(id)}"]`) ??
       doc.querySelector<HTMLElement>(`[data-slug="${esc(slug)}"], [id="${esc(slug)}"]`) ??
       (id.startsWith('^') ? doc.querySelector<HTMLElement>(`[data-block="${esc(id.slice(1).toLowerCase())}"]`) : null)
     );
@@ -650,21 +720,10 @@ export function createPreview(el: HTMLElement): PreviewController {
     const target = e.target as HTMLElement;
     if (!target?.closest) return;
     if (target.matches('input.se-task')) return toggleTask(target as HTMLInputElement);
-    const copy = target.closest<HTMLElement>('.se-code-copy');
-    // {{variables}}: copy / run resolve the block's raw text (real secret values, missing ones asked for).
-    const raw = target.closest<HTMLElement>('.se-code[data-raw]');
-    if (raw && curPath && app.variables && target.closest('.se-code-copy, .se-code-run, .se-code-multi')) {
-      const ctx = { path: curPath, info: raw.dataset.info ?? raw.dataset.fence ?? '' };
-      const code = raw.dataset.raw ?? '';
-      if (target.closest('.se-code-multi')) return void app.variables.forTargets(code, ctx);
-      if (target.closest('.se-code-run')) return void app.variables.runCode(code, ctx);
-      const btn = target.closest<HTMLElement>('.se-code-copy')!;
-      return void app.variables.copyCode(code, ctx).then((ok) => ok && flashCopied(btn));
-    }
-    if (copy) return void copyCode(copy);
-    const run = target.closest<HTMLElement>('.se-code-run')?.closest<HTMLElement>('.se-code');
-    if (run) return void app.runInTerminal?.(codeText(run), { lang: run.dataset.fence });
-    const a = target.closest<HTMLAnchorElement>('a');
+    const action = target.closest<HTMLElement>('.se-code-copy, .se-code-run, .se-code-multi');
+    if (action) return codeAction(action);
+    // <area> too: the sanitizer drops image maps, but no link may ever navigate the app window.
+    const a = target.closest<HTMLAnchorElement>('a, area');
     if (a) {
       e.preventDefault(); // the app must never navigate away
       // Links inside an embedded note resolve relative to that note.
@@ -682,7 +741,7 @@ export function createPreview(el: HTMLElement): PreviewController {
     if (e.ctrlKey || e.metaKey) void jumpToSource(target);
   };
   const onAuxClick = (e: MouseEvent) => {
-    if ((e.target as HTMLElement)?.closest?.('a')) e.preventDefault(); // middle click would open a browser window
+    if ((e.target as HTMLElement)?.closest?.('a, area')) e.preventDefault(); // middle click would open a browser window
   };
   doc.addEventListener('click', onClick);
   doc.addEventListener('auxclick', onAuxClick);
@@ -743,6 +802,10 @@ export function createPreview(el: HTMLElement): PreviewController {
     }),
     app.events.on('variables:changed', () => {
       epoch++; // values / env / target changed: every section re-renders
+      schedule(true);
+    }),
+    app.events.on('media:policy', () => {
+      epoch++; // remote images allowed / blocked: placeholders ↔ images
       schedule(true);
     }),
     app.events.on('settings:changed', () => {

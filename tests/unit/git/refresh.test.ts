@@ -164,6 +164,7 @@ describe('index refresh through the backend (setting git.refreshIndex)', () => {
     const events: GitMonitorEvent[] = [];
     s.onGitChanged((e) => events.push(e));
     await s.openWorkspace(dir);
+    await s.git('trust'); // the user's "Trust" in the Source control panel: no git runs without it
     expect(await s.git('status')).toMatchObject({ ok: true });
     return { s, events, refreshes: () => events.filter((e) => 'ran' in e && e.ran.trigger === 'index-refresh') };
   }

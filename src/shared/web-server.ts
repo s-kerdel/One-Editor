@@ -65,7 +65,8 @@ export function optionsFromSettings(s: Record<string, unknown>): WebServerOption
 }
 
 /** The child's handshake over the Node IPC channel (`cli.mjs --ipc`). */
-export type ChildMessage = { type: 'ready'; port: number; token: string; busy?: number } | { type: 'error'; code: string; message: string };
+/** `launch`: a one-time link (answer to { type: 'launch' }) — "Open" hands it to the browser instead of the token. */
+export type ChildMessage = { type: 'ready'; port: number; token: string; busy?: number } | { type: 'error'; code: string; message: string } | { type: 'launch'; url: string };
 
 export function parseChildMessage(m: unknown): ChildMessage | null {
   if (!m || typeof m !== 'object') return null;
@@ -77,6 +78,7 @@ export function parseChildMessage(m: unknown): ChildMessage | null {
     const busy = o.busy;
     return typeof busy === 'number' && Number.isInteger(busy) && busy > 0 && busy <= 65535 && busy !== port ? { type: 'ready', port, token, busy } : { type: 'ready', port, token };
   }
+  if (o.type === 'launch' && typeof o.url === 'string' && /^http:\/\/[^\s/?#]+\/\?launch=[a-f0-9]{32}$/.test(o.url)) return { type: 'launch', url: o.url };
   if (o.type === 'error' && typeof o.message === 'string') {
     return { type: 'error', code: typeof o.code === 'string' ? o.code.slice(0, 40) : 'EIO', message: o.message.slice(0, 500) };
   }

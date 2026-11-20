@@ -67,6 +67,25 @@ export function registerPreviewCommands(): void {
         window.print();
       }),
     },
+    // Remote images (./remote): the folder's choice, also reachable without the preview's bar.
+    ...(
+      [
+        ['preview.remoteImages.allowFolder', 'Images from the internet: always load in this folder', 'allow'],
+        ['preview.remoteImages.blockFolder', 'Images from the internet: never load in this folder', 'block'],
+        ['preview.remoteImages.resetFolder', 'Images from the internet: use the default for this folder', null],
+      ] as const
+    ).map(([id, title, v]) => ({
+      id,
+      title,
+      category: 'Preview',
+      keywords: ['remote', 'external', 'tracking', 'privacy', 'load images', 'block images'],
+      when: () => !!app.workspace.value,
+      run: async () => {
+        const { setFolderRemote } = await import('./remote');
+        setFolderRemote(v);
+        app.toast(v === 'allow' ? 'Images from the internet load in this folder' : v === 'block' ? 'Images from the internet are blocked in this folder' : 'This folder follows Settings → Preview again', 'info');
+      },
+    })),
     {
       id: 'preview.copyHtml',
       title: 'Copy as HTML',

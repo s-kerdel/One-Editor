@@ -6,7 +6,7 @@ import footnote from 'markdown-it-footnote';
 import { languageForFence, languageForPath } from '@shared/languages';
 import { dirname, extname } from '@shared/paths';
 import { parseWikiLink, resolveWikiTarget } from '@shared/wikilinks';
-import { sanitizeHtml, sanitizeToFragment, type SanitizeContext } from './sanitize';
+import { USER_MARK, sanitizeHtml, sanitizeToFragment, type SanitizeContext } from './sanitize';
 
 export interface RenderOptions {
   /** Workspace-relative path of the note being rendered (relative links/images resolve against it). */
@@ -26,6 +26,8 @@ export interface RenderOptions {
   /** {{variables}} (../variables): values for placeholders in prose, inline code and code blocks
    *  (`info` = the fence's info string, for `{target=…}` attributes). Secrets arrive masked. */
   vars?: ((text: string, info: string | null) => string) | null;
+  /** Remote media (images from the internet) may load; default: placeholders (see ./remote). */
+  remote?: boolean;
 }
 
 interface Env {
@@ -388,7 +390,7 @@ function taskListRule(state: StateCore): void {
     if (!m) continue;
     const checked = m[1] !== ' ';
     first.content = first.content.slice(m[0].length);
-    const box = new state.Token('html_inline', '', 0);
+    const box = new state.Token('se_html', '', 0); // app markup: not raw HTML from the note (see R.html_inline)
     const line = opts.sourceLines === false || !inline.map ? null : inline.map[0] + (opts.lineOffset ?? 0);
     box.content = `<input class="se-task" type="checkbox"${line === null ? ' disabled' : ` data-line="${line}"`}${checked ? ' checked' : ''}${
       checked && !/x/i.test(m[1]) ? ` data-task="${esc(m[1])}"` : ''
@@ -418,7 +420,7 @@ function headingRule(state: StateCore): void {
     const slug = n ? `${base}-${n}` : base;
     tokens[i].attrSet('id', slug);
     tokens[i].attrSet('data-slug', slug); // survives DOMPurify's clobbering guard (e.g. a heading named "Title")
-    const a = new state.Token('html_inline', '', 0);
+    const a = new state.Token('se_html', '', 0);
     a.content = `<a class="se-anchor" href="#${esc(encodeURIComponent(slug))}" aria-label="Link to this heading"></a>`;
     (inline.children ??= []).push(a);
   }
@@ -461,15 +463,15 @@ md.core.ruler.push('heading_ids', headingRule);
 md.core.ruler.push('source_lines', sourceLinesRule);
 
 /** {{variables}}: substitutes after parsing (values can never become markup) and after heading ids
- *  (anchors stay stable across environments). Code blocks keep their raw text in data-raw for copy / run. */
+ *  (anchors stay stable across environments). data-vars marks code blocks whose copy / run resolves
+ *  placeholders; the raw text comes from the source (fenceAt), not from the page. */
 function variablesRule(state: StateCore): void {
   const vars = (state.env as unknown as Env).opts.vars;
   if (!vars) return;
   for (const t of state.tokens) {
     if (t.type === 'fence' || t.type === 'code_block') {
       if (!t.content.includes('{{')) continue;
-      t.attrSet('data-raw', t.content.replace(/\n$/, ''));
-      t.attrSet('data-info', t.info ?? '');
+      t.attrSet('data-vars', '');
       t.content = vars(t.content, t.info ?? '');
     } else if (t.type === 'inline') {
       for (const c of t.children ?? []) if ((c.type === 'text' || c.type === 'code_inline') && c.content.includes('{{')) c.content = vars(c.content, null);
@@ -484,6 +486,14 @@ const R = md.renderer.rules;
 const attrs = (t: Token) => md.renderer.renderAttrs(t);
 
 R.softbreak = (_t, _i, _o, env) => ((env as unknown as Env).opts.breaks ? '<br>\n' : '\n');
+// Raw HTML from the note: every element it creates is marked, so the sanitizer can strip app classes and
+// data-* from it (they drive Copy / Run, embeds, overlays). Marking is textual on purpose: `<` + letter is
+// exactly where the HTML tokenizer starts an element; a match inside an attribute value or comment only
+// adds a harmless marker there. The app's own markup (se_html) is never marked.
+const markUser = (html: string) => html.replace(/<([a-zA-Z][^\t\n\f\r />]*)/g, `<$1 ${USER_MARK}=""`);
+R.html_block = (tokens, i) => markUser(tokens[i].content);
+R.html_inline = (tokens, i) => markUser(tokens[i].content);
+R.se_html = (tokens, i) => tokens[i].content;
 R.callout_icon = () => '<span class="se-callout-icon" aria-hidden="true"></span>';
 R.callout_fold = () => '<span class="se-callout-fold" aria-hidden="true"></span>';
 R.math_inline = (tokens, i) => `<span class="se-math${tokens[i].meta?.display ? ' se-math-display' : ''}">${esc(tokens[i].content)}</span>`;
@@ -503,6 +513,9 @@ R.link_open = (tokens, i, o, env, self) => {
   return baseLinkOpen(tokens, i, o, env, self);
 };
 
+/** Invisible and direction-changing characters: what is drawn differs from what Copy / Run hand out. */
+const HIDDEN_CHARS = /[\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/;
+
 function codeBlock(code: string, info: string, tokenAttrs: string): string {
   const word = info.trim().split(/[\s{]/)[0] ?? '';
   const lang = languageForFence(info);
@@ -516,12 +529,15 @@ function codeBlock(code: string, info: string, tokenAttrs: string): string {
   return (
     `<div class="se-code${numbers ? ' se-code-numbers' : ''}" data-lang="${esc(lang?.shiki ?? '')}"${word ? ` data-fence="${esc(word.toLowerCase())}"` : ''}${tokenAttrs}>` +
     `<div class="se-code-tools">${label ? `<span class="se-code-lang">${esc(label)}</span>` : ''}` +
+    (HIDDEN_CHARS.test(code) ? '<span class="se-code-warn" title="Contains invisible or text-direction characters: the copied text differs from what you see">hidden characters</span>' : '') +
     `<button class="se-code-copy" type="button" aria-label="Copy code" title="Copy code"></button></div>` +
     `<pre><code${word ? ` class="language-${esc(word.toLowerCase())}"` : ''}>${esc(code)}</code></pre></div>\n`
   );
 }
-R.fence = (tokens, i) => codeBlock(tokens[i].content, tokens[i].info, attrs(tokens[i]));
-R.code_block = (tokens, i) => codeBlock(tokens[i].content, '', attrs(tokens[i]));
+// data-src-line: where the block starts in the rendered source — Copy / Run read the text from there (fenceAt).
+const srcLine = (t: Token) => (t.map ? ` data-src-line="${t.map[0]}"` : '');
+R.fence = (tokens, i) => codeBlock(tokens[i].content, tokens[i].info, attrs(tokens[i]) + srcLine(tokens[i]));
+R.code_block = (tokens, i) => codeBlock(tokens[i].content, '', attrs(tokens[i]) + srcLine(tokens[i]));
 
 R.embed = (tokens, i, _o, e) => {
   const env = e as unknown as Env;
@@ -605,7 +621,7 @@ function toHtml(src: string, opts: RenderOptions): string {
   const env: Env = { opts, slugs: new Map() };
   return md.render(src, env as unknown as Parameters<typeof md.render>[1]);
 }
-const ctx = (opts: RenderOptions): SanitizeContext => ({ path: opts.path, files: opts.files, resolveUrl: opts.resolveUrl });
+const ctx = (opts: RenderOptions): SanitizeContext => ({ path: opts.path, files: opts.files, resolveUrl: opts.resolveUrl, remote: opts.remote });
 
 /** Pure render: markdown → sanitized HTML string. */
 export function renderMarkdown(src: string, opts: RenderOptions = {}): string {
@@ -615,6 +631,19 @@ export function renderMarkdown(src: string, opts: RenderOptions = {}): string {
 /** Same pipeline, but returns live DOM nodes (skips a serialize + reparse round trip). */
 export function renderFragment(src: string, opts: RenderOptions = {}): DocumentFragment {
   return sanitizeToFragment(toHtml(src, opts), ctx(opts));
+}
+
+/**
+ * The code block starting on `line` of `src` (what render*() got), as the source says it: raw text
+ * (placeholders unresolved) + fence info. Copy / Run use this, never the page — a note's raw HTML must not
+ * be able to make a button copy or run something other than what is drawn.
+ */
+export function fenceAt(src: string, line: number, opts: Pick<RenderOptions, 'frontmatter'> = {}): { code: string; info: string } | null {
+  const env: Env = { opts: { ...opts, sourceLines: false }, slugs: new Map() };
+  for (const t of md.parse(src, env as unknown as Parameters<typeof md.parse>[1])) {
+    if ((t.type === 'fence' || t.type === 'code_block') && t.map?.[0] === line) return { code: t.content.replace(/\n$/, ''), info: t.info ?? '' };
+  }
+  return null;
 }
 
 /** Renders a non-markdown file (e.g. `![[app.ts]]`) as a highlighted code block. */

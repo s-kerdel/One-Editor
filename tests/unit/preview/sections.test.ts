@@ -9,6 +9,8 @@ const textOf = (html: string) => {
   const el = document.createElement('div');
   el.innerHTML = html;
   el.querySelectorAll('[data-line]').forEach((n) => (n.removeAttribute('data-line'), n.removeAttribute('data-end')));
+  // Section-relative source pointers (Copy / Run read the rendered source there): position data too.
+  el.querySelectorAll('[data-src-line]').forEach((n) => n.removeAttribute('data-src-line'));
   return el.innerHTML.replace(/\s+/g, ' ').trim();
 };
 /** Rendering section by section must give the same document as rendering it whole. */

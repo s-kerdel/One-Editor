@@ -93,6 +93,8 @@ export type GitUnavailableReason =
   | 'no-repo'
   /** git refused the repository (safe.directory / dubious ownership). */
   | 'unsafe'
+  /** The user has not said "Trust" for this folder yet: git is not run here at all (see backend/git-trust.ts). */
+  | 'untrusted'
   | 'timeout'
   | 'error';
 
@@ -100,7 +102,8 @@ export interface GitUnavailable {
   ok: false;
   reason: GitUnavailableReason;
   message?: string;
-  /** 'no-git' only: a `.git` exists here or above, so a hint "install git" is worth showing. */
+  /** 'no-git': a `.git` exists here or above, so a hint "install git" is worth showing.
+   *  'untrusted': a `.git` exists here, above or in a folder below (seen on disk, git was not asked). */
   repoLikely?: boolean;
 }
 
@@ -305,6 +308,10 @@ export interface GitOps {
   cancel(tag?: GitJobTag): void;
   /** Two texts through `git diff --no-index --histogram` (≤ 5 MB each). Needs git, not a repository. */
   diffTexts(a: string, b: string, opts?: { ignoreWhitespace?: boolean }): GitTextDiff;
+  /** The user's "Trust this folder" (Source control panel): git may run here from now on. Remembered in app data. */
+  trust(): boolean;
+  /** "Stop trusting this folder": git stops here at once (status, marks, actions). */
+  untrust(): boolean;
 }
 export type GitOp = keyof GitOps;
-export const GIT_OPS: readonly GitOp[] = ['status', 'headFile', 'diff', 'stage', 'unstage', 'discard', 'commit', 'lastMessage', 'fetch', 'pull', 'push', 'branches', 'createBranch', 'switchBranch', 'log', 'commitFiles', 'cancel', 'diffTexts', 'remoteBranches', 'branchDetails', 'nudge', 'visibility', 'hunks', 'stageHunks'];
+export const GIT_OPS: readonly GitOp[] = ['status', 'headFile', 'diff', 'stage', 'unstage', 'discard', 'commit', 'lastMessage', 'fetch', 'pull', 'push', 'branches', 'createBranch', 'switchBranch', 'log', 'commitFiles', 'cancel', 'diffTexts', 'remoteBranches', 'branchDetails', 'nudge', 'visibility', 'hunks', 'stageHunks', 'trust', 'untrust'];

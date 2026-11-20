@@ -110,9 +110,17 @@ describe('embeds', () => {
     expect(img.getAttribute('src')).toBe('ws://assets/pic.png');
     expect(img.getAttribute('alt')).toBe('alt');
   });
-  it('remote images are untouched', () => {
-    const img = dom('![x](https://example.com/a.png)', { resolveUrl: () => 'NOPE' }).querySelector('img')!;
+  it('remote images load only when the note may (remote: true), untouched by resolveUrl', () => {
+    const img = dom('![x](https://example.com/a.png)', { resolveUrl: () => 'NOPE', remote: true }).querySelector('img')!;
     expect(img.getAttribute('src')).toBe('https://example.com/a.png');
+  });
+  it('remote images are placeholders by default (no request), keeping alt and size', () => {
+    const img = dom('<img src="https://example.com/a.png" alt="chart" width="40">').querySelector('img')!;
+    expect(img.hasAttribute('src')).toBe(false);
+    expect(img.classList.contains('se-remote-blocked')).toBe(true);
+    expect(img.getAttribute('alt')).toBe('chart');
+    expect(img.getAttribute('width')).toBe('40');
+    expect(img.getAttribute('title')).toContain('example.com');
   });
   it('unresolved embed', () => {
     expect(dom('![[Missing note]]').querySelector('.se-embed')!.classList.contains('is-unresolved')).toBe(true);
@@ -134,7 +142,8 @@ describe('tags vs headings', () => {
     const el = dom('## Hello, World!\n\n## Hello, World!');
     const hs = el.querySelectorAll('h2');
     expect(hs[0].getAttribute('data-slug')).toBe('hello-world');
-    expect(hs[0].id).toBe('hello-world');
+    // Prefixed by the sanitizer (named props); the preview / export put the slug back (fixHeadingIds).
+    expect(hs[0].id).toBe('user-content-hello-world');
     expect(hs[1].getAttribute('data-slug')).toBe('hello-world-1');
     expect(hs[0].querySelector('a.se-anchor')!.getAttribute('href')).toBe('#hello-world');
     expect(slugify('Über cool_Thing 2')).toBe('über-cool_thing-2');

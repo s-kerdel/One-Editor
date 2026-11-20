@@ -139,13 +139,21 @@ describe('misc', () => {
     expect(parseGitVersion('nope')).toBeNull();
   });
 
-  it('neutralises repository-local filter drivers, keeps Git LFS', () => {
-    const out = untrustedFilterOverrides('filter.evil.clean\n./x.sh\0filter.lfs.process\ngit-lfs filter-process\0filter.dot.ted.smudge\ncat\0');
-    expect(out).toEqual([
-      '-c', 'filter.evil.clean=', '-c', 'filter.evil.smudge=', '-c', 'filter.evil.process=', '-c', 'filter.evil.required=false',
-      '-c', 'filter.dot.ted.clean=', '-c', 'filter.dot.ted.smudge=', '-c', 'filter.dot.ted.process=', '-c', 'filter.dot.ted.required=false',
-    ]);
+  it('neutralises every configured filter driver, keeps only canonical Git LFS', () => {
+    const off = (n: string) => ['-c', `filter.${n}.clean=`, '-c', `filter.${n}.smudge=`, '-c', `filter.${n}.process=`, '-c', `filter.${n}.required=false`];
+    const out = untrustedFilterOverrides('filter.evil.clean\n./x.sh\0filter.lfs.process\ngit-lfs filter-process\0filter.lfs.clean\ngit-lfs clean -- %f\0filter.lfs.smudge\ngit-lfs smudge --skip -- %f\0filter.dot.ted.smudge\ncat\0');
+    expect(out).toEqual([...off('evil'), ...off('dot.ted')]);
     expect(untrustedFilterOverrides('')).toEqual([]);
+  });
+
+  it('a value that only starts like Git LFS is not Git LFS (git runs filters through sh -c)', () => {
+    const off = (n: string) => ['-c', `filter.${n}.clean=`, '-c', `filter.${n}.smudge=`, '-c', `filter.${n}.process=`, '-c', `filter.${n}.required=false`];
+    for (const v of ['git-lfs clean -- %f; touch pwned; cat', 'git-lfs clean -- %f && x', 'git lfs clean -- %f', 'git-lfs.exe clean -- %f', ' git-lfs clean -- %f', 'git-lfs clean -- %f\nx', 'git-lfs smudge -- %f']) {
+      expect(untrustedFilterOverrides(`filter.lfs.clean\n${v}\0`), v).toEqual(off('lfs'));
+    }
+    // One hostile command switches the whole driver off, wherever it sits (multi-valued keys, other scopes).
+    expect(untrustedFilterOverrides('filter.lfs.clean\ngit-lfs clean -- %f; x\0filter.lfs.clean\ngit-lfs clean -- %f\0filter.lfs.process\ngit-lfs filter-process\0')).toEqual(off('lfs'));
+    expect(untrustedFilterOverrides('filter.lfs.process\ngit-lfs filter-process\0filter.lfs.smudge\nevil\0')).toEqual(off('lfs'));
   });
 });
 

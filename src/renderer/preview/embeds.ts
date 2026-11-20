@@ -8,14 +8,24 @@ import { isPdfPath, pageFromFragment } from '../pdf/model';
 export interface EmbedContext {
   /** Text of a workspace file, or null when it cannot be read. */
   read(path: string): Promise<string | null>;
-  /** Sanitized HTML for a note (or note fragment) living at `path`. */
-  render(src: string, path: string): string;
+  /** Sanitized HTML for a note (or note fragment) living at `path`; `host` = the note showing it. */
+  render(src: string, path: string, host?: string): string;
   /** Sanitized HTML for a non-markdown text file. */
   renderFile(path: string, src: string): string;
   maxDepth?: number;
 }
 
 const TEXT_LIMIT = 400_000;
+
+/** What each embed body was rendered from: Copy / Run of a code block in it read that text (fenceAt). */
+export interface EmbedSource {
+  path: string;
+  text: string;
+  /** A non-markdown file shown whole as one code block. */
+  file: boolean;
+}
+const sources = new WeakMap<Element, EmbedSource>();
+export const embedSourceOf = (body: Element): EmbedSource | null => sources.get(body) ?? null;
 const BINARY_RE = /\.(pdf|zip|gz|7z|exe|dll|docx?|xlsx?|pptx?|woff2?|ttf|otf)$/i;
 
 export function stripFrontmatter(src: string): string {
@@ -76,6 +86,7 @@ export async function expandEmbeds(root: ParentNode, ctx: EmbedContext, stack: r
       (async () => {
         const frag = el.dataset.embedFrag;
         let html: string;
+        let text: string;
         if (isPdfPath(path)) return pdfCard(el, path, frag);
         if (BINARY_RE.test(path)) return;
         const src = await ctx.read(path);
@@ -90,9 +101,11 @@ export async function expandEmbeds(root: ParentNode, ctx: EmbedContext, stack: r
             el.title = `"${frag}" was not found in ${path}`;
             return;
           }
-          html = ctx.render(part.replace(/(^|\s)\^[\w-]+[ \t]*$/gm, ''), path);
+          text = part.replace(/(^|\s)\^[\w-]+[ \t]*$/gm, '');
+          html = ctx.render(text, path, stack[0]);
         } else {
-          html = ctx.renderFile(path, src.length > TEXT_LIMIT ? src.slice(0, TEXT_LIMIT) : src);
+          text = src.length > TEXT_LIMIT ? src.slice(0, TEXT_LIMIT) : src;
+          html = ctx.renderFile(path, text);
         }
         const link = el.querySelector(':scope > a') ?? el.querySelector('.se-embed-title > a');
         const title = document.createElement('span');
@@ -101,6 +114,7 @@ export async function expandEmbeds(root: ParentNode, ctx: EmbedContext, stack: r
         const body = document.createElement('span');
         body.className = 'se-embed-body';
         body.innerHTML = html; // already sanitized by ctx.render
+        sources.set(body, { path, text, file: !isMarkdown(path) });
         el.replaceChildren(title, body);
         el.classList.add('is-loaded');
         await expandEmbeds(body, ctx, [...stack, path]);

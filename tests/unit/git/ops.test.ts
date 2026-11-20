@@ -154,6 +154,21 @@ describe('branches', () => {
     expect(await g.switchBranch('nope')).toMatchObject({ ok: false });
   });
 
+  it('a remote branch whose local name would start with "-" never reaches git as an option', async () => {
+    const dir = await makeRepo('dash-branch', { 'a.md': 'a\n' });
+    const head = git(dir, 'rev-parse', 'HEAD').trim();
+    git(dir, 'remote', 'add', 'origin', 'https://example.invalid/x.git');
+    // What a crafted folder ships: a remote-tracking ref (and a local twin) git's own porcelain refuses to create.
+    git(dir, 'update-ref', 'refs/remotes/origin/--discard-changes', head);
+    git(dir, 'update-ref', 'refs/heads/--discard-changes', head);
+    write(dir, 'a.md', 'local edit\n');
+    const g = svc(dir);
+    expect(await g.switchBranch('origin/--discard-changes')).toMatchObject({ ok: false, message: expect.stringContaining('not a valid branch name') });
+    await expect(g.switchBranch('--discard-changes')).rejects.toMatchObject({ code: 'EINVAL' });
+    expect(fs.readFileSync(path.join(dir, 'a.md'), 'utf8')).toBe('local edit\n');
+    expect(ok(await g.status()).branch.head).toBe('main');
+  });
+
   it('a dirty tree that would be overwritten gets a clear message', async () => {
     const dir = await makeRepo('dirty-switch', { 'a.md': 'a\n' });
     git(dir, 'checkout', '-qb', 'other');
@@ -453,6 +468,7 @@ describe('BackendService.git dispatcher', () => {
     services.push(s);
     expect(await s.git('status')).toEqual({ ok: false, reason: 'no-repo' }); // no folder yet
     await s.openWorkspace(dir);
+    await s.git('trust'); // the user's "Trust" in the Source control panel: no git runs without it
     await expect(s.git('rm -rf')).rejects.toMatchObject({ code: 'EINVAL' });
     await expect(s.git('constructor')).rejects.toMatchObject({ code: 'EINVAL' });
     expect(await s.git('status')).toMatchObject({ ok: true });

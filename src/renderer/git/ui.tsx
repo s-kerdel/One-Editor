@@ -9,6 +9,7 @@ import type { GitStore } from './store';
 import { openDiffWithHead } from './diff-open';
 import { markResolved, stage, unstage } from './actions';
 import { compareEnabled } from './compare-menu';
+import { git } from './rpc';
 
 // gitBranch comes with the startup stub (the panel pill needs it at first paint).
 addIcons({
@@ -20,6 +21,13 @@ addIcons({
   arrowDown: 'M12 5v14|m19 12-7 7-7-7',
   sparkle: 'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z|M19 17l.6 1.4L21 19l-1.4.6L19 21l-.6-1.4L17 19l1.4-.6z',
 });
+
+/** "Stop trusting this folder": git is off here again (nothing in the folder changes). */
+export async function stopTrusting(store: GitStore) {
+  if (!(await ui.confirmDialog('Stop trusting this folder?', 'Git will be switched off in this folder: no status, marks, change bars or source control until you trust it again. Your files and the repository are not changed.', 'Stop trusting'))) return;
+  await git('untrust').catch((err) => app.toast(String(err?.message ?? err), 'error'));
+  store.reset();
+}
 
 const openPane = () => {
   app.sidebarVisible.value = true;
@@ -62,6 +70,7 @@ export function branchMenuItems(store: GitStore, active: string | null): ui.Menu
     },
     { label: 'Diff with last commit', icon: 'gitCompare', disabled: !active || !store.headKey(active), run: () => active && openDiffWithHead(store, active) },
     { label: 'Open source control', icon: 'gitBranch', keys: 'Ctrl+Shift+G', run: openPane },
+    { label: 'Stop trusting this folder', icon: 'lock', run: () => void stopTrusting(store) },
   ];
   if (b.upstream) items.push({ separator: true }, { label: `↑${b.ahead}  ↓${b.behind}  ${b.upstream}`, icon: 'gitBranch', disabled: true });
   return items;
@@ -76,6 +85,14 @@ export function openBranchMenu(store: GitStore, anchor: HTMLElement) {
 /** Status-bar item: branch, ahead/behind, dirty dot. Hidden when git is unavailable. */
 export function GitBranchItem({ store }: { store: GitStore }) {
   const s = store.status.value;
+  // A repository the user has not trusted yet: git is off, say so quietly; the panel asks.
+  if (s && !s.ok && s.reason === 'untrusted' && s.repoLikely)
+    return (
+      <button class="se-status-item se-status-btn se-git-branch se-git-untrusted" data-testid="git-untrusted" title="Git is off in this folder until you trust it. Click to open Source control." aria-label="Git: not trusted. Open source control" onClick={openPane}>
+        <Icon name="gitBranch" size={12} />
+        <span class="se-git-branch-name">Git: not trusted</span>
+      </button>
+    );
   if (!s?.ok) return null;
   // Several repositories below the folder: the one holding the open file.
   const repo = store.repoOf(app.activePath.value ?? '') ?? s.repos?.find((r) => r.branch) ?? null;

@@ -27,7 +27,7 @@ test('browser build: Ctrl+` shows the desktop-only note; no shell anywhere', asy
 
   // The server refuses terminal RPCs outright.
   const r = await page.evaluate(async () => {
-    const token = document.querySelector<HTMLMetaElement>('meta[name="sec-edit-token"]')!.content;
+    const token = sessionStorage.getItem('sec-edit-token')!; // the tab's access key (never in the page)
     const res = await fetch('./api/rpc/terminalSpawn', { method: 'POST', headers: { 'content-type': 'application/json', 'x-sec-edit-token': token }, body: JSON.stringify({ args: [{}] }) });
     return res.json();
   });

@@ -87,4 +87,14 @@ describe('run in terminal', () => {
     expect(prepareRunText('\n\nGet-ChildItem | Select Name   \n\n', 'powershell')).toBe('Get-ChildItem | Select Name');
     expect(prepareRunText('> not a prompt in bash', 'bash')).toBe('> not a prompt in bash');
   });
+
+  it('control characters never reach the terminal (Ctrl-O would run the line without Enter)', () => {
+    expect(prepareRunText('echo pwned > x\u000f', 'bash')).toBe('echo pwned > x');
+    expect(prepareRunText('ls\u0003\u0004\u001a\u007f\u0000', 'sh')).toBe('ls');
+    expect(prepareRunText('echo a\u001b[201~\u000f', 'bash')).toBe('echo a[201~');
+    expect(prepareRunText('echo \u009b31m\u0085x', 'bash')).toBe('echo 31mx'); // C1 (8-bit CSI, NEL)
+    expect(prepareRunText('$ make\u000f\n$ ls\u000b', 'console')).toBe('make\nls');
+    // Tabs and newlines stay; a lone CR is a line break (so the "several lines?" question still comes).
+    expect(prepareRunText('a\tb\rc', 'bash')).toBe('a\tb\nc');
+  });
 });

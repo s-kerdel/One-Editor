@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import type { Page } from '@playwright/test';
 import { test, expect, path } from './fixture';
+import { trustRepo } from '../git-helpers';
 
 const termText = (page: Page) => page.evaluate(() => (document.querySelector('.se-term-view .xterm-rows')?.textContent ?? '').replace(/ /g, ' '));
 const polls = (page: Page) => page.evaluate(() => (window as any).__secEditExplorerLive?.polls ?? 0);
@@ -84,6 +85,7 @@ test('a slow git command shows as a stoppable row', async ({ el }) => {
   test.setTimeout(90_000);
   const realGit = execFileSync('sh', ['-c', 'command -v git']).toString().trim();
   execFileSync(realGit, ['init', '-q'], { cwd: el.ws });
+  trustRepo(el.ws); // the user's "Trust" (no git runs in a folder without it)
   const bin = path.join(el.tmp, 'bin');
   await fsp.mkdir(bin, { recursive: true });
   // `git status` takes 30 s (everything else is the real git).

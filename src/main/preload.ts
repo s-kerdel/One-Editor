@@ -28,7 +28,11 @@ contextBridge.exposeInMainWorld('secEditBridge', {
   },
   getPathForFile: (file: File) => {
     try {
-      return webUtils.getPathForFile(file) || null;
+      const abs = webUtils.getPathForFile(file) || null;
+      // Dropped on the window by the user: tell main directly (from here, not through the page), so
+      // opening it — or its folder — is allowed. A path the page merely claims is never vouched for.
+      if (abs) ipcRenderer.send('app:vouchPath', abs);
+      return abs;
     } catch {
       return null;
     }

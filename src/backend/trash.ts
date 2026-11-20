@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { winSystemExe } from './winsys';
 
 const run = (cmd: string, args: string[], env?: NodeJS.ProcessEnv) =>
   new Promise<void>((resolve, reject) =>
@@ -21,7 +22,7 @@ export async function platformTrash(abs: string): Promise<void> {
       "$r = [System.IO.Path]::GetPathRoot($p); if ($r.StartsWith('\\') -or ([System.IO.DriveInfo]::new($r)).DriveType -ne 'Fixed') { exit 3 }; " +
       "if (Test-Path -LiteralPath $p -PathType Container) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p,'OnlyErrorDialogs','SendToRecycleBin') } " +
       "else { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p,'OnlyErrorDialogs','SendToRecycleBin') }";
-    return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { SEC_EDIT_TRASH_PATH: abs });
+    return run(winSystemExe('powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', script], { SEC_EDIT_TRASH_PATH: abs });
   }
   if (process.platform === 'darwin') {
     return run('osascript', ['-e', 'on run argv', '-e', 'tell application "Finder" to delete (POSIX file (item 1 of argv))', '-e', 'end run', abs]);

@@ -20,6 +20,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { watchHint } from './pathsafe';
 import { isBridgeRoot } from './readpool';
 import { fsDelayAsync } from './fsdelay';
+import { winSystemExe } from './winsys';
 
 export interface HintSink {
   hint(rel: string): void;
@@ -299,7 +300,7 @@ export function wslBackend(root: string, sink: HintSink, src: DirPollSource, exc
   let child: ChildProcess | null = null;
   let closed = false;
   try {
-    child = spawnFn('wsl.exe', ['-d', target.distro, '--exec', 'inotifywait', '-mrq', '-e', 'modify,create,delete,move,attrib', '--format', '%w%f', ...exclude, target.path], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    child = spawnFn(winSystemExe('wsl.exe'), ['-d', target.distro, '--exec', 'inotifywait', '-mrq', '-e', 'modify,create,delete,move,attrib', '--format', '%w%f', ...exclude, target.path], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
   } catch {
     return poll();
   }

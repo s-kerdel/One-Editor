@@ -145,11 +145,12 @@ const onDown = (e: MouseEvent) => {
   hide();
 };
 
-/** Remote media would load from the network and arrive late (the popup would grow): drop them. */
-function stripRemote(root: HTMLElement) {
+/** Remote media would load from the network and arrive late (the popup would grow): drop them. Runs on
+ *  an inert <template> (no document, nothing fetched): stripping live nodes would be too late. */
+export function stripRemote(root: ParentNode) {
   for (const el of root.querySelectorAll<HTMLElement>('img, video, audio, source, picture')) {
     const src = el.getAttribute('src') ?? '';
-    if (!/^(https?:)?\/\//i.test(src) && el.tagName !== 'PICTURE') continue;
+    if (!/^(https?:)?\/\//i.test(src) && el.tagName !== 'PICTURE' && !el.classList.contains('se-remote-blocked')) continue;
     const alt = el.getAttribute('alt');
     if (alt && el.tagName === 'IMG') el.replaceWith(Object.assign(document.createElement('span'), { className: 'se-linkpv-media', textContent: alt }));
     else el.remove();
@@ -202,8 +203,10 @@ async function show(my: number, link: HoverLink, from: string, key: string) {
   const body = el.appendChild(document.createElement('div'));
   body.className = `se-linkpv-body se-preview${r.truncated ? ' is-cut' : ''}`;
   if (r.html) {
-    body.innerHTML = r.html; // sanitised by the preview pipeline
-    stripRemote(body);
+    const tpl = document.createElement('template');
+    tpl.innerHTML = r.html; // sanitised by the preview pipeline
+    stripRemote(tpl.content);
+    body.append(tpl.content); // adopted only now: what is left starts loading
   } else body.append(Object.assign(document.createElement('div'), { className: 'se-linkpv-empty', textContent: 'Empty note' }));
   el.addEventListener('mouseenter', () => clearTimeout(hideTimer));
   el.addEventListener('mouseleave', () => {
@@ -332,6 +335,7 @@ export function installLinkPreview() {
   app.events.on('file:updated', drop);
   app.events.on('files:changed', (paths) => paths.forEach(drop));
   app.events.on('variables:changed', () => cache.clear());
+  app.events.on('media:policy', () => cache.clear());
   app.events.on('tree:changed', () => cache.clear()); // resolved / unresolved links in the excerpt
   app.activePath.subscribe(() => {
     current = null;

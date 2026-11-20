@@ -2,6 +2,7 @@
 // `DetectEnv`, so the Windows rules (PowerShell 7, Git Bash, WSL distros, UNC folders) are unit-tested
 // on Linux with path.win32 and fixtures.
 import path from 'node:path';
+import { BackendFailure } from '../backend/errors';
 import { prettyDistro, prettyExe, uniqueNames, wslUncInfo, type ClaudeInfo, type ShellInfo, type ShellKind } from '../shared/terminal';
 export { wslUncInfo };
 
@@ -192,7 +193,8 @@ export function pickDefaultShell(shells: ShellInfo[], o: { platform: string; roo
 
 export interface SpawnPlan {
   file: string;
-  args: string[];
+  /** Arguments; on Windows a string is the raw command-line tail (node-pty passes it through unquoted). */
+  args: string[] | string;
   /** Native folder handed to CreateProcess / chdir. */
   cwd: string;
   /** Extra environment for this shell. */
@@ -206,16 +208,31 @@ export interface SpawnPlan {
  *    (pushd maps a temporary drive letter);
  *  - Git Bash's /etc/profile would `cd ~` unless CHERE_INVOKING is set.
  */
+/**
+ * A path inside a cmd.exe command string: always quoted. node-pty quotes an argument only for spaces, so
+ * `\\nas\share\a&calc` would reach cmd bare and `&` (also `|`, `<`, `>`, `^`, `(`, `)`) would start a
+ * second command. Inside quotes cmd takes all of them literally; `"` cannot occur in a Windows path, and
+ * `%` (variable expansion, also inside quotes — it cannot be escaped on a command line) is refused.
+ */
+export function cmdQuote(p: string): string {
+  if (/["%\r\n\0]/.test(p)) throw new BackendFailure('EINVAL', 'cmd.exe cannot be started here: the folder name contains % or a quote');
+  return `"${p}"`;
+}
+
+/** `/S /C "<command>"` tail: with /S cmd strips exactly the outer quotes, whatever the command contains. */
+const cmdTail = (sw: '/K' | '/C', command: string) => `/S ${sw} "${command}"`;
+
 export function planSpawn(shell: ShellInfo, cwd: string, o: { platform: string; env: Record<string, string | undefined> }): SpawnPlan {
-  const plan: SpawnPlan = { file: shell.path, args: [...shell.args], cwd, env: {} };
+  const args = [...shell.args];
+  const plan: SpawnPlan = { file: shell.path, args, cwd, env: {} };
   if (o.platform !== 'win32') return plan;
   if (shell.kind === 'wsl') {
     const unc = wslUncInfo(cwd);
     const distro = shell.id.slice(4);
-    plan.args.push('--cd', unc && unc.distro.toLowerCase() === distro.toLowerCase() ? unc.linuxPath : cwd);
+    args.push('--cd', unc && unc.distro.toLowerCase() === distro.toLowerCase() ? unc.linuxPath : cwd);
   } else if (shell.kind === 'cmd' && isUncPath(cwd)) {
     plan.cwd = envGet(o.env, 'USERPROFILE', true) || envGet(o.env, 'SystemRoot', true) || 'C:\\';
-    plan.args.push('/K', 'pushd', cwd);
+    plan.args = [...shell.args, cmdTail('/K', `pushd ${cmdQuote(cwd)}`)].join(' ');
   } else if (shell.kind === 'gitbash') {
     plan.env.CHERE_INVOKING = '1';
   }
@@ -294,8 +311,8 @@ export function planClaude(info: ClaudeInfo, cwd: string, o: { platform: string;
   const env = { [pathKey]: [P.dirname(exe), envGet(o.env, 'PATH', win)].filter(Boolean).join(P.delimiter) };
   if (win && /\.(cmd|bat)$/i.test(exe)) {
     const comspec = envGet(o.env, 'ComSpec', true) || P.join(envGet(o.env, 'SystemRoot', true) || 'C:\\Windows', 'System32', 'cmd.exe');
-    if (isUncPath(cwd)) return { file: comspec, args: ['/d', '/c', 'pushd', cwd, '&&', exe], cwd: envGet(o.env, 'USERPROFILE', true) || 'C:\\', env };
-    return { file: comspec, args: ['/d', '/c', exe], cwd, env };
+    if (isUncPath(cwd)) return { file: comspec, args: `/D ${cmdTail('/C', `pushd ${cmdQuote(cwd)} && ${cmdQuote(exe)}`)}`, cwd: envGet(o.env, 'USERPROFILE', true) || 'C:\\', env };
+    return { file: comspec, args: `/D ${cmdTail('/C', cmdQuote(exe))}`, cwd, env };
   }
   return { file: exe, args: [], cwd, env };
 }

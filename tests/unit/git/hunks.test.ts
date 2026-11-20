@@ -277,6 +277,7 @@ describe('stage / unstage blocks with git apply --cached', () => {
     const s = new BackendService(cfg, {}, {}, { env: env() });
     services.push(s);
     await s.openWorkspace(dir);
+    await s.git('trust'); // the user's "Trust" in the Source control panel: no git runs without it
     const r = (await s.git('hunks', 'a.md')) as GitFileHunks;
     const b = blocks(r);
     expect(await s.git('stageHunks', 'a.md', [pick(b[0], true)])).toMatchObject({ ok: true });

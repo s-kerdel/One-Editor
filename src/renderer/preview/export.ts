@@ -28,17 +28,25 @@ export async function renderStandalone(path: string, src: string, prepare?: (box
   const box = document.createElement('div');
   // {{variables}} resolve on export unless switched off (secrets are always masked): load their data first.
   await app.variables?.prepare(path).catch(() => {});
-  // No resolveUrl: images keep their relative paths, which stay valid next to the note.
+  // No resolveUrl: images keep their relative paths, which stay valid next to the note. Remote images
+  // follow the note's policy (./remote) as in the preview: blocked ones stay placeholders in the file.
   box.innerHTML = renderMarkdown(src, { ...renderOptionsFor(path, { export: true }), resolveUrl: undefined, sourceLines: false });
-  await expandEmbeds(box, { ...embedContext, render: (s, p) => renderMarkdown(s, { ...renderOptionsFor(p, { export: true }), resolveUrl: undefined, sourceLines: false, frontmatter: false }) }, [path]);
-  box.querySelectorAll('[data-raw]').forEach((n) => (n.removeAttribute('data-raw'), n.removeAttribute('data-info')));
+  await expandEmbeds(box, { ...embedContext, render: (s, p, host) => renderMarkdown(s, { ...renderOptionsFor(p, { export: true, host }), resolveUrl: undefined, sourceLines: false, frontmatter: false }) }, [path]);
+  box.querySelectorAll('[data-vars], [data-src-line]').forEach((n) => (n.removeAttribute('data-vars'), n.removeAttribute('data-src-line')));
   // MathML needs no stylesheet or fonts; mermaid is rendered with the light theme on a white card.
   await enhanceAll(box, { mathOutput: 'mathml', dark: false });
   box.querySelectorAll('.se-code-copy').forEach((n) => n.remove());
   await prepare?.(box);
   box.querySelectorAll('[data-ws-src]').forEach((n) => n.removeAttribute('data-ws-src'));
   box.querySelectorAll<HTMLInputElement>('input[type=checkbox]').forEach((n) => (n.disabled = true));
-  // Ids DOMPurify withheld inside the app (DOM clobbering guard) are safe in a standalone file.
+  // Ids DOMPurify withheld or prefixed inside the app (DOM clobbering guard) are safe in a standalone
+  // file: headings get their slug back, footnotes / <a name> their own id (their #links point there).
+  box.querySelectorAll<HTMLElement>('[id^="user-content-"], [name^="user-content-"]').forEach((n) => {
+    for (const a of ['id', 'name']) {
+      const v = n.getAttribute(a);
+      if (v?.startsWith('user-content-')) n.setAttribute(a, v.slice(13));
+    }
+  });
   box.querySelectorAll<HTMLElement>('[data-slug]').forEach((h) => (h.id = h.dataset.slug!));
   return box;
 }

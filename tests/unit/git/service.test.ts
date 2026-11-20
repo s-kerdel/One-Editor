@@ -295,6 +295,65 @@ describe('never runs repository-supplied programs', () => {
   });
 });
 
+describe('filter drivers a folder brings along never run on a read', () => {
+  /** Committed a.txt with filter=<name>, then a new mtime: git must re-hash it → it would run the clean filter. */
+  async function filtered(prefix: string, name: string) {
+    const dir = await makeRepo(prefix, { 'a.txt': 'a\n', '.gitattributes': `*.txt filter=${name}\n` });
+    const marker = path.join(dir, '..', `${path.basename(dir)}-pwned`);
+    const later = new Date(Date.now() + 5000);
+    fs.utimesSync(path.join(dir, 'a.txt'), later, later);
+    return { dir, marker };
+  }
+  async function readEverything(dir: string) {
+    const g = svc(dir);
+    const s = ok(await g.status());
+    await g.diff('a.txt');
+    await g.hunks('a.txt', null);
+    await g.refreshIndex();
+    return s;
+  }
+
+  it('a value that starts like Git LFS and goes on with a shell command', async () => {
+    const { dir, marker } = await filtered('lfs-lookalike', 'lfs');
+    git(dir, 'config', 'filter.lfs.clean', `git-lfs clean -- %f; touch '${marker}'; cat`);
+    git(dir, 'config', 'filter.lfs.process', `git-lfs filter-process; touch '${marker}'`);
+    git(dir, 'config', 'filter.lfs.required', 'true');
+    expect((await readEverything(dir)).entries).toEqual([]);
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('a driver defined in the worktree config (extensions.worktreeConfig)', async () => {
+    const { dir, marker } = await filtered('worktree-config', 'evil');
+    git(dir, 'config', 'extensions.worktreeConfig', 'true');
+    git(dir, 'config', '--worktree', 'filter.evil.clean', `touch '${marker}'; cat`);
+    git(dir, 'config', '--worktree', 'filter.evil.required', 'true');
+    expect((await readEverything(dir)).entries).toEqual([]);
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('a driver defined in an included file', async () => {
+    const { dir, marker } = await filtered('included-config', 'evil');
+    fs.writeFileSync(path.join(dir, '.git', 'extra.cfg'), `[filter "evil"]\n\tclean = "touch '${marker}'; cat"\n\tsmudge = cat\n`);
+    git(dir, 'config', 'include.path', 'extra.cfg');
+    expect((await readEverything(dir)).entries).toEqual([]);
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('canonical Git LFS stays configured: without git-lfs installed the file simply passes unfiltered', async () => {
+    const { dir } = await filtered('lfs-canonical', 'lfs');
+    git(dir, 'config', 'filter.lfs.clean', 'git-lfs clean -- %f');
+    git(dir, 'config', 'filter.lfs.smudge', 'git-lfs smudge -- %f');
+    git(dir, 'config', 'filter.lfs.process', 'git-lfs filter-process');
+    // The "is git-lfs there?" probe must not run an `lfs` alias the folder defines.
+    const marker = path.join(dir, '..', `${path.basename(dir)}-pwned`);
+    git(dir, 'config', 'alias.lfs', `!touch '${marker}'`);
+    const s = await readEverything(dir);
+    expect(s.ok).toBe(true);
+    expect(s.entries.filter((e) => e.path !== 'a.txt')).toEqual([]);
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+});
+
 describe('watching .git', () => {
   it('fires on commit and checkout in a terminal, not on our own status runs', async () => {
     const dir = await makeRepo('watch', { 'a.md': 'a\n' });

@@ -21,9 +21,29 @@ export function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_CONFIG_GLOBAL: CFG, GIT_CONFIG_NOSYSTEM: '1' } });
 }
 
-/** `git init` + commit everything in the workspace copy. */
+/**
+ * Stands in for the user's "Trust" in the Source control panel (the app runs no git in a folder
+ * without it — src/backend/git-trust.ts): records the folder in the test's own app-data folder. The
+ * harnesses put that next to the workspace copy (`config` for the browser server, `userData` for Electron).
+ */
+export function trustRepo(root: string, appData?: string) {
+  const real = fs.realpathSync(root);
+  const dirs = appData ? [appData] : [path.join(path.dirname(root), 'config'), path.join(path.dirname(root), 'userData')];
+  for (const dir of dirs) {
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'git-trust.json');
+    let cur: { trusted?: string[]; legacy?: string[] } = {};
+    try {
+      cur = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {}
+    fs.writeFileSync(file, JSON.stringify({ version: 1, trusted: [...new Set([...(cur.trusted ?? []), real])], legacy: cur.legacy ?? [] }));
+  }
+}
+
+/** `git init` + commit everything in the workspace copy (and trust it, as its user would have). */
 export function initRepo(root: string) {
   isolateGit();
+  trustRepo(root);
   git(root, 'init', '-q');
   git(root, 'add', '-A');
   git(root, 'commit', '-qm', 'initial');

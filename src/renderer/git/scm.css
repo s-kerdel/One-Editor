@@ -3,6 +3,9 @@
 .se-scm-loading { min-height: 120px; }
 .se-scm-empty { align-items: center; justify-content: center; gap: 10px; padding: 28px 16px; text-align: center; color: var(--text-muted); }
 .se-scm-empty p { margin: 0; line-height: 1.5; }
+.se-scm-trust strong { color: var(--text); }
+.se-scm-trust-actions { display: flex; gap: 8px; }
+.se-scm-trust-note { font-size: 11.5px; }
 
 .se-scm-sync { display: flex; align-items: center; gap: 4px; padding: 6px 8px 4px 10px; flex: none; }
 .se-scm-branch { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 60%; padding: 3px 6px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }

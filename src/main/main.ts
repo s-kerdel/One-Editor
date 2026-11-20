@@ -2,6 +2,7 @@
 //  - settings/window-state/workspace open start *before* app 'ready' and run in parallel with Chromium boot;
 //  - the renderer is served from a privileged app:// scheme so V8 code cache works (file:// gets none);
 //  - no default application menu (saves startup time and stray accelerators like Ctrl+R / Ctrl+W).
+import './env-boot'; // first: drops SEC_EDIT_* hooks in a packaged build before any module reads them
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, session, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -19,7 +20,8 @@ import { APP_ORIGIN, SCHEME, isAppNavigation, isExternalUrl, pathsFromArgs, rout
 import { renderPdf } from './pdf-window';
 import { PDF_WORKER_CSP, isPdfWorkerAsset } from '../shared/pdf';
 import { TerminalService, loadNodePty, registerTerminalIpc } from './terminal';
-import { VaultService, registerVaultIpc } from './vault';
+import { VaultService, registerVaultIpc, sharedKeyMessage } from './vault';
+import { OpenGate } from './open-gate';
 import { registerGpuIpc } from './gpu';
 import { WebServerService, childEnv, lanAddresses, registerWebServerIpc, spawnCli } from './web-server';
 import { WEB_SERVER_CHANNELS } from '../shared/web-server';
@@ -114,7 +116,9 @@ function main() {
   const service = new BackendService(app.getPath('userData'), {
     pickFolder: async () => {
       const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory', 'createDirectory'] });
-      return r.canceled ? null : (r.filePaths[0] ?? null);
+      const picked = r.canceled ? null : (r.filePaths[0] ?? null);
+      if (picked) gate.vouch(picked);
+      return picked;
     },
     // SEC_EDIT_TRASH_DIR (tests) → the service's platform trash moves files there instead.
     trash: process.env.SEC_EDIT_TRASH_DIR ? undefined : (abs) => shell.trashItem(abs),
@@ -135,6 +139,17 @@ function main() {
     },
   });
   if (isTest) (globalThis as any).__secEditService = service; // startup guard: tree walks at launch
+
+  // Folders the window may open: only what main saw itself (see open-gate.ts).
+  const gate = new OpenGate({
+    p: path,
+    foldCase: process.platform !== 'linux',
+    realpath: (abs) => fsp.realpath(abs).catch(() => null),
+    isFile: (abs) => fsp.stat(abs).then((st) => st.isFile(), () => false),
+    recent: () => service.recentWorkspaces(),
+    root: () => service.workspace?.root ?? null,
+  });
+  if (isTest) (globalThis as any).__secEditVouch = (abs: string) => gate.vouch(abs); // E2E stands in for the folder dialog
 
   // Integrated terminal: node-pty loads on the first spawn only (nothing at launch).
   const terminals = new TerminalService({
@@ -165,6 +180,7 @@ function main() {
   const windowStateP = readJson<WindowState | null>(stateFile, null);
   const initialPaths = pathsFromArgv(process.argv);
   if (process.env.SEC_EDIT_OPEN) initialPaths.push(path.resolve(process.env.SEC_EDIT_OPEN));
+  initialPaths.forEach((p) => gate.vouch(p));
   const initialOpen = (async () => {
     try {
       if (initialPaths.length) await openPathsAtLaunch(initialPaths);
@@ -202,6 +218,8 @@ function main() {
       if (!trustedSender(e)) return { ok: false, error: { code: 'EACCES', message: 'Untrusted sender' } };
       await initialOpen; // the renderer's first getWorkspace/bootstrap must see the launch folder
       try {
+        // The page asks, main decides: a folder it has not seen itself is not opened (open-gate.ts).
+        if (method === 'openWorkspace' && !(await gate.allows(args[0]))) throw new BackendFailure('EACCES', 'This folder was not chosen in the app: use “Open folder”, drop it on the window, or pick a recent one');
         const result = (await (service as any)[method](...args)) ?? null;
         // Shells started in the previous folder go with it.
         if (method === 'openWorkspace') terminals.setWorkspace(service.workspace?.root ?? null);
@@ -223,10 +241,24 @@ function main() {
     encrypt: (s) => safeStorage.encryptString(s),
     decrypt: (b) => safeStorage.decryptString(b),
     backend: () => (process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os'),
+  }, {
+    root: () => service.workspace?.root ?? null, // folder-scoped keys: the open folder's only
+    // A shared `vault:<key>` another folder saved: the user decides, in a native dialog the page cannot answer.
+    confirmSharedKey: async (q) => {
+      // Tests: SEC_EDIT_TEST_VAULT_CONFIRM = allow | deny (default deny: a native dialog would hang the run).
+      if (isTest) return process.env.SEC_EDIT_TEST_VAULT_CONFIRM === 'allow';
+      if (!win || win.isDestroyed()) return false;
+      const m = sharedKeyMessage(q);
+      const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['Allow', 'Don’t allow'], defaultId: 1, cancelId: 1, noLink: true, title: 'Use a saved secret?', message: m.message, detail: m.detail });
+      return r.response === 0;
+    },
   });
   registerVaultIpc(ipcMain, vault, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   registerGpuIpc(ipcMain, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   registerWebServerIpc(ipcMain, webServer, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
+  // A file / folder dropped on the window: the preload read its path from the File object (page script
+  // cannot fabricate one) and reports it here, so the open that follows passes the gate.
+  ipcMain.on('app:vouchPath', (e, abs: unknown) => void (trustedSender(e) && gate.vouch(abs)));
   ipcMain.handle('app:toggleDevTools', (e) => trustedSender(e) && win?.webContents.toggleDevTools());
   // Settings → Window frame → "Restart now": through the normal close flow (never loses edits).
   ipcMain.handle('app:relaunch', (e) => {
@@ -444,7 +476,7 @@ function main() {
         try {
           const ws = service.workspace;
           if (!ws) return new Response('no folder', { status: 404 });
-          const abs = ws.abs(route.rel);
+          const abs = await ws.real(route.rel); // also through links: a link out of the folder is not served
           // Regular files only: file:// on a folder renders a listing page, on a FIFO it blocks a thread.
           if (!(await fsp.stat(abs)).isFile()) return new Response('not found', { status: 404 });
           const res = await net.fetch(pathToFileURL(abs).toString());
@@ -472,6 +504,7 @@ function main() {
       win.focus();
     }
     const paths = pathsFromArgv(argv, workingDirectory);
+    paths.forEach((p) => gate.vouch(p));
     if (paths.length) win?.webContents.send('app:openRequest', paths);
   });
 

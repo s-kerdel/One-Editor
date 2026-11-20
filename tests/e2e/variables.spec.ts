@@ -342,7 +342,7 @@ test.describe('variables', () => {
     const pv = page.locator('.se-preview');
     await expect(pv).toContainText('Namespace default on corp.local, share ADMIN$, missing {{nope}}.');
     await expect(pv).toContainText('ssh alice@10.0.0.21 -p 8080');
-    const block = pv.locator('.se-code[data-raw]').first();
+    const block = pv.locator('.se-code[data-vars]').first();
     await block.hover();
     await block.locator('.se-code-copy').click();
     await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe('ssh alice@10.0.0.21 -p 8080');

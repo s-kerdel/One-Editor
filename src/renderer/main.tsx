@@ -115,7 +115,12 @@ async function boot() {
 
 boot().catch((err) => {
   console.error(err);
-  document.body.innerHTML = `<pre style="padding:2rem;color:#f66;white-space:pre-wrap">Failed to start: ${String(err?.stack || err)}</pre>`;
+  // textContent: the message may quote a file or folder name.
+  const pre = document.createElement('pre');
+  pre.style.cssText = 'padding:2rem;color:#f66;white-space:pre-wrap';
+  // Browser mode without a valid access key: the message is the whole story (no stack).
+  pre.textContent = `Failed to start: ${String((err?.code === 'EACCES' && err.message) || err?.stack || err)}`;
+  document.body.replaceChildren(pre);
 });
 
 export { openWorkspace };

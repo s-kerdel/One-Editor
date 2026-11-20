@@ -704,6 +704,22 @@ const defs: Draft[] = [
     default: false,
     control: { type: 'toggle' },
   },
+  {
+    key: 'preview.remoteImages',
+    section: 'preview',
+    label: 'Images from the internet',
+    description: 'Ask: a note shows a bar to load them (a folder can be always allowed). Also live preview.',
+    keywords: ['remote', 'external', 'tracking', 'privacy', 'http', 'web', 'load images', 'block'],
+    default: 'ask',
+    control: {
+      type: 'segmented',
+      options: [
+        { v: 'ask', label: 'Ask' },
+        { v: 'always', label: 'Always load' },
+        { v: 'never', label: 'Never load' },
+      ],
+    },
+  },
 
   // ---- Export ----
   {
@@ -802,7 +818,7 @@ const defs: Draft[] = [
     key: 'webserver.access',
     section: 'webserver',
     label: 'Who can connect',
-    description: 'Network: anyone on your network with the link can read and edit this folder.',
+    description: 'Network: anyone on your network with the link can read and change the files in this folder.',
     keywords: ['web server', 'browser mode', 'serve', 'lan', 'network', 'share', 'phone', 'tablet', 'remote', 'firewall', '0.0.0.0'],
     default: 'local',
     control: {

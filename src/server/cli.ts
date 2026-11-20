@@ -3,6 +3,8 @@
 // over the Node IPC channel as data ({ type: 'ready', port, token, busy? } or { type: 'error', … }) instead of
 // the printed URL, a 'stop' message or the parent going away ends the server.
 // Without --port the folder's last port is tried first (browser state is per port), then 4317, 4318, …
+// --ipc (the desktop's "Start web server") and any bind beyond loopback serve their folder only (pinRoot):
+// a shared link must not open the rest of the machine. A plain local `serve` keeps the folder switcher.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -10,6 +12,7 @@ import { startServer, type RunningServer } from './server';
 import { isBridgeRoot } from '../backend/readpool';
 import { defaultConfigDir } from '../backend/service';
 import { portCandidates, rememberPort, rememberedPort } from './ports';
+import { winSystemExe } from '../backend/winsys';
 
 const args = process.argv.slice(2);
 const flag = (name: string) => {
@@ -48,9 +51,11 @@ const configDir = defaultConfigDir(); // the same folder startServer's backend u
 const remembered = portArg ? null : await rememberedPort(configDir, root).catch(() => null);
 const candidates = portCandidates(portArg ? Number(portArg) : null, remembered);
 const first = candidates[0];
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+const pinRoot = ipc || !LOOPBACK.has(host);
 for (const port of candidates) {
   try {
-    srv = await startServer({ root, port, host, rendererDir });
+    srv = await startServer({ root, port, host, rendererDir, pinRoot });
     break;
   } catch (err: any) {
     if (err?.code === 'EADDRINUSE') continue;
@@ -73,8 +78,10 @@ else {
   if (busy) console.log(`  Port ${busy} (this folder's last one) was busy — browser state for this folder starts empty.`);
 }
 if (shouldOpen) {
+  // A one-time launch code, not the token: the browser's command line is visible to other processes.
+  const link = srv.launchUrl();
   const [cmd, cmdArgs] =
-    process.platform === 'win32' ? ['cmd.exe', ['/c', 'start', '""', srv.url.replace(/&/g, '^&')]] : process.platform === 'darwin' ? ['open', [srv.url]] : ['xdg-open', [srv.url]];
+    process.platform === 'win32' ? [winSystemExe('cmd.exe'), ['/c', 'start', '""', link.replace(/&/g, '^&')]] : process.platform === 'darwin' ? ['open', [link]] : ['xdg-open', [link]];
   execFile(cmd, cmdArgs as string[], { windowsHide: true }, () => {});
 }
 function stop() {
@@ -85,4 +92,10 @@ function stop() {
 }
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
-if (ipc) process.on('message', (m: any) => m?.type === 'stop' && stop());
+// { type: 'launch' } → { type: 'launch', url }: a one-time link for opening a browser (keeps the token off
+// the command line of the browser the parent starts).
+if (ipc)
+  process.on('message', (m: any) => {
+    if (m?.type === 'stop') stop();
+    else if (m?.type === 'launch' && srv) process.send!({ type: 'launch', url: srv.launchUrl() });
+  });

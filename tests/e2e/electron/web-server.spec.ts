@@ -1,5 +1,6 @@
 // "Start web server" in the real desktop app: browser mode for the open folder as a child process.
-// Start → info shows the address → the link works only with its token → stop closes the port; quitting
+// Start → info shows the address → the link works only with its token (header only: no cookie, no token
+// in the page or a URL the browser is started with) → stop closes the port; quitting
 // (or a crash) leaves no orphan; LAN warns first and lists the addresses; a dead child shows its error.
 import net from 'node:net';
 import os from 'node:os';
@@ -48,29 +49,50 @@ test('start from the palette: info shows the address, the link needs its token, 
   await expect(info).toContainText('Opening another folder stops it');
   const origin = (await info.locator('[data-testid="webserver-url"]').textContent())!;
   expect(origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
-  // Shown without the key; "Copy link" copies the full link.
+  // Shown without the key; "Copy link" copies the full link. Read from the page's clipboard call, not the
+  // X clipboard (shared by parallel workers on one display: another test could overwrite it).
+  await page.evaluate(() => {
+    (window as any).__copied = [];
+    navigator.clipboard.writeText = async (t: string) => void (window as any).__copied.push(t);
+  });
   await info.locator('[data-testid="webserver-copy"]').click();
-  await expect.poll(() => app.evaluate(({ clipboard }) => clipboard.readText())).toMatch(/\?token=[a-f0-9]{32,}$/);
-  const url = await app.evaluate(({ clipboard }) => clipboard.readText());
+  await expect.poll(() => page.evaluate(() => (window as any).__copied.length)).toBe(1);
+  const url: string = await page.evaluate(() => (window as any).__copied[0]);
+  expect(url).toMatch(/\?token=[a-f0-9]{32,}$/);
+  expect(url).toBe((await status(page)).urls[0].url);
   expect(url.startsWith(origin)).toBe(true);
-  expect(await info.textContent()).not.toContain(url.split('token=')[1]);
+  const token = url.split('token=')[1];
+  expect(await info.textContent()).not.toContain(token);
 
-  // The test fetches the link like a browser would: the app page with its token…
-  const page200 = await fetch(url);
-  expect(page200.status).toBe(200);
-  expect(await page200.text()).toContain('<meta name="sec-edit-token"');
-  // …and nothing without it.
-  expect((await fetch(origin)).status).toBe(401);
-  expect((await fetch(`${origin}api/rpc/listTree`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"args":[]}' })).status).toBe(403);
+  // The page itself is a static shell: no key in it, no cookie (cookies ignore ports) — with or without the link.
+  for (const u of [url, origin]) {
+    const res = await fetch(u);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('set-cookie')).toBeNull();
+    expect(await res.text()).not.toContain(token);
+  }
+  // No data without the key — and the key only counts in its header, never in a URL.
+  const listTree = (headers: Record<string, string> = {}) => fetch(`${origin}api/rpc/listTree`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{"args":[]}' });
+  expect((await listTree()).status).toBe(403);
+  expect((await fetch(`${origin}api/rpc/listTree?token=${token}`, { method: 'POST', body: '{"args":[]}' })).status).toBe(403);
   expect((await fetch(`${origin}api/file?path=README.md`)).status).toBe(403);
+  expect((await fetch(`${origin}api/file?path=README.md&token=${token}`)).status).toBe(403);
+  expect((await fetch(`${origin}api/events?token=${token}`)).status).toBe(403);
+  expect((await (await listTree({ 'x-sec-edit-token': token })).json()).ok).toBe(true);
 
-  // "Open" hands exactly that link to the OS browser (stubbed here).
+  // "Open" hands the OS browser (stubbed here) a one-time launch link, not the key: a command line is
+  // visible to other processes. The code works once.
   await app.evaluate(({ shell }) => {
     (globalThis as any).__opened = [];
     shell.openExternal = (async (u: string) => void (globalThis as any).__opened.push(u)) as typeof shell.openExternal;
   });
   await info.locator('[data-testid="webserver-open"]').click();
-  await expect.poll(() => app.evaluate(() => (globalThis as any).__opened)).toEqual([url]);
+  await expect.poll(() => app.evaluate(() => (globalThis as any).__opened.length)).toBe(1);
+  const opened: string = await app.evaluate(() => (globalThis as any).__opened[0]);
+  expect(opened).toMatch(new RegExp(`^${origin.replace(/[.]/g, '\\.')}\\?launch=[a-f0-9]{32}$`));
+  const redeem = () => fetch(`${origin}api/launch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: opened.split('launch=')[1] }) });
+  expect((await (await redeem()).json()).token).toBe(token);
+  expect((await redeem()).status).toBe(403);
   // A page cannot make main open anything else.
   expect(await page.evaluate(() => (window as any).secEditBridge.webServer.open('https://example.com/'))).toMatchObject({ ok: false, error: { code: 'EACCES' } });
 
@@ -122,7 +144,8 @@ test('LAN: warns before starting, then lists the network addresses', async ({ el
   const dlg = page.locator('.se-dialog[role="alertdialog"]');
 
   await panel.locator('[data-testid="webserver-start"]').click();
-  await expect(dlg).toContainText('Anyone on your network with the link can read and edit this folder.');
+  await expect(dlg).toContainText('Anyone on your network with the link can read, change and delete the files in this folder (git included)');
+  await expect(dlg).toContainText('Nothing outside this folder.');
   await dlg.locator('.se-btn', { hasText: 'Cancel' }).click();
   await expect(dlg).toHaveCount(0);
   expect(await pidOf(app)).toBeUndefined(); // cancelled: nothing started
@@ -136,10 +159,16 @@ test('LAN: warns before starting, then lists the network addresses', async ({ el
   const expected = lanAddresses(os.networkInterfaces()).map((a) => `http://${a}:${s.port}/`);
   await expect(panel.locator('[data-testid="webserver-url"]')).toHaveText([`http://127.0.0.1:${s.port}/`, ...expected]);
   if (!expected.length) await expect(panel).toContainText('No network address found');
-  // Bound to every interface: loopback still works, still only with the token.
+  // Bound to every interface: loopback still works, still only with the token — and only for this folder.
   const local = s.urls[0];
+  const key = local.url.split('token=')[1];
   expect((await fetch(local.url)).status).toBe(200);
-  expect((await fetch(local.origin)).status).toBe(401);
+  const rpc = (method: string, args: unknown[], headers: Record<string, string> = {}) =>
+    fetch(`${local.origin}api/rpc/${method}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify({ args }) }).then(async (r) => ({ status: r.status, body: r.status === 200 ? await r.json() : null }));
+  expect((await rpc('listTree', [])).status).toBe(403);
+  expect((await rpc('listTree', [], { 'x-sec-edit-token': key })).body.ok).toBe(true);
+  expect((await rpc('openWorkspace', [path.dirname(el.ws)], { 'x-sec-edit-token': key })).body.error.code).toBe('EACCES');
+  expect((await rpc('recentWorkspaces', [], { 'x-sec-edit-token': key })).body.result).toEqual([]);
   await expect(page.locator('[data-testid="webserver-pill"]')).toHaveAttribute('data-access', 'lan');
   await panel.locator('[data-testid="webserver-stop"]').click();
   await expect(panel.locator('[data-testid="webserver-state"]')).toHaveText('Stopped');
@@ -180,6 +209,12 @@ test('a dead server shows its error; a taken port says so; another folder stops 
   await expect(page.locator('[data-testid="webserver-settings"] [data-testid="webserver-state"]')).toHaveText('Running');
   const pid = (await pidOf(app))!;
   await page.keyboard.press('Escape');
+  // The page may only open what main saw itself (dialog, launch args, drop, recents): asked out of the blue
+  // it is refused, and the server keeps running.
+  const denied = await page.evaluate((p) => (window as any).__secEdit.backend.openWorkspace(p).then(() => 'opened', (e: { code?: string }) => e.code), other);
+  expect(denied).toBe('EACCES');
+  expect((await status(page)).state).toBe('running');
+  await app.evaluate((_e, p) => (globalThis as any).__secEditVouch(p), other); // stands in for the folder dialog
   await page.evaluate((p) => (window as any).__secEdit.backend.openWorkspace(p), other);
   await expect(page.locator('.se-toast', { hasText: 'Opening another folder stopped the web server.' })).toBeVisible();
   await expect.poll(() => alive(pid)).toBe(false);

@@ -14,8 +14,7 @@ export interface ClaudeAsk {
 /** Longer selections are referenced by line range only (Claude reads the file). */
 export const QUOTE_LIMIT = 600;
 
-// Control characters could drive the TUI (ESC sequences, ^C, ^D…); tabs and newlines are fine.
-const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+import { CONTROL } from './run'; // control characters could drive the TUI (ESC sequences, ^C, ^D…); tabs and newlines are fine
 
 export function claudePrompt(a: ClaudeAsk): string {
   const path = a.path.replace(CONTROL, '');

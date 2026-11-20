@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { packager } from '@electron/packager';
+import { applyFuses } from './fuses.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const platform = process.argv[2] || process.platform;
@@ -50,6 +51,14 @@ const [outDir] = await packager({
   },
   quiet: true,
 });
+
+// Fuses: no NODE_OPTIONS, no --inspect for the packaged app (RunAsNode stays: the web server child needs it).
+// macOS keeps the wire in the framework binary and would need re-signing after the flip: not built here.
+if (platform !== 'darwin') {
+  const exe = path.join(outDir, platform === 'win32' ? 'sec-edit.exe' : 'sec-edit');
+  const fuses = applyFuses(exe);
+  console.log(`fuses: ${Object.entries(fuses).map(([k, v]) => `${k}=${v === true ? 'on' : v === false ? 'off' : v}`).join(' ')}`);
+} else console.warn('fuses: not set for darwin (flip them in the Electron Framework binary, then re-sign)');
 
 // Electron's locales: keep English only (saves ~40 MB unpacked; UI is English).
 const locales = path.join(outDir, platform === 'darwin' ? '' : 'locales');

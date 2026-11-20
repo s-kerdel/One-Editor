@@ -9,6 +9,7 @@
 // runs inside the distro when wsl.exe is killed, fs.watch on \\wsl.localhost paths.
 import { spawn } from 'node:child_process';
 import type { RunResult } from './git';
+import { winSystemExe } from './winsys';
 
 export interface WslPath {
   distro: string;
@@ -173,7 +174,7 @@ export interface WslRunOptions {
 }
 
 export function defaultWslExe(env: NodeJS.ProcessEnv = process.env): string {
-  return `${env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows'}\\System32\\wsl.exe`;
+  return winSystemExe('wsl.exe', env);
 }
 
 interface Pending {

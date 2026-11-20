@@ -34,3 +34,34 @@ export function isVaultKey(k: unknown): k is string {
 export function isVaultValue(v: unknown): v is string {
   return typeof v === 'string' && v.length <= VAULT_LIMITS.maxValueChars;
 }
+
+/**
+ * Default keys are scoped by the absolute folder of their variables.md: `<folder>::<env>/<target>.<name>`
+ * (renderer: variables/store.ts `vaultScope`). Returns that folder, or null for a key without one — an
+ * explicit `vault:<key>`, which is shared between folders by design.
+ */
+export function vaultKeyFolder(key: string): string | null {
+  const i = key.lastIndexOf('::');
+  if (i <= 0) return null;
+  const scope = key.slice(0, i);
+  return /^(\/|[a-z]:(\/|$))/i.test(scope) ? scope : null;
+}
+
+/** The scope the renderer derives from a workspace root (forward slashes, no trailing slash, folded off Linux). */
+export function vaultRootScope(root: string, os: string): string {
+  const abs = root.replace(/\\/g, '/').replace(/\/+$/, '');
+  return os === 'linux' ? abs : abs.toLowerCase();
+}
+
+/**
+ * May the window that has `root` open use `key`? Folder-scoped keys only below that folder: a page that
+ * was taken over (XSS in a note) must not read the secrets of every other folder on the machine.
+ */
+export function vaultKeyInScope(key: string, root: string | null, os: string): boolean {
+  const folder = vaultKeyFolder(key);
+  if (folder === null) return true;
+  if (root === null) return false;
+  if (folder.split('/').some((seg) => seg === '.' || seg === '..')) return false; // the renderer never writes these
+  const base = vaultRootScope(root, os);
+  return folder === base || folder.startsWith(base + '/');
+}

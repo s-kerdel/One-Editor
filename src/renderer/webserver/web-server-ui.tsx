@@ -69,7 +69,7 @@ export function install() {
 async function confirmLan(): Promise<boolean> {
   const r = await ui.ask({
     title: 'Share this folder on your network?',
-    message: 'Anyone on your network with the link can read and edit this folder.',
+    message: 'Anyone on your network with the link can read, change and delete the files in this folder (git included) and change your app settings. Nothing outside this folder.',
     details: [
       'The link holds a secret key. Send it only to people you trust.',
       'Plain HTTP (not encrypted): use it on trusted networks only, not public Wi-Fi.',
@@ -178,7 +178,7 @@ function Limits() {
       <li>No terminal in the browser.</li>
       <li>Secrets of {'{{variables}}'} stay in that browser tab’s memory only (never saved, never sent).</li>
       <li>PDF export uses the browser’s print dialog.</li>
-      <li>One web server at a time. It serves the folder that is open now.</li>
+      <li>One web server at a time. It serves the folder that is open now — and only that folder: the link cannot open other folders on this computer.</li>
     </ul>
   );
 }
@@ -187,7 +187,7 @@ const HOW_TO_STOP = 'Click Stop server, run “Stop web server” (Ctrl+Shift+P)
 
 const accessLabel = (s: WebServerStatus) => {
   const a = s.access ?? optionsFromSettings(app.settings.value).access;
-  return a === 'lan' ? 'Your network: anyone with the link can read and edit this folder' : 'This computer only (127.0.0.1)';
+  return a === 'lan' ? 'Your network: anyone with the link can read and change the files in this folder' : 'This computer only (127.0.0.1)';
 };
 
 function openOptions() {

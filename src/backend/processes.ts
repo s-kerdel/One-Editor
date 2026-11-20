@@ -11,6 +11,7 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { performance, type EventLoopUtilization } from 'node:perf_hooks';
 import { childRows, descendantsOf, parsePs, parseProcStat, parseWinProcs, toMB, type ChildInfo, type ProcRow, type ProcSnapshot } from '../shared/processes';
 import { parseWslPath } from './git-wsl';
+import { winSystemExe } from './winsys';
 
 export interface ProcessSourceCtx {
   /** ms since the previous snapshot (0 on the first): for CPU % from cumulative counters. */
@@ -203,7 +204,7 @@ export class ProcessExplorer {
     if (!wsl) return [];
     if (this.ticks++ % 3 === 0) {
       try {
-        const out = await run('wsl.exe', ['-d', wsl.distro, '--exec', 'ps', '-e', '-o', 'pid=,ppid=,pgid=,tpgid=,%cpu=,rss=,args=']);
+        const out = await run(winSystemExe('wsl.exe'), ['-d', wsl.distro, '--exec', 'ps', '-e', '-o', 'pid=,ppid=,pgid=,tpgid=,%cpu=,rss=,args=']);
         const procs = parsePs(out).filter((p) => /^git$|^inotifywait$/.test(p.comm) || /\bgit\b|inotifywait/.test(p.args.split(' ')[0]));
         this.wslRows = procs.map((p) => ({ id: `wsl:${p.pid}`, parent: 'wsl', kind: 'child' as const, name: p.comm === 'inotifywait' ? 'inotifywait (folder watcher)' : `git ${p.args.split(/\s+/)[1] ?? ''}`.trim(), pid: p.pid, cpu: p.cpuPct ?? null, mem: toMB(p.memBytes), memKind: 'RSS' as const, detail: p.args.slice(0, 160) }));
       } catch (err) {
@@ -295,7 +296,7 @@ class WinQuery {
   }
   private start() {
     const encoded = Buffer.from(WIN_SCRIPT, 'utf16le').toString('base64');
-    this.p = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+    this.p = spawn(winSystemExe('powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
     this.alive = true;
     this.p.stdout!.setEncoding('utf8');
     this.p.stdout!.on('data', (d: string) => {

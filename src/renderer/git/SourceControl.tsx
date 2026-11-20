@@ -19,7 +19,7 @@ import { openCommitDiff } from './diff-open';
 import { busy, discard, handOff, handOffLabel, lastError, markResolved, runGit, stage } from './actions';
 import { allOf, ariaChecked, selectedCount, type Check } from './selection';
 import { openStaging, shownCheck, stager, toggleAll, toggleEntry } from './stage';
-import { branchLabel } from './ui';
+import { branchLabel, stopTrusting } from './ui';
 import { git, gitCall } from './rpc';
 
 /** Stop a background list (fire and forget: the backend kills the running git). */
@@ -352,6 +352,19 @@ function SyncBar({ s, st }: { s: GitStore; st: GitStatus }) {
       </button>
       <span class="se-scm-spacer" />
       {working && <span class="se-scm-busy" role="status">{working}</span>}
+      <button
+        class="se-icon-btn small"
+        title="More"
+        aria-label="More source control actions"
+        aria-haspopup="menu"
+        data-testid="scm-more"
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          ui.openContextMenu({ clientX: r.left, clientY: r.bottom + 2, preventDefault() {}, stopPropagation() {} }, [{ label: 'Stop trusting this folder', icon: 'lock', run: () => void stopTrusting(s) }]);
+        }}
+      >
+        <Icon name="more" size={14} />
+      </button>
       <button class="se-icon-btn small" title="Fetch" aria-label="Fetch" disabled={!!working} onClick={() => runGit(s, 'Fetching', () => git('fetch', R()), { save: false })}>
         <Icon name="refresh" size={14} />
       </button>
@@ -831,6 +844,57 @@ function Empty({ text, terminal }: { text: string; terminal?: string }) {
   );
 }
 
+/** Asked for but not answered with "Trust" in this session: the short form. */
+const trustLater = signal(false);
+
+/**
+ * An untrusted repository: nothing of git runs (the backend refuses) until the user says so here.
+ * A repository's own files decide what git executes, so this is the user's call, once per folder.
+ */
+function TrustPrompt({ s }: { s: GitStore }) {
+  const [working, setWorking] = useState(false);
+  const trust = async () => {
+    setWorking(true);
+    try {
+      await git('trust');
+      trustLater.value = false;
+      s.reset();
+    } catch (err) {
+      app.toast(String((err as Error)?.message ?? err), 'error');
+    } finally {
+      setWorking(false);
+    }
+  };
+  if (trustLater.value)
+    return (
+      <div class="se-scm se-scm-empty" data-testid="git-trust">
+        <Icon name="gitBranch" size={22} />
+        <p>Git is off in this folder.</p>
+        <button class="se-btn small" data-testid="git-trust-yes" disabled={working} onClick={trust}>
+          Trust this folder
+        </button>
+      </div>
+    );
+  return (
+    <div class="se-scm se-scm-empty se-scm-trust" data-testid="git-trust" role="group" aria-label="Trust this folder for git?">
+      <Icon name="gitBranch" size={22} />
+      <p>
+        <strong>This folder is a git repository.</strong>
+      </p>
+      <p>Its settings can make git run programs (hooks, filters). Trust this folder?</p>
+      <div class="se-scm-trust-actions">
+        <button class="se-btn small primary" data-testid="git-trust-yes" disabled={working} onClick={trust}>
+          Trust
+        </button>
+        <button class="se-btn small" data-testid="git-trust-no" disabled={working} onClick={() => (trustLater.value = true)}>
+          Not now
+        </button>
+      </div>
+      <p class="se-scm-trust-note">Until then git is off here: no status, marks or change bars.</p>
+    </div>
+  );
+}
+
 const REASON: Record<string, string> = {
   'no-repo': 'This folder is not a git repository.',
   'no-git': 'git was not found. Install git to use source control.',
@@ -848,6 +912,7 @@ export function SourceControl() {
   if (!s) return <Empty text={app.workspace.value ? 'Source control is not available here.' : 'Open a folder to use source control.'} />;
   const st = s.status.value;
   if (!st) return <div class="se-scm se-scm-loading" aria-busy="true" />;
+  if (!st.ok && st.reason === 'untrusted') return st.repoLikely ? <TrustPrompt s={s} /> : <Empty text={REASON['no-repo']} terminal="git init" />;
   if (!st.ok) return <Empty text={`${REASON[st.reason] ?? REASON.error}${st.message ? ` ${st.message}` : ''}`} terminal={st.reason === 'no-repo' ? 'git init' : undefined} />;
   // Several repositories below this folder: the pane works on one at a time.
   const repos = st.repos ?? [];

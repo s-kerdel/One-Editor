@@ -30,6 +30,7 @@ import {
   type TerminalSpawnResult,
 } from '../shared/terminal';
 import { claudeHint, claudeInstall, detectClaude, detectShells, pathFor, pickDefaultShell, planClaude, planSpawn, windowsBuildOf, type DetectEnv } from './terminal-shells';
+import { winSystemExe } from '../backend/winsys';
 
 // ---------------------------------------------------------------- node-pty surface we use
 
@@ -588,8 +589,7 @@ export class TerminalService {
 }
 
 function defaultTreeKill(pid: number) {
-  const sysRoot = process.env.SystemRoot || 'C:\\Windows';
-  const child = spawnChild(path.win32.join(sysRoot, 'System32', 'taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { windowsHide: true, detached: true, stdio: 'ignore' });
+  const child = spawnChild(winSystemExe('taskkill.exe'), ['/PID', String(pid), '/T', '/F'], { windowsHide: true, detached: true, stdio: 'ignore' });
   child.on('error', () => {});
   child.unref();
 }

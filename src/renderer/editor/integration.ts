@@ -9,6 +9,7 @@ import { fileUrl } from '../platform';
 import { setEditorHost, type HoveredLink, type LinkTarget } from './host';
 import { scanTags, type CompletionHost } from './complete';
 import { loadKnowledge } from '../knowledge';
+import { remoteAllowed } from '../preview/remote';
 
 type KnowledgeLike = {
   tags?: () => unknown;
@@ -181,7 +182,9 @@ export function installEditorIntegration(ctx: { view: () => EditorView | null; p
   installed?.();
   setEditorHost({
     imageUrl(src, from, wiki) {
-      if (/^(https?:|data:|blob:)/i.test(src)) return src;
+      if (/^(data|blob):/i.test(src)) return src;
+      // Images from the internet follow the note's remote-media policy (preview/remote.ts): none = no widget.
+      if (/^(https?:)?\/\//i.test(src)) return remoteAllowed(from) ? src : null;
       const ws = app.workspace.value;
       if (!ws || !app.backend) return null;
       const rel = wiki ? resolveCached(src.split('#')[0], from) : resolveRelative(src, from);
@@ -194,12 +197,13 @@ export function installEditorIntegration(ctx: { view: () => EditorView | null; p
     openLink: (link, from, opts) => void openLink(link, from, opts),
     resolveWiki: (target, from) => (target ? resolveCached(target, from) : from),
     readNote: (path) => completionHost.readText(path),
-    noteRevision: (path) => revisions.get(path) ?? 0,
+    noteRevision: (path) => (revisions.get(path) ?? 0) + mediaEpoch,
     hoverLink,
     hoverMode,
   });
   // Embedded notes re-render when their source changes (another tab, external edit, save).
   const revisions = new Map<string, number>();
+  let mediaEpoch = 0; // remote-image policy changed: every embed re-renders
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   const bump = (path: string) => {
     if (path === ctx.path()) return; // the open note's own keystrokes
@@ -216,6 +220,10 @@ export function installEditorIntegration(ctx: { view: () => EditorView | null; p
     app.events.on('doc:saved', bump),
     app.events.on('file:updated', bump),
     app.events.on('files:changed', (paths) => paths.forEach(bump)),
+    app.events.on('media:policy', () => {
+      mediaEpoch++;
+      ctx.refresh();
+    }),
   ];
   installed = () => offs.forEach((o) => o());
 }

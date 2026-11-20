@@ -26,6 +26,7 @@ describe('responsiveness while git runs', () => {
     const s = new BackendService(cfg, {}, {}, { env: testEnv(), gitPath: fake });
     services.push(s);
     await s.openWorkspace(dir);
+    await s.git('trust'); // the user's "Trust" in the Source control panel: no git runs without it
     await s.readFile('note.md');
     const lat: number[] = [];
     let stop = false;

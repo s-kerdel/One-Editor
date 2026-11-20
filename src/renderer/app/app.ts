@@ -145,6 +145,8 @@ export type AppEvents = {
   'viewer:reveal': (path: string, target: RevealTarget) => void;
   /** A viewer doc (PDF) now shows this 1-based page (scrolling included) — navigation history follows it. */
   'viewer:page': (path: string, page: number) => void;
+  /** Which notes may load remote images changed (preview/remote.ts): previews and live images re-render. */
+  'media:policy': () => void;
 };
 
 class App {

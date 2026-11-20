@@ -163,7 +163,7 @@ describe('default shell + spawn plan', () => {
 
   it('cmd.exe on a UNC folder: starts in the profile and pushd-s there; Git Bash keeps the folder', () => {
     const env = { USERPROFILE: 'C:\\Users\\me' };
-    expect(planSpawn(shells[1], '\\\\wsl$\\Ubuntu\\home\\me', { platform: 'win32', env })).toEqual({ file: shells[1].path, args: ['/K', 'pushd', '\\\\wsl$\\Ubuntu\\home\\me'], cwd: 'C:\\Users\\me', env: {} });
+    expect(planSpawn(shells[1], '\\\\wsl$\\Ubuntu\\home\\me', { platform: 'win32', env })).toEqual({ file: shells[1].path, args: '/S /K "pushd "\\\\wsl$\\Ubuntu\\home\\me""', cwd: 'C:\\Users\\me', env: {} });
     expect(planSpawn(shells[1], 'C:\\notes', { platform: 'win32', env })).toMatchObject({ args: [], cwd: 'C:\\notes' });
     expect(planSpawn(shells[2], 'C:\\notes', { platform: 'win32', env }).env).toEqual({ CHERE_INVOKING: '1' });
     expect(planSpawn(shells[0], 'C:\\notes', { platform: 'win32', env })).toMatchObject({ args: ['-NoLogo'], cwd: 'C:\\notes' });
@@ -261,13 +261,44 @@ describe('Claude Code detection + start plan', () => {
     expect((await detectClaude(machine({ platform: 'linux', env: { HOME: '/home/me', PATH: '/opt/x/bin' }, files: ['/opt/x/bin/claude', '/home/me/.local/bin/claude'] }))).path).toBe('/opt/x/bin/claude');
   });
 
+  it('cmd.exe command lines: a folder or program name can never add a command (& | ^ stay inside quotes, % is refused)', async () => {
+    // What CreateProcess gets: node-pty's own command-line builder (a string is passed through as it is).
+    const { argsToCommandLine } = (await import('node-pty/lib/windowsPtyAgent.js' as string)) as { argsToCommandLine(file: string, args: string[] | string): string };
+    const env = { Path: 'C:\\Windows', ComSpec: 'C:\\Windows\\system32\\cmd.exe', USERPROFILE: 'C:\\Users\\me' };
+    const cmd = { id: 'cmd', name: 'Command Prompt', kind: 'cmd' as const, path: env.ComSpec, args: [] };
+    const line = (p: { file: string; args: string[] | string }) => argsToCommandLine(p.file, p.args);
+    /** What cmd.exe parses: with /S the command is the text after /K or /C minus its first and last quote;
+     *  returned are the characters outside double quotes — where cmd would act on an operator. */
+    const bare = (l: string) => {
+      const m = /^.*? \/S \/[KC] "(.*)"$/.exec(l);
+      if (!m) throw new Error(`not a /S command line: ${l}`);
+      return m[1].split('"').filter((_, i) => i % 2 === 0).join('');
+    };
+    for (const dir of ['\\\\nas\\share\\proj&calc.exe', '\\\\nas\\share\\a|b', '\\\\nas\\share\\a^b&&c', '\\\\nas\\share\\(x)<y>', '\\\\nas\\share\\my proj&calc.exe', '\\\\nas\\share\\wow!']) {
+      const l = line(planSpawn(cmd, dir, { platform: 'win32', env }));
+      expect(l, dir).toBe(`${env.ComSpec} /S /K "pushd "${dir}""`);
+      expect(bare(l), dir).not.toMatch(/[&|<>^()]/);
+    }
+    const shim = { available: true, via: 'native' as const, path: 'C:\\Users\\R&D\\AppData\\Roaming\\npm\\claude.cmd' };
+    const unc = line(planClaude(shim, '\\\\nas\\share\\proj&calc.exe', { platform: 'win32', env }));
+    expect(unc).toBe(`${env.ComSpec} /D /S /C "pushd "\\\\nas\\share\\proj&calc.exe" && "${shim.path}""`);
+    expect(bare(unc).match(/&/g)).toHaveLength(2); // only our own &&
+    expect(bare(line(planClaude(shim, 'C:\\notes', { platform: 'win32', env })))).not.toMatch(/[&|<>^()]/);
+    // %NAME% expands inside quotes too and cannot be escaped on a command line: no shell there.
+    expect(() => planSpawn(cmd, '\\\\nas\\share\\%COMSPEC%', { platform: 'win32', env })).toThrow(/%/);
+    expect(() => planClaude(shim, '\\\\nas\\share\\100%', { platform: 'win32', env })).toThrow(/%/);
+    expect(() => planClaude({ ...shim, path: 'C:\\x"y\\claude.cmd' }, 'C:\\notes', { platform: 'win32', env })).toThrow();
+    // A local folder is the process's working directory, never part of the command line.
+    expect(planSpawn(cmd, 'C:\\a&b%c', { platform: 'win32', env })).toMatchObject({ args: [], cwd: 'C:\\a&b%c' });
+  });
+
   it('start plans: WSL (cd back after rc files), cmd shim (pushd on UNC), native binary (its folder first on PATH)', () => {
     const env = { Path: 'C:\\Windows', ComSpec: 'C:\\Windows\\system32\\cmd.exe', USERPROFILE: 'C:\\Users\\me' };
     const wsl = planClaude({ available: true, via: 'wsl', distro: 'Ubuntu', path: '/usr/bin/claude' }, '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', { platform: 'win32', env, wslExe: 'C:\\Windows\\System32\\wsl.exe' });
     expect(wsl).toEqual({ file: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu', '--cd', '/home/me/my proj', '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec claude', '/home/me/my proj'], cwd: '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', env: {} });
     const shim = { available: true, via: 'native' as const, path: 'C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd' };
-    expect(planClaude(shim, 'C:\\notes', { platform: 'win32', env })).toMatchObject({ file: env.ComSpec, args: ['/d', '/c', shim.path], cwd: 'C:\\notes', env: { Path: 'C:\\Users\\me\\AppData\\Roaming\\npm;C:\\Windows' } });
-    expect(planClaude(shim, '\\\\server\\share\\notes', { platform: 'win32', env })).toMatchObject({ args: ['/d', '/c', 'pushd', '\\\\server\\share\\notes', '&&', shim.path], cwd: 'C:\\Users\\me' });
+    expect(planClaude(shim, 'C:\\notes', { platform: 'win32', env })).toMatchObject({ file: env.ComSpec, args: `/D /S /C ""${shim.path}""`, cwd: 'C:\\notes', env: { Path: 'C:\\Users\\me\\AppData\\Roaming\\npm;C:\\Windows' } });
+    expect(planClaude(shim, '\\\\server\\share\\notes', { platform: 'win32', env })).toMatchObject({ args: `/D /S /C "pushd "\\\\server\\share\\notes" && "${shim.path}""`, cwd: 'C:\\Users\\me' });
     expect(planClaude({ available: true, via: 'native', path: '/home/me/.local/bin/claude' }, '/home/me/proj', { platform: 'linux', env: { PATH: '/usr/bin' } })).toEqual({ file: '/home/me/.local/bin/claude', args: [], cwd: '/home/me/proj', env: { PATH: '/home/me/.local/bin:/usr/bin' } });
   });
 

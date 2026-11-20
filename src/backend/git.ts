@@ -5,8 +5,9 @@
 //  - only read commands; GIT_OPTIONAL_LOCKS=0 so `status` never rewrites the index (→ no index hooks).
 //    One exception, opt-out (`git.refreshIndex`): refreshIndex() re-records file timestamps in the index
 //    (`update-index --refresh`, hooks off, never while index.lock exists, never killed);
-//  - `core.fsmonitor` is forced off and filter drivers defined in the repo's *own* config are neutralised:
-//    a downloaded folder with a hostile `.git/config` must not get code execution by being opened;
+//  - `core.fsmonitor` is forced off and every configured filter driver is neutralised (all config scopes,
+//    worktree config and includes; only canonical Git LFS stays): a downloaded folder with a hostile
+//    `.git/config` must not get code execution by being opened;
 //  - `diff` runs with --no-ext-diff --no-textconv;
 //  - git is resolved to an absolute path ourselves: Windows' search order would otherwise run a `git.exe`
 //    sitting in the (untrusted) workspace folder;
@@ -47,7 +48,7 @@ import { WslGit, parseNetUse, parseWslPath, resolveMappedDrive, toUncPath, type 
 let netUse: Promise<Map<string, string>> | null = null;
 /** Drive letters mapped to network shares (`net use`), once per process. */
 function mappedDrives(): Promise<Map<string, string>> {
-  netUse ??= run(`${process.env.SystemRoot || 'C:\\Windows'}\\System32\\net.exe`, ['use'], { cwd: undefined, env: process.env, timeoutMs: 5000, maxBytes: 256 * 1024, quiet: true }).then(
+  netUse ??= run(winSystemExe('net.exe'), ['use'], { cwd: undefined, env: process.env, timeoutMs: 5000, maxBytes: 256 * 1024, quiet: true }).then(
     (r) => (r.code === 0 ? parseNetUse(r.stdout.toString('utf8')) : new Map()),
     () => new Map(),
   );
@@ -57,6 +58,7 @@ import { normalize } from '../shared/paths';
 import { BackendFailure } from './errors';
 import { resolveInside } from './pathsafe';
 import { decode, toLf } from './textcodec';
+import { winSystemExe } from './winsys';
 
 type PlatformPath = typeof path.posix;
 
@@ -433,28 +435,47 @@ export function parsePorcelainV2(out: string, prefix = '', maxEntries = GIT_MAX_
   return s.end();
 }
 
-// ---- repository-local config that would run programs ---------------------------------------
+// ---- configured programs git would run on a read ---------------------------------------------
+
+// Git LFS as `git lfs install` writes it (also with --skip-smudge). Exact strings only: git hands a filter
+// command to `sh -c`, so a value that merely starts like LFS ("git-lfs clean -- %f; …") runs anything.
+const LFS_COMMANDS: Record<string, ReadonlySet<string>> = {
+  clean: new Set(['git-lfs clean -- %f']),
+  smudge: new Set(['git-lfs smudge -- %f', 'git-lfs smudge --skip -- %f']),
+  process: new Set(['git-lfs filter-process', 'git-lfs filter-process --skip']),
+};
 
 /**
- * `-c` overrides that neutralise filter drivers defined in the repository's own config
- * (`git config --local --includes -z --get-regexp '^filter\..*\.(clean|smudge|process)$'` output).
- * Git LFS is common and benign, so its drivers stay active (LFS files would otherwise look modified).
+ * `-c` overrides that neutralise every configured filter driver, from the output of
+ * `git config --includes -z --get-regexp '^filter\..*\.(clean|smudge|process)$'` — the effective
+ * config of ALL scopes (system, global, local, worktree `config.worktree`, includes): a folder's own
+ * config can define a driver in any file git reads for it, and its `.gitattributes` picks the name.
+ * Only Git LFS in its canonical spelling stays active (LFS files would otherwise look modified); a
+ * driver with any other value among its commands is switched off as a whole.
  */
-export function untrustedFilterOverrides(localConfigZ: string): string[] {
-  const names = new Set<string>();
-  for (const rec of localConfigZ.split('\0')) {
+export function untrustedFilterOverrides(configZ: string, o: { lfsInstalled?: boolean } = {}): string[] {
+  const out: string[] = [];
+  for (const [n, lfs] of filterDrivers(configZ)) if (!lfs || o.lfsInstalled === false) out.push('-c', `filter.${n}.clean=`, '-c', `filter.${n}.smudge=`, '-c', `filter.${n}.process=`, '-c', `filter.${n}.required=false`);
+  return out;
+}
+
+/** Is a canonical Git LFS driver configured? (Then discovery checks that git-lfs exists: git dies on a missing `filter-process`.) */
+export const hasLfsDriver = (configZ: string) => [...filterDrivers(configZ).values()].some(Boolean);
+
+/** Driver name → every one of its commands is canonical Git LFS. */
+function filterDrivers(configZ: string): Map<string, boolean> {
+  const names = new Map<string, boolean>();
+  for (const rec of configZ.split('\0')) {
     if (!rec) continue;
     const nl = rec.indexOf('\n');
     const key = nl === -1 ? rec : rec.slice(0, nl);
     const value = nl === -1 ? '' : rec.slice(nl + 1);
     const m = /^filter\.(.+)\.(clean|smudge|process)$/i.exec(key);
     if (!m) continue;
-    if (/^\s*git[- ]lfs(\.exe)?\s/i.test(value + ' ')) continue;
-    names.add(m[1]);
+    const lfs = LFS_COMMANDS[m[2].toLowerCase()].has(value);
+    names.set(m[1], (names.get(m[1]) ?? true) && lfs);
   }
-  const out: string[] = [];
-  for (const n of names) out.push('-c', `filter.${n}.clean=`, '-c', `filter.${n}.smudge=`, '-c', `filter.${n}.process=`, '-c', `filter.${n}.required=false`);
-  return out;
+  return names;
 }
 
 // ---- service --------------------------------------------------------------------------------
@@ -657,8 +678,16 @@ export class GitService {
     const host = this.viaWsl && t ? (linux: string) => (this.opts.wsl?.hostPath ?? ((w, l) => toUncPath(w, l)))(t, linux) : (p: string) => this.P.resolve(this.root, p);
     const commonLinux = this.viaWsl && t ? path.posix.resolve(t.linux, common || gitDir) : common || gitDir;
     const base = ['-c', 'core.quotepath=off', '-c', 'core.fsmonitor=', '-c', 'status.relativePaths=false', '-c', 'color.ui=false', '-c', 'log.showSignature=false'];
-    const cfg = await this.exec(git, ['config', '--local', '--includes', '-z', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$'], { timeoutMs: T_QUICK, maxBytes: 256 * 1024, trigger: 'discover' });
-    if (cfg.code === 0) base.push(...untrustedFilterOverrides(cfg.stdout.toString('utf8')));
+    // Every scope git reads for this folder (no --local: `.git/config.worktree` and includes count too).
+    // Exit 1 = no filter configured; anything else means we cannot tell what would run → no git here.
+    const cfg = await this.exec(git, ['config', '--includes', '-z', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$'], { timeoutMs: T_QUICK, maxBytes: 1024 * 1024, trigger: 'discover' });
+    if (cfg.code === 0 && !cfg.overflow) {
+      const z = cfg.stdout.toString('utf8');
+      // LFS configured but not installed: git would die on every status ("git-lfs: not found") → no filter at all.
+      // `alias.lfs` is pinned: without git-lfs git would otherwise run an `lfs` alias from the folder's config.
+      const lfsInstalled = !hasLfsDriver(z) || (await this.exec(git, ['-c', 'alias.lfs=!exit 1', 'lfs', 'version'], { timeoutMs: T_QUICK, maxBytes: 4096, trigger: 'discover' })).code === 0;
+      base.push(...untrustedFilterOverrides(z, { lfsInstalled }));
+    } else if (cfg.code !== 1 || cfg.overflow) return failure(cfg) ?? { ok: false, reason: 'error', message: 'Could not read the git configuration of this folder' };
     return { ok: true, git, toplevel: host(toplevel), prefix: prefix ?? '', gitDir: host(gitDir), commonDir: host(commonLinux), base };
   }
 
@@ -1355,6 +1384,8 @@ export class GitService {
       const remotes = await this.remotes(repo);
       const remote = remotes.find((r) => name.startsWith(r + '/')) ?? name.split('/')[0];
       target = name.slice(remote.length + 1);
+      // "origin/-f": the local name would reach git as an option.
+      if (!target || target.startsWith('-')) return { ok: false, message: `“${target}” is not a valid branch name` };
       if (await has(`refs/heads/${target}`)) args = sw ? ['switch', target] : ['checkout', target];
       else args = sw ? ['switch', '-c', target, '--track', name] : ['checkout', '-b', target, '--track', name];
     } else return { ok: false, message: `No branch “${name}”` };
@@ -1475,7 +1506,7 @@ function repoState(gitDir: string): GitRepoState | undefined {
 }
 
 /** A `.git` folder or file in `dir` or any parent (without git we cannot ask git). */
-function hasDotGitAbove(dir: string): boolean {
+export function hasDotGitAbove(dir: string): boolean {
   // Same boundary as git's own discovery: never step up into a GIT_CEILING_DIRECTORIES entry.
   const ceilings = new Set((process.env.GIT_CEILING_DIRECTORIES ?? '').split(path.delimiter).filter(Boolean).map((c) => path.resolve(c)));
   for (let d = dir, i = 0; i < 64; i++) {

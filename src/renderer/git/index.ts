@@ -6,7 +6,7 @@ import './git.css';
 import { h } from 'preact';
 import { app } from '../app/app';
 import { registerCommands } from '../app/commands';
-import { webToken } from '../platform';
+import { eventsUrl } from '../platform';
 import { GitStore, type GitBackend } from './store';
 import { diffUnavailable, openDiffWithHead } from './diff-open';
 import { gitUi, type GitUi } from './install';
@@ -52,7 +52,7 @@ function onGitChanged(cb: (e: GitPush) => void): () => void {
   const bridge = (globalThis as { secEditBridge?: { on(ch: string, cb: (p: unknown) => void): () => void } }).secEditBridge;
   if (bridge) return bridge.on('git:changed', (p) => cb((p ?? {}) as GitPush));
   if (typeof EventSource === 'undefined') return () => {};
-  const es = new EventSource(new URL(`./api/events?git=1&token=${encodeURIComponent(webToken())}`, location.href).toString());
+  const es = new EventSource(eventsUrl('git=1')); // its own capability: the session token never goes into a URL
   es.addEventListener('git', (ev) => {
     try {
       cb(JSON.parse((ev as MessageEvent).data) as GitPush);

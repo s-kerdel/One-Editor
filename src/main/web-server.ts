@@ -160,7 +160,10 @@ export class WebServerService {
       child.on('message', (raw) => {
         const m = parseChildMessage(raw);
         if (!m || this.child !== child) return;
-        if (m.type === 'error') {
+        if (m.type === 'launch') {
+          this.launchWaiter?.(m.url);
+          this.launchWaiter = null;
+        } else if (m.type === 'error') {
           reported = redact(m.message);
           code = m.code;
         } else
@@ -242,10 +245,34 @@ export class WebServerService {
     } catch {}
   }
 
-  /** "Open in browser": only a link of the running server. */
+  /** "Open in browser": only a link of the running server. The local one opens through a one-time launch
+   *  code from the child, so the browser's command line (visible to other processes) never holds the key. */
   async open(url: unknown): Promise<void> {
     if (typeof url !== 'string' || this.s.state !== 'running' || !this.s.urls.some((u) => u.url === url)) throw new WebServerError('EACCES', 'Not a link of the running web server');
-    await this.deps.openExternal(url);
+    const local = this.s.urls[0];
+    const launch = url === local?.url ? await this.launchLink() : null;
+    await this.deps.openExternal(launch?.startsWith(`${local.origin}?launch=`) ? launch : url);
+  }
+
+  private launchWaiter: ((url: string) => void) | null = null;
+  /** A one-time link from the child, or null (it did not answer: an older child, or it is going away). */
+  private launchLink(): Promise<string | null> {
+    const child = this.child;
+    if (!child?.connected || !child.send) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const done = (u: string | null) => {
+        clearTimeout(timer);
+        this.launchWaiter = null;
+        resolve(u);
+      };
+      const timer = setTimeout(() => done(null), 3000);
+      this.launchWaiter = done;
+      try {
+        if (!child.send!({ type: 'launch' })) done(null);
+      } catch {
+        done(null);
+      }
+    });
   }
 }
 
