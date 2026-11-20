@@ -16,6 +16,7 @@
 | See changes, commit, push | [8. Git](#8-git) |
 | Change how it behaves | [9. Settings](#9-settings) |
 | Open this folder in a web browser (phone, tablet, another PC) | [Browser mode](#browser-mode-web-server) |
+| Know when One itself needs a security rebuild | [Security updates](#security-updates) |
 | Put `{{host}}`, `{{user}}`… in commands | [10. Variables & targets](#10-variables--targets) |
 | Turn a pasted curl / JSON / log into a clean block | [11. Smart paste](#11-smart-paste) |
 | Fix a problem | [12. Troubleshooting](#12-troubleshooting) |
@@ -806,6 +807,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | GPU acceleration | Automatic (only on a hardware GPU) |
 | **Browser mode** (desktop only) | Port | Automatic (4317, else the next free one) |
 | | Who can connect | This computer |
+| **Security updates** (desktop only) | Check for security updates | Off |
 
 ### Make it yours (Appearance)
 
@@ -868,6 +870,39 @@ Settings are **global**, not per folder.
 - **Same folder, same port:** the browser remembers things per address (environment pick, recent files). So a folder gets its last port again. If that port is taken, the info box says so: browser state for this folder then starts empty.
 - **In the browser:** no terminal · secrets of `{{variables}}` stay in that tab's memory only · PDF export = the browser's print dialog · one server at a time.
 - **Without the desktop app:** `Start web server.cmd` (Windows) or `start-web.sh` (Linux) next to the program. Started that way on this computer, the browser can switch folders; with `--host` (another address) it serves that one folder only.
+
+### Security updates
+
+**Off by default. Switch it on and One tells you when *this build* needs a rebuild.** Settings → **Security updates** → **Check for security updates**. Desktop app only.
+
+| It checks | Where | You see |
+|---|---|---|
+| A **newer Electron patch** (= Chromium security fixes) | endoflife.date | 🟠 |
+| **End of support** for your Electron major (45 days ahead, or passed) | endoflife.date | 🟠 |
+| **Known vulnerabilities** in Electron and the libraries this build ships | api.osv.dev | 🔴 high / critical · 🟠 moderate / low |
+| A newer Electron major | endoflife.date | listed only, no shield |
+
+**Reading the shield**
+
+- **No shield** in the status bar = nothing found (or the check is off).
+- **Shield + number** = that many 🔴 / 🟠 findings. **Red** shield: at least one high / critical.
+- **Click it** → the list: library, **shipped version → fixed version**, one line, **Details** (opens the advisory).
+- A library finding **may not affect One** (it depends on how the library is used): check the link.
+- **What to do:** rebuild One with updated Electron / libraries (e.g. ask Claude: *"update Electron and release"*). Findings **disappear on their own** in a build that ships the fixed versions.
+
+**When it runs**
+
+- **Once after launch**, only if the last check is **7 days** old. Right after you switch it on. And on **Check now**.
+- No background timer. Offline or an error: **nothing pops up**; Settings shows "Last check failed".
+- Palette: **"Security updates: Show findings"** / **"Security updates: Check now"**.
+
+**What is sent** (nothing else: no ids, no file or folder names, no cookies)
+
+- **endoflife.date:** a plain request for the public list of Electron releases. Nothing about you or One.
+- **api.osv.dev:** the **names and versions** of Electron and the libraries in this build (the same for everyone on this version).
+- Both see your **IP address**, like any website.
+
+The last result is kept in `update-check.json` in the app's data folder, so the shield is there at launch without a request.
 
 ---
 

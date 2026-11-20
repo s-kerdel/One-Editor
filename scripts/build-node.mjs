@@ -2,6 +2,9 @@
 //   node scripts/build-node.mjs [--outdir dist] [--watch] [--only electron|server]
 // Everything is bundled except node-pty (native; staged next to dist/ by stage.mjs).
 import { build, context } from 'esbuild';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { writeShippedDeps } from './shipped-deps.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name, def) => (args.includes(name) ? args[args.indexOf(name) + 1] : def);
@@ -20,6 +23,8 @@ if (only !== 'server') {
   // node-pty is native: loaded at runtime from node_modules (dev) or app.asar.unpacked (packaged).
   jobs.push({ ...common, entryPoints: ['src/main/main.ts'], outfile: `${outdir}/main/main.cjs`, format: 'cjs', external: ['electron', 'node-pty'] });
   jobs.push({ ...common, entryPoints: ['src/main/preload.ts'], outfile: `${outdir}/main/preload.cjs`, format: 'cjs', external: ['electron'] });
+  // What this build ships (names + versions from the lockfile), read by the opt-in "Security updates" check.
+  writeShippedDeps(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), path.resolve(outdir, 'main/shipped-deps.json'));
 }
 if (only !== 'electron') {
   jobs.push({

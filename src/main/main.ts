@@ -25,6 +25,8 @@ import { OpenGate } from './open-gate';
 import { registerGpuIpc } from './gpu';
 import { WebServerService, childEnv, lanAddresses, registerWebServerIpc, spawnCli } from './web-server';
 import { WEB_SERVER_CHANNELS } from '../shared/web-server';
+import { UpdateCheckService, registerUpdateCheckIpc } from './update-check';
+import { UPDATE_CHECK_CHANNELS, UPDATE_ENDPOINTS, isAllowedUpdateUrl } from '../shared/update-check';
 import { NAV_CHANNEL, navFromAppCommand } from '../shared/nav';
 import os from 'node:os';
 import { createRelaunch, frameOf, frameWindowOptions, initialOverlay, isDarkColor, parseOverlay, rememberOverlay, type TitleBarCache, type WindowFrame } from './frame';
@@ -172,6 +174,34 @@ function main() {
   });
   if (isTest) (globalThis as any).__secEditWebServer = webServer; // E2E: child pid (no orphan after quit)
 
+  // "Security updates" (opt-in, Settings): nothing here runs until the renderer asks, and check() refuses
+  // while the setting is off. Requests go through a session of their own — in memory, no cookies, no cache,
+  // a generic User-Agent — and only to the two allowlisted hosts (tests: one local stub, SEC_EDIT_TEST only).
+  const updateStub = isTest && /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.SEC_EDIT_TEST_UPDATE_API ?? '') ? process.env.SEC_EDIT_TEST_UPDATE_API! : null;
+  const updateUrlAllowed = (url: string) => (updateStub ? url.startsWith(`${updateStub}/`) : isAllowedUpdateUrl(url));
+  let updateSession: Electron.Session | null = null;
+  const updateFetch = (url: string, init: RequestInit) => {
+    if (!updateSession) {
+      updateSession = session.fromPartition('update-check', { cache: false });
+      updateSession.setUserAgent('update-check', 'en');
+      // Second lock on the same door: nothing but the allowlist leaves this session (redirects included).
+      updateSession.webRequest.onBeforeRequest((d, cb) => cb({ cancel: !updateUrlAllowed(d.url) }));
+    }
+    return updateSession.fetch(url, { ...init, credentials: 'omit', redirect: 'error', cache: 'no-store' });
+  };
+  const updateFile = path.join(app.getPath('userData'), 'update-check.json');
+  const updates = new UpdateCheckService({
+    isEnabled: async () => (await service.getSettings())['updates.check'] === true,
+    electronVersion: process.versions.electron,
+    shipped: () => readJson<unknown>(path.join(__dirname, 'shipped-deps.json'), null),
+    endpoints: updateStub ? { eol: updateStub, osv: updateStub } : UPDATE_ENDPOINTS,
+    allow: updateUrlAllowed,
+    fetch: updateFetch,
+    readState: () => readJson<unknown>(updateFile, null),
+    writeState: (s) => writeJson(updateFile, s),
+    onChange: (s) => win && !win.isDestroyed() && win.webContents.send(UPDATE_CHECK_CHANNELS.changed, s),
+  });
+
   const rendererDir = path.resolve(process.env.SEC_EDIT_RENDERER_DIR || path.join(__dirname, '../renderer'));
   const stateFile = path.join(app.getPath('userData'), 'window-state.json');
 
@@ -256,6 +286,7 @@ function main() {
   registerVaultIpc(ipcMain, vault, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   registerGpuIpc(ipcMain, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   registerWebServerIpc(ipcMain, webServer, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
+  registerUpdateCheckIpc(ipcMain, updates, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   // A file / folder dropped on the window: the preload read its path from the File object (page script
   // cannot fabricate one) and reports it here, so the open that follows passes the gate.
   ipcMain.on('app:vouchPath', (e, abs: unknown) => void (trustedSender(e) && gate.vouch(abs)));

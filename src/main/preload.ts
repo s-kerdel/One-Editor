@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
 import { terminalBridge } from './terminal-bridge';
 import { vaultBridge } from './vault-bridge';
 import { webServerBridge } from './web-server-bridge';
+import { updateCheckBridge } from './update-check-bridge';
 
 const CHANNELS = new Set(['fs:events', 'app:openRequest', 'app:closeRequest', 'git:changed', 'settings:changed', 'app:navigate']);
 // The frame main created this window with (webPreferences.additionalArguments): the renderer styles
@@ -52,4 +53,6 @@ contextBridge.exposeInMainWorld('secEditBridge', {
   vault: vaultBridge(ipcRenderer),
   // "Start web server" (webserver:* channels, validated in main/web-server.ts).
   webServer: webServerBridge(ipcRenderer),
+  // Opt-in "Security updates" check (updates:* channels, validated in main/update-check.ts).
+  updates: updateCheckBridge(ipcRenderer),
 });

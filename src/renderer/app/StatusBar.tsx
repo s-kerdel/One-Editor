@@ -10,6 +10,7 @@ import { openWorkspaceMenu } from './Shelf';
 import { gitUi } from '../git/install';
 import { varsStatus } from '../variables/slot';
 import { webServerPill } from '../webserver/slot';
+import { updatesShield } from '../updates/slot';
 import { activityNow } from './ui';
 import { indexDeferred } from '../search/demand';
 import { startIndexing } from '../search';
@@ -24,6 +25,7 @@ export function StatusBar() {
   const GitBranch = gitUi.value?.Branch; // lazy git chunk; after the save state so nothing shifts when it appears
   const Vars = varsStatus.value; // env / target pills (lazy variables chunk), before the spacer: nothing shifts
   const WebServer = webServerPill.value; // ":4317" while the web server runs (desktop, lazy chunk)
+  const Updates = updatesShield.value; // shield, only with security findings (desktop, opt-in, lazy chunk)
 
   return (
     <footer class="se-status">
@@ -55,6 +57,7 @@ export function StatusBar() {
       {GitBranch && <GitBranch />}
       {Vars && <Vars />}
       {WebServer && <WebServer />}
+      {Updates && <Updates />}
       <span class="se-status-spacer" />
       {/* After the spacer: it absorbs the width, so nothing else moves while this comes and goes. */}
       {activityNow.value && (

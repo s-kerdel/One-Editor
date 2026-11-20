@@ -4,7 +4,7 @@ import { DEFAULT_SETTINGS } from '@shared/api';
 import { normalizeKey } from './commands';
 import { TERMINAL_SECTION, TERMINAL_SETTING_DEFS } from '../terminal/settings';
 
-export type SectionId = 'appearance' | 'editor' | 'files' | 'search' | 'formatting' | 'links' | 'attachments' | 'preview' | 'export' | 'variables' | 'terminal' | 'webserver' | 'shortcuts';
+export type SectionId = 'appearance' | 'editor' | 'files' | 'search' | 'formatting' | 'links' | 'attachments' | 'preview' | 'export' | 'variables' | 'terminal' | 'webserver' | 'updates' | 'shortcuts';
 
 export interface SectionDef {
   id: SectionId;
@@ -29,6 +29,8 @@ export const SECTIONS: SectionDef[] = [
   { ...TERMINAL_SECTION },
   // Settings.tsx shows the live server state + Start / Stop above the rows (src/renderer/webserver).
   { id: 'webserver', title: 'Browser mode', icon: 'globe', blurb: 'Open this folder in a web browser: on this computer, or from other devices on your network.', desktopOnly: true },
+  // Settings.tsx shows the last check + "Check now" + what is sent above the row (src/renderer/updates).
+  { id: 'updates', title: 'Security updates', icon: 'shield', blurb: 'Tells you when this build needs a rebuild: a newer Electron patch, a known vulnerability, end of support.', desktopOnly: true },
   { id: 'shortcuts', title: 'Keyboard shortcuts', icon: 'keyboard' },
 ];
 
@@ -828,6 +830,17 @@ const defs: Draft[] = [
         { v: 'lan', label: 'Network (LAN)' },
       ],
     },
+    desktopOnly: true,
+  },
+  // ---- Security updates (opt-in; main reads it before every check: src/main/update-check.ts) ----
+  {
+    key: 'updates.check',
+    section: 'updates',
+    label: 'Check for security updates',
+    description: 'Off: nothing is sent. On: asks endoflife.date and api.osv.dev, at most once a week.',
+    keywords: ['security', 'update', 'electron', 'chromium', 'vulnerability', 'cve', 'patch', 'outdated', 'osv', 'privacy', 'network'],
+    default: false,
+    control: { type: 'toggle' },
     desktopOnly: true,
   },
 ];

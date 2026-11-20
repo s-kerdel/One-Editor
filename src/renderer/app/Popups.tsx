@@ -42,6 +42,13 @@ if ((globalThis as { secEditBridge?: { webServer?: unknown } }).secEditBridge?.w
     (err) => console.warn('[webserver] failed to load', err),
   );
 
+// Desktop "Security updates" (opt-in check, status-bar shield): same pattern, zero startup bytes but the slot.
+if ((globalThis as { secEditBridge?: { updates?: unknown } }).secEditBridge?.updates)
+  void import('../updates/updates-ui').then(
+    (m) => m.install(),
+    (err) => console.warn('[updates] failed to load', err),
+  );
+
 // ---- file actions behind a dialog / menu ----
 
 export async function deletePathsNow(paths: string[]) {

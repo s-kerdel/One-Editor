@@ -16,6 +16,8 @@ import { lazyComponent } from './lazy';
 
 // Settings → Browser mode: live server state + start / stop (the desktop-only web-server-ui chunk).
 const WebServerPanel = lazyComponent(() => import('../webserver/web-server-ui').then((m) => m.SettingsPanel));
+// Settings → Security updates: last check, "Check now", what is sent (the desktop-only updates-ui chunk).
+const UpdatesPanel = lazyComponent(() => import('../updates/updates-ui').then((m) => m.SettingsPanel));
 /** Desktop-only sections (Browser mode) do not exist in the browser build. */
 const visibleSections = () => (app.backend.kind === 'electron' ? SECTIONS : SECTIONS.filter((sec) => !sec.desktopOnly));
 
@@ -24,7 +26,7 @@ let pendingSection: SectionId | null = null;
 export const requestSection = (id: SectionId) => void (pendingSection = id);
 
 // Icons only this lazily loaded chunk draws (see addIcons).
-addIcons({ history: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8|M3 3v5h5|M12 7v5l4 2', monitor: 'M3 4h18v12H3z|M8 20h8|M12 16v4', keyboard: 'M2 6h20v12H2z|M6 10h.01|M10 10h.01|M14 10h.01|M18 10h.01|M7 14h10', printer: 'M6 9V3h12v6|M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2|M6 14h12v7H6z', globe: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z|M2 12h20|M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z' });
+addIcons({ shield: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z|M12 8v4|M12 16h.01', history: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8|M3 3v5h5|M12 7v5l4 2', monitor: 'M3 4h18v12H3z|M8 20h8|M12 16v4', keyboard: 'M2 6h20v12H2z|M6 10h.01|M10 10h.01|M14 10h.01|M18 10h.01|M7 14h10', printer: 'M6 9V3h12v6|M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2|M6 14h12v7H6z', globe: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z|M2 12h20|M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z' });
 
 type Values = Record<string, unknown>;
 
@@ -534,6 +536,7 @@ export function SettingsOverlay() {
                   <h3>{sec.title}</h3>
                   {sec.blurb && <p class="se-set-blurb">{sec.blurb}</p>}
                   {sec.id === 'webserver' && <WebServerPanel />}
+                  {sec.id === 'updates' && <UpdatesPanel />}
                   {rows.map((def, i) => (
                     <>
                       {def.group && def.group !== rows[i - 1]?.group && <h4 class="se-set-group">{def.group}</h4>}
