@@ -23,6 +23,7 @@ import { loadClassic } from './app/classic-loader';
 import { installOverview, preloadOverview } from './overview';
 import { installTerminal } from './terminal/install';
 import { installGitLazy } from './git/install';
+import { installNav } from './nav/install';
 
 const marks: Record<string, number> = { start: performance.now() };
 const mark = (k: string) => (marks[k] = Math.round(performance.now() * 10) / 10);
@@ -60,6 +61,7 @@ async function boot() {
   installOverview();
   installTerminal(); // desktop shell panel; everything but two key bindings loads on idle / first use
   installGitLazy(); // Source control pill + slots; the git chunk loads on idle
+  installNav(); // Go back / forward: keys + mouse side buttons; the recorder loads on idle
   // ---- /feature modules ----
 
   // Already in flight since module start when classic was the saved style: no half-drawn sidebar.

@@ -247,6 +247,8 @@ export interface BackendApi {
   openExternal(url: string): Promise<void>;
   /** "Developer: Process explorer" (shared/processes.ts): a snapshot while open, 'close' when closed. */
   processes?(req: import('./processes').ProcRequest): Promise<import('./processes').ProcSnapshot | boolean>;
+  /** Electron: mouse side buttons / keyboard browser keys that arrive as a window `app-command` (Windows). */
+  onNavCommand?(cb: (dir: import('./nav').NavDir) => void): () => void;
   /** Paths the app was asked to open by a second instance (Electron). Launch-time paths come via bootstrap(). */
   onOpenRequest(cb: (absPaths: string[]) => void): () => void;
 

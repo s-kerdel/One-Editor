@@ -36,7 +36,8 @@ export interface EditorController {
   getTopLine(): number;
   scrollToLine(line: number): void;
   onChange(cb: (path: string, content: string) => void): () => void;
-  onCursor(cb: () => void): () => void;
+  /** `edited`: the move came with a document change (typing, undo, format), not a pure cursor move. */
+  onCursor(cb: (edited?: boolean) => void): () => void;
   onScroll(cb: (topLine: number) => void): () => void;
 
   // ---- optional capabilities (feature modules must feature-detect) ----
@@ -142,6 +143,8 @@ export type AppEvents = {
   'binary:changed': (path: string) => void;
   /** openFile(path, reveal) on a viewer doc (PDF page), for a viewer that is already showing it. */
   'viewer:reveal': (path: string, target: RevealTarget) => void;
+  /** A viewer doc (PDF) now shows this 1-based page (scrolling included) — navigation history follows it. */
+  'viewer:page': (path: string, page: number) => void;
 };
 
 class App {
@@ -203,6 +206,11 @@ class App {
   /** Desktop only (set by terminal/install): paste a shell code block into the active / a new terminal,
    *  without pressing Enter unless asked. Editor / preview draw "Run in terminal" when this exists. */
   runInTerminal?: (code: string, opts?: { lang?: string | null; pressEnter?: boolean }) => Promise<boolean>;
+
+  /** Go back / forward (../nav, set once its chunk is in; feature-detect): the next move — cursor or PDF page —
+   *  is a navigation and gets its own history entry, however short. File switches and jumps of more
+   *  than ~10 lines are recorded without it. */
+  markNavigation?: () => void;
 
   /** {{variables}} (../variables): render hook + copy / run with resolved values. Set by the editor chunk
    *  (actions load the variables chunk on demand); feature-detect. */

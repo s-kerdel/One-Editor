@@ -37,6 +37,9 @@
 | Move | Drag the file onto a folder |
 | Close tab | `Ctrl+W`, **double-click the tab name**, middle-click the tab, or its × |
 | Switch tabs | `Ctrl+Tab` (most recently used first) |
+| **Go back / forward** | `Alt+←` / `Alt+→` (macOS: `Cmd+[` / `Cmd+]`), or the **mouse side buttons** anywhere in the window |
+
+**Go back returns to where you were**: the previous file (reopened if you closed it), or the spot before a big jump (find, go to line, outline, a click far away). PDFs go back to the page before a link or a typed page. Typing and small cursor moves are not steps.
 
 ### Sidebar styles
 

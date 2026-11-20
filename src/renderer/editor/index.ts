@@ -79,7 +79,7 @@ const foldMarker = (open: boolean) => {
 export function createEditor(parent: HTMLElement): EditorController {
   const docs = new Map<string, DocRecord>();
   const changeCbs = new Set<(p: string, c: string) => void>();
-  const cursorCbs = new Set<() => void>();
+  const cursorCbs = new Set<(edited?: boolean) => void>();
   const scrollCbs = new Set<(l: number) => void>();
   const langCbs = new Set<(p: string) => void>();
   /** Per-doc language overrides (`languages.ts` ids); absent = by extension. */
@@ -177,7 +177,7 @@ export function createEditor(parent: HTMLElement): EditorController {
 
   const updateListener = EditorView.updateListener.of((u) => {
     if (u.docChanged && current) notifyChange(current, u.state);
-    if (u.selectionSet || u.docChanged) cursorCbs.forEach((cb) => cb());
+    if (u.selectionSet || u.docChanged) cursorCbs.forEach((cb) => cb(u.docChanged));
   });
 
   // Right-click menu (shell context menu); markdown items only in markdown views.

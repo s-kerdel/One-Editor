@@ -55,7 +55,7 @@ export class PdfSession {
         const a = (e.target as HTMLElement | null)?.closest?.('a');
         if (!a || !container.contains(a)) return;
         const kind = classifyLink(a.getAttribute('href'));
-        if (kind === 'internal') return;
+        if (kind === 'internal') return void app.markNavigation?.(); // Go back returns to the page with the link
         e.preventDefault();
         e.stopPropagation();
         if (kind === 'external') void app.backend.openExternal(a.href);
@@ -141,6 +141,8 @@ export class PdfSession {
       this.remember();
     });
     bus.on('pagechanging', () => this.remember());
+    // Navigation history follows the page (it records a jump only after markNavigation / a #page reveal).
+    bus.on('pagechanging', (e: { pageNumber: number }) => app.events.emit('viewer:page', this.path, e.pageNumber));
     bus.on('updatefindmatchescount', (e: { matchesCount: { current: number; total: number } }) => {
       this.find.value = { ...this.find.value, current: e.matchesCount.current, total: e.matchesCount.total };
     });

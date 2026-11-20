@@ -23,6 +23,7 @@ import { VaultService, registerVaultIpc } from './vault';
 import { registerGpuIpc } from './gpu';
 import { WebServerService, childEnv, lanAddresses, registerWebServerIpc, spawnCli } from './web-server';
 import { WEB_SERVER_CHANNELS } from '../shared/web-server';
+import { NAV_CHANNEL, navFromAppCommand } from '../shared/nav';
 import os from 'node:os';
 import { createRelaunch, frameOf, frameWindowOptions, initialOverlay, isDarkColor, parseOverlay, rememberOverlay, type TitleBarCache, type WindowFrame } from './frame';
 
@@ -354,6 +355,15 @@ function main() {
     w.on('move', queueSave);
     w.on('maximize', queueSave);
     w.on('unmaximize', queueSave);
+
+    // Mouse side buttons (and keyboard browser keys) on Windows: the renderer steps its navigation history.
+    // The same press may also reach it as a DOM mouse event; it de-duplicates (shared/nav.ts).
+    w.on('app-command', (e, cmd) => {
+      const dir = navFromAppCommand(cmd);
+      if (!dir || w.isDestroyed()) return;
+      e.preventDefault();
+      w.webContents.send(NAV_CHANNEL, dir);
+    });
 
     // Minimised / hidden: let Chromium throttle the page (no frames for a blinking caret, timers
     // ≥ 1 s, document.hidden → the search feeder pauses) and hold the folder poller of WSL / network

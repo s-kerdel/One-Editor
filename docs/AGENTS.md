@@ -26,6 +26,7 @@ browser mode served by a local Node server. Both share one renderer.
 | `src/main/web-server*.ts`, `src/shared/web-server.ts`, `src/renderer/webserver/` ("Start web server": browser mode for the open folder as a child process, desktop only; `webserver/slot.ts` is the status-bar slot, the rest is the lazy `web-server-ui` chunk; Settings → Browser mode) | **shell** |
 | `src/renderer/whitespace/` (trailing whitespace: paste trim via CodeMirror's `clipboardInputFilter`, trim on save through format's `beforeSave` hook in `src/format/install.ts`, the `editor.trimWhitespace` command; editor chunk only) | **variables** |
 | `src/renderer/pdf/` (PDF viewer: lazy chunk `PdfView` on pdf.js's `PDFViewer`; `engine.ts` is the only place documents are opened — security options live there; `model.ts` pure helpers; pdf.js data assets copied by `vite.config.ts` → `pdfjs/`; the worker gets `PDF_WORKER_CSP` from `src/shared/pdf.ts` in `main.ts` / `server.ts`) | **pdf** |
+| `src/renderer/nav/`, `src/shared/nav.ts` (Go back / forward: `nav/install.ts` is the startup stub — two key bindings, mouse side buttons, ~0.4 kB gzip; `nav/impl.ts` = recorder + restore, lazy on idle; `nav/history.ts` = the pure stack) | **nav** |
 | `tests/unit/<area>/`, `tests/e2e/<area>*.spec.ts` | the area's owner |
 
 ### Shared files (integration points)
@@ -78,6 +79,16 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   `binary:changed` (no read). Bytes come through the workspace file URL (`fileUrl`), never an RPC. Keys a focused
   widget must keep from the global keymap can also use `addGlobalKeyFilter()` (stackable; the viewer's `Ctrl+±/F/G/0`).
   PDF text is **not** indexed (no search / OCR) — by decision.
+- Navigation history (nav, Go back / Go forward): recorded centrally — a file switch (`active:changed`, so every
+  `app.openFile` caller is covered) and a cursor jump of more than 10 lines that is not an edit (the editor's
+  `onCursor(edited)`) each make an entry; typing and small moves update the current one; jumps < 350 ms apart coalesce.
+  **Don't patch callers.** Only if your feature makes a deliberate move those rules can't see (a short jump, a page of a
+  viewer doc) call `app.markNavigation?.()` right before it (valid 1 s, feature-detect: set when the chunk is in).
+  Viewer docs report their page with `app.events.emit('viewer:page', path, page)`; an unmarked page change is scrolling.
+  Inputs all end in `go(dir, source)` (`nav/impl.ts`), de-duplicated in `shared/nav.ts`: on Windows one side-button press
+  arrives as a DOM mouse event **and** a BrowserWindow `app-command` (main → `app:navigate` → `backend.onNavCommand`).
+  The history is per window (sessionStorage `sec-edit-nav:<root>`, 50 entries), not in the session file.
+  E2E handle: `window.__secEditNav` = `{ history, go }`.
 - Terminal (desktop only): `app.runInTerminal?.(code, { lang })` pastes a shell code block into the terminal
   (never presses Enter by default) — feature-detect it, it is unset in the browser. `isRunnableFence(lang)` from
   `src/renderer/terminal/run.ts` (dependency-free) says which fences get a "Run in terminal" button.
@@ -121,6 +132,7 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
 | knowledge | `Mod-Alt-o` outline, `Mod-Alt-l` backlinks, `Mod-Alt-g` graph |
 | git | `Mod-Shift-g` Source control panel, `Alt-F5` / `Shift-Alt-F5` next / previous change; pane-local `Mod-Enter` commit; diff view `F7` / `Shift-F7`, `Esc` |
 | overview | `Mod-Alt-b` toggle file overview (right sidebar) |
+| nav | `Alt-ArrowLeft` / `Alt-ArrowRight` go back / forward (macOS: `Mod-[` / `Mod-]`); mouse side buttons (`button` 3 / 4, window capture, not a key). **Precedence:** global, so they beat CodeMirror's default `Alt-ArrowLeft/Right` (`cursorSyntaxLeft/Right`; on macOS `Mod-[` / `Mod-]` = indent less / more) as in VS Code — those stay in the palette ("Editor: Move cursor to syntax node start / end") and on `Tab` / `Shift-Tab`; `Shift-Alt-ArrowLeft/Right` (select syntax) is untouched. Not in `APP_KEYS_IN_TERMINAL`: in a focused terminal `Alt-←/→` stays readline's word move (the side buttons work there) |
 | pdf (viewer-local, focus inside `.se-pdf` only; beats shell's UI zoom via `addGlobalKeyFilter`) | `Mod-f` find, `Mod-=`/`Mod--`/`Mod-0` + `Ctrl`-wheel zoom, `Mod-g` page box |
 | terminal | ``Mod-` `` toggle / focus / hide panel, ``Mod-Shift-` `` (+ `Mod-Shift-~`) new terminal |
 | terminal (xterm-local, focused terminal only) | `Mod-Shift-c`/`Mod-Shift-v` copy/paste, `Mod-f` find, `Shift-Insert`/`Ctrl-Insert`; Windows also `Ctrl-c` (with a selection) / `Ctrl-v`; macOS `Cmd-c/v/f/a/k` |

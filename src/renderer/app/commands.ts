@@ -69,7 +69,7 @@ export async function runCommand(id: string): Promise<boolean> {
   return true;
 }
 
-const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+export const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
 /** Normalises a KeyboardEvent to "Mod-Shift-p" form (Mod = Ctrl on Win/Linux, Cmd on Mac). */
 export function eventToKey(e: KeyboardEvent): string {

@@ -4,7 +4,7 @@ import { terminalBridge } from './terminal-bridge';
 import { vaultBridge } from './vault-bridge';
 import { webServerBridge } from './web-server-bridge';
 
-const CHANNELS = new Set(['fs:events', 'app:openRequest', 'app:closeRequest', 'git:changed', 'settings:changed']);
+const CHANNELS = new Set(['fs:events', 'app:openRequest', 'app:closeRequest', 'git:changed', 'settings:changed', 'app:navigate']);
 // The frame main created this window with (webPreferences.additionalArguments): the renderer styles
 // by what the window really has, not by the setting (which may have changed until a restart).
 const frame = process.argv.includes('--sec-edit-frame=integrated') ? 'integrated' : 'native';

@@ -4,7 +4,7 @@ import type { EditorView } from '@codemirror/view';
 import type { StateCommand } from '@codemirror/state';
 import { foldAll, unfoldAll, foldCode, unfoldCode } from '@codemirror/language';
 import { gotoLine, openSearchPanel, selectNextOccurrence } from '@codemirror/search';
-import { toggleComment, moveLineUp, moveLineDown, copyLineDown, selectLine } from '@codemirror/commands';
+import { toggleComment, moveLineUp, moveLineDown, copyLineDown, selectLine, cursorSyntaxLeft, cursorSyntaxRight } from '@codemirror/commands';
 import { registerCommands, type Command } from '../app/commands';
 import { app } from '../app/app';
 import { updateSettings } from '../app/settings';
@@ -95,6 +95,9 @@ export function registerEditorCommands(ctx: PaletteContext) {
     cmd('moveLineDown', 'Editor: Move line down', runOn(moveLineDown), { when: any, displayKeys: ['Alt-ArrowDown'] }),
     cmd('copyLineDown', 'Editor: Duplicate line', runOn(copyLineDown), { when: any, displayKeys: ['Shift-Alt-ArrowDown'] }),
     cmd('selectLine', 'Editor: Select line', runOn(selectLine), { when: any }),
+    // Alt-Left / Alt-Right are Go back / Go forward (global, like VS Code): CodeMirror's syntax moves stay reachable here.
+    cmd('cursorSyntaxLeft', 'Editor: Move cursor to syntax node start', runOn(cursorSyntaxLeft), { when: any, keywords: ['bracket', 'block', 'previous'] }),
+    cmd('cursorSyntaxRight', 'Editor: Move cursor to syntax node end', runOn(cursorSyntaxRight), { when: any, keywords: ['bracket', 'block', 'next'] }),
   ];
   off = registerCommands(cmds);
 }

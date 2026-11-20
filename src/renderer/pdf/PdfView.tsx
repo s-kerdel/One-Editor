@@ -151,6 +151,7 @@ export function PdfView({ path }: { path: string }) {
             onBlur={() => setPageText(null)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
+                app.markNavigation?.(); // a typed page is a jump: Go back returns
                 s?.goToPage(Number((e.currentTarget as HTMLInputElement).value));
                 setPageText(null);
                 scrollEl.current?.focus({ preventScroll: true });
