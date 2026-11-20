@@ -9,9 +9,9 @@ import { chromium, type Browser, type Page } from '@playwright/test';
 import { test, expect, fs, path } from './fixture';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const bin = path.join(root, 'release/sec-edit-linux-x64/sec-edit');
-const winZip = path.join(root, 'release/sec-edit-win32-x64.zip');
-const winExe = path.join(root, 'release/sec-edit-win32-x64/sec-edit.exe');
+const bin = path.join(root, 'release/One-linux-x64/one');
+const winZip = path.join(root, 'release/One-win32-x64.zip');
+const winExe = path.join(root, 'release/One-win32-x64/One.exe');
 
 test.skip(process.platform !== 'linux' || !fs.existsSync(bin), 'run `npm run package:linux` first');
 
@@ -123,10 +123,10 @@ test('packaged build: --inspect does not open a debugger on the main process', a
 test('Windows zip contains the exe and app.asar', async () => {
   test.skip(!fs.existsSync(winZip), 'run `npm run package:win` first');
   const list = execFileSync('unzip', ['-l', winZip], { encoding: 'utf8' });
-  expect(list).toContain('sec-edit-win32-x64/sec-edit.exe');
-  expect(list).toContain('sec-edit-win32-x64/resources/app.asar');
+  expect(list).toContain('One-win32-x64/One.exe');
+  expect(list).toContain('One-win32-x64/resources/app.asar');
   // The integrated terminal's node-pty is the only node_modules shipped: unpacked, with the ConPTY binaries.
-  const pty = 'sec-edit-win32-x64/resources/app.asar.unpacked/node_modules/node-pty/';
+  const pty = 'One-win32-x64/resources/app.asar.unpacked/node_modules/node-pty/';
   for (const f of ['lib/index.js', 'lib/worker/conoutSocketWorker.js', 'prebuilds/win32-x64/conpty.node', 'prebuilds/win32-x64/conpty_console_list.node', 'prebuilds/win32-x64/conpty/conpty.dll', 'prebuilds/win32-x64/conpty/OpenConsole.exe']) expect(list).toContain(pty + f);
   for (const line of list.split('\n').filter((l) => l.includes('node_modules'))) expect(line).toMatch(/resources\/app\.asar\.unpacked\/node_modules\/(node-pty\/.*)?$/);
   expect(list).not.toMatch(/node-pty\/(src|deps|build|third_party\/conpty\/[^/]+\/win10)|\.pdb\b|linux|darwin/);

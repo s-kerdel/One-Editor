@@ -1,6 +1,6 @@
 // Builds a ready-to-run desktop package from any OS (no wine needed: exe metadata/icon via resedit).
-//   node scripts/package.mjs win32   → release/sec-edit-win32-x64/sec-edit.exe  + release/sec-edit-win32-x64.zip
-//   node scripts/package.mjs linux   → release/sec-edit-linux-x64/sec-edit      + release/sec-edit-linux-x64.zip
+//   node scripts/package.mjs win32   → release/One-win32-x64/One.exe  + release/One-win32-x64.zip
+//   node scripts/package.mjs linux   → release/One-linux-x64/one       + release/One-linux-x64.zip
 // Ships only the staged app (package.json + dist/) inside app.asar, plus node-pty in app.asar.unpacked.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -29,11 +29,13 @@ const [outDir] = await packager({
   platform,
   arch,
   electronVersion,
-  name: 'sec-edit',
-  executableName: 'sec-edit',
+  // Product name people see (keep in sync with src/shared/brand.ts). The app's internal name stays
+  // "sec-edit" (stage.mjs productName): it names the data folder, so settings and the vault stay put.
+  name: 'One',
+  executableName: platform === 'win32' ? 'One' : 'one',
   appVersion: pkg.version,
   buildVersion: pkg.version,
-  appCopyright: `© ${new Date().getFullYear()} sec-edit`,
+  appCopyright: `© ${new Date().getFullYear()} One`,
   // node-pty must be real files: its .node binaries, ConPTY's OpenConsole.exe and its worker scripts.
   // The web server + the UI it serves are real files too: the start scripts run them with the exe in
   // Node mode (ELECTRON_RUN_AS_NODE), where loading ESM from inside an asar is not reliable.
@@ -43,11 +45,11 @@ const [outDir] = await packager({
   derefSymlinks: true,
   icon: path.join(root, platform === 'win32' ? 'build/icon.ico' : 'build/icon.png'),
   win32metadata: {
-    CompanyName: 'sec-edit',
-    FileDescription: 'sec-edit — Markdown & code editor',
-    ProductName: 'sec-edit',
-    InternalName: 'sec-edit',
-    OriginalFilename: 'sec-edit.exe',
+    CompanyName: 'One',
+    FileDescription: 'One — code, Markdown and PDF editor',
+    ProductName: 'One',
+    InternalName: 'One',
+    OriginalFilename: 'One.exe',
   },
   quiet: true,
 });
@@ -55,7 +57,7 @@ const [outDir] = await packager({
 // Fuses: no NODE_OPTIONS, no --inspect for the packaged app (RunAsNode stays: the web server child needs it).
 // macOS keeps the wire in the framework binary and would need re-signing after the flip: not built here.
 if (platform !== 'darwin') {
-  const exe = path.join(outDir, platform === 'win32' ? 'sec-edit.exe' : 'sec-edit');
+  const exe = path.join(outDir, platform === 'win32' ? 'One.exe' : 'one');
   const fuses = applyFuses(exe);
   console.log(`fuses: ${Object.entries(fuses).map(([k, v]) => `${k}=${v === true ? 'on' : v === false ? 'off' : v}`).join(' ')}`);
 } else console.warn('fuses: not set for darwin (flip them in the Electron Framework binary, then re-sign)');
@@ -66,7 +68,7 @@ if (platform !== 'darwin' && fs.existsSync(locales)) {
   for (const f of fs.readdirSync(locales)) if (!/^en-US\.pak$/.test(f)) fs.rmSync(path.join(locales, f));
 }
 if (platform === 'linux') {
-  fs.copyFileSync(path.join(root, 'build/icon.png'), path.join(outDir, 'sec-edit.png'));
+  fs.copyFileSync(path.join(root, 'build/icon.png'), path.join(outDir, 'one.png'));
   // Browser mode launcher (start-web.sh).
   for (const f of fs.readdirSync(path.join(root, 'build/linux'))) {
     fs.copyFileSync(path.join(root, 'build/linux', f), path.join(outDir, f));

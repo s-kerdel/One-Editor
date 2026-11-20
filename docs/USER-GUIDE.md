@@ -1,4 +1,4 @@
-# sec-edit user guide
+# One user guide
 
 **Open a folder, then edit.** Everything below is optional detail. Jump to what you need.
 
@@ -30,7 +30,7 @@
 
 | Do this | How |
 |---|---|
-| Open a folder | Drag it onto the window, or run `sec-edit.exe C:\notes` |
+| Open a folder | Drag it onto the window, or run `One.exe C:\notes` |
 | Open a file | `Ctrl+P`, type part of the name, `Enter` |
 | New note | `Ctrl+N`, then type its name |
 | Rename / delete | `F2` / `Del` in the file tree |
@@ -97,7 +97,7 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 - `Ctrl+S` saves right away.
 - **Line endings and encoding are kept** as they were (CRLF, BOM, UTF-16, Windows-1252).
 
-### When a file changes outside sec-edit
+### When a file changes outside One
 
 | Your copy | What happens |
 |---|---|
@@ -107,7 +107,7 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 ### Deleting
 
 - Files go to the **Recycle Bin**, not gone forever.
-- If the bin is unavailable, sec-edit asks before deleting permanently.
+- If the bin is unavailable, One asks before deleting permanently.
 
 ### PDF files
 
@@ -621,7 +621,7 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 
 ## 8. Git
 
-**Open a folder that is a git repository, and trust it once.** sec-edit uses **your installed git**, so your login, SSH keys and Windows Credential Manager just work. No git installed? Git features stay hidden (one hint tells you).
+**Open a folder that is a git repository, and trust it once.** One uses **your installed git**, so your login, SSH keys and Windows Credential Manager just work. No git installed? Git features stay hidden (one hint tells you).
 
 ### Trust a folder first
 
@@ -850,7 +850,7 @@ Settings are **global**, not per folder.
 | **Start** | Settings → **Browser mode** → **Start web server**, or palette → **"Start web server"** |
 | **Get the link** | **Copy link** or **Open** in the info box. The status bar pill **🌐 :4317** opens it again |
 | **See it all** | Palette → **"Web server: Show info"** (folder, address, access, limits) |
-| **Stop** | **Stop server**, palette → **"Stop web server"**, or quit sec-edit |
+| **Stop** | **Stop server**, palette → **"Stop web server"**, or quit One |
 
 | Option | Choices |
 |---|---|
@@ -861,8 +861,8 @@ Settings are **global**, not per folder.
 - **What the link opens:** the files of **this folder** (read, change, delete — git included) and the **app settings** you share with the desktop (theme, editor…). **Not** other folders on this computer, not the terminal, not your secrets.
 - **The key stays in that browser tab** (not a cookie, not in image addresses). A new tab needs the link again. **Open** starts the browser with a one-time link.
 - **Network (LAN) is opt-in, and asked every time:** anyone on your network with the link gets the above. It is plain HTTP: trusted networks only, not public Wi-Fi.
-- **Windows:** the first network start shows a **firewall prompt** for sec-edit. Allow **Private networks** only.
-- **Nothing starts on its own.** Opening another folder stops it. Quitting sec-edit stops it.
+- **Windows:** the first network start shows a **firewall prompt** for One. Allow **Private networks** only.
+- **Nothing starts on its own.** Opening another folder stops it. Quitting One stops it.
 - **Own tabs:** the browser keeps its own open tabs, tree and layout per folder (the first visit starts from the desktop's). The desktop's stay as they were.
 - **Settings are shared:** a change in the browser shows up in the desktop app at once, and the other way round.
 - **Same folder, same port:** the browser remembers things per address (environment pick, recent files). So a folder gets its last port again. If that port is taken, the info box says so: browser state for this folder then starts empty.
@@ -990,7 +990,7 @@ vars:
 
 - **Mark a secret:** list it under `secrets:`, or write `vault` / `vault:<key>` as its value.
 - **Set it:** click its `🔒 name` chip, or copy the command once and type it in the form.
-- **A `vault:<key>` secret is shared between folders.** The first time **another** folder uses one, sec-edit asks: *"This folder wants to use the secret … Allow?"* Say **Allow** only for a folder you trust. Asked once per folder. Plain `vault` secrets belong to their folder and are never asked about.
+- **A `vault:<key>` secret is shared between folders.** The first time **another** folder uses one, One asks: *"This folder wants to use the secret … Allow?"* Say **Allow** only for a folder you trust. Asked once per folder. Plain `vault` secrets belong to their folder and are never asked about.
 - **Browser mode keeps secrets in memory** on purpose: they never reach the server or a file. Linux without a keyring does the same.
 
 ### Problems
@@ -1029,7 +1029,7 @@ After a paste a small **"Paste as…"** chip appears for a few seconds. Ignore i
 | **Formatting fails** | The message names the syntax error. File types without a formatter say so |
 | **Formatting ignores my settings** | A `.prettierrc` or `.editorconfig` in the folder wins |
 | **Zoom keys do nothing** | Browser mode uses the browser's zoom |
-| **Phone / other PC cannot open the web server link** | Settings → Browser mode → **Network (LAN)**, then use the **network** address (not `127.0.0.1`), same Wi-Fi. Windows: allow sec-edit through the firewall (Windows Security → Firewall → Allow an app) |
+| **Phone / other PC cannot open the web server link** | Settings → Browser mode → **Network (LAN)**, then use the **network** address (not `127.0.0.1`), same Wi-Fi. Windows: allow One through the firewall (Windows Security → Firewall → Allow an app) |
 | **"Port … is in use"** (web server) | Leave **Port** empty (automatic), or pick another one |
 | **I want the Windows title bar back** | Settings → Appearance → **Window frame: Native** → **Restart now** |
 | **Can't drag the window** | Drag the **empty** part of the tab strip (not a tab or button) |

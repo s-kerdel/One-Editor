@@ -47,6 +47,6 @@ describe('Electron fuses of the packaged app', () => {
   it('package.mjs applies them to the Windows and Linux executables', () => {
     const pkg = fs.readFileSync(path.resolve(__dirname, '../../../scripts/package.mjs'), 'utf8');
     expect(pkg).toMatch(/applyFuses\(exe\)/);
-    expect(pkg).toMatch(/platform === 'win32' \? 'sec-edit\.exe' : 'sec-edit'/);
+    expect(pkg).toMatch(/platform === 'win32' \? 'One\.exe' : 'one'/);
   });
 });

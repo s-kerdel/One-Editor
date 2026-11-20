@@ -1,4 +1,6 @@
-# sec-edit
+# One
+
+*(formerly sec-edit; settings, sessions and secrets stay in the `sec-edit` data folder.)*
 
 **A fast Markdown + code editor that works directly on your folders.** Obsidian-style notes, but **no vaults and no sync**: open any folder and edit.
 
@@ -25,22 +27,22 @@ npm run package:win
 explorer.exe release      # opens the folder in Windows Explorer
 ```
 
-Drag **`sec-edit-win32-x64.zip`** to a Windows drive, e.g. `C:\Apps`.
+Drag **`One-win32-x64.zip`** to a Windows drive, e.g. `C:\Apps`.
 
-**3. Unzip anywhere and run `sec-edit.exe`.**
+**3. Unzip anywhere and run `One.exe`.**
 
 > **SmartScreen warning?** The exe is unsigned. Click **More info → Run anyway** (once).
 
 **4. Optional: right-click menu.** Double-click **`Add to Explorer menu.cmd`** in the app folder.
 
-- Adds **"Open with sec-edit"** to files and folders.
+- Adds **"Open with One"** to files and folders.
 - Current user only, no admin. Undo with `Remove from Explorer menu.cmd`.
 
 ### Open a folder or file
 
 ```bat
-sec-edit.exe C:\notes            :: open a folder
-sec-edit.exe C:\notes\todo.md    :: open a file (inside its folder)
+One.exe C:\notes                 :: open a folder
+One.exe C:\notes\todo.md         :: open a file (inside its folder)
 ```
 
 - A second launch **hands the path to the running window**.
