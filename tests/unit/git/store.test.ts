@@ -81,6 +81,42 @@ describe('GitStore', () => {
     expect(f.calls.status).toBe(2);
   });
 
+  it('a pull that rejects does not pin its rejection: the next overlapping refreshNow() pulls again', async () => {
+    let gate: Promise<void> | null = null;
+    let calls = 0;
+    // Call 1: a malformed delta makes apply() throw outside the store's try (the run rejects).
+    const replies: unknown[] = [{ ok: true, delta: true, version: 1, base: undefined, branch: status().branch, prefix: '', ms: 1, repos: [] }, status(), status({ entries: [{ path: 'b.md', state: 'modified' }] }), status({ entries: [{ path: 'c.md', state: 'modified' }] })];
+    const backend: GitBackend = {
+      async gitStatus() {
+        const r = replies[Math.min(calls++, replies.length - 1)];
+        if (gate) await gate;
+        return r as GitStatusResult;
+      },
+      gitHeadFile: async () => ({ content: null, oid: null }),
+    };
+    const s = new GitStore(backend, { debounceMs: 5 });
+    const hold = () => {
+      let release!: () => void;
+      gate = new Promise((r) => (release = r));
+      return () => ((gate = null), release());
+    };
+    let release = hold();
+    const first = s.refreshNow().catch(() => 'rejected');
+    const second = s.refreshNow(); // overlaps the run that will reject
+    release();
+    expect(await first).toBe('rejected');
+    await expect(second).resolves.toBeUndefined();
+    expect(calls).toBe(2);
+    // Overlap again: a fresh follow-up, not the old rejection.
+    release = hold();
+    void s.refreshNow();
+    const fourth = s.refreshNow();
+    release();
+    await expect(fourth).resolves.toBeUndefined();
+    expect(calls).toBe(4);
+    expect(s.marks.value.file('c.md')?.state).toBe('modified');
+  });
+
   it('identical results do not re-render (signal value kept)', async () => {
     const f = fakeBackend([status({ ms: 3 }), status({ ms: 9 })]);
     const s = new GitStore(f.backend);

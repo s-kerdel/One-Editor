@@ -76,7 +76,14 @@ export class GitStore {
     // (switching branches right after a save then skipped the uncommitted-changes warning).
     // Wait for it, then pull: the caller always gets a status from after its own action.
     // Everyone asking during that run shares ONE follow-up (single-flight).
-    if (this.running) return (this.followUp ??= this.running.then(() => ((this.followUp = null), this.pull())));
+    // Reset on either outcome: a run that rejected must not pin its rejection for every later caller.
+    if (this.running)
+      return (this.followUp ??= this.running
+        .catch(() => {})
+        .then(() => {
+          this.followUp = null;
+          return this.pull();
+        }));
     return this.pull();
   }
   private followUp: Promise<void> | null = null;
@@ -99,7 +106,13 @@ export class GitStore {
         r = { ok: false, reason: 'error', message: String(err?.message ?? err) };
       }
       if (gen !== this.gen || !this.enabled) return;
-      if (r.ok && 'delta' in r && r.base !== this.version()) r = await this.backend.gitStatus({}); // out of step: whole list
+      if (r.ok && 'delta' in r && r.base !== this.version()) {
+        try {
+          r = await this.backend.gitStatus({}); // out of step: whole list
+        } catch (err: any) {
+          r = { ok: false, reason: 'error', message: String(err?.message ?? err) };
+        }
+      }
       if (gen === this.gen && this.enabled) this.apply(r);
     })().finally(() => {
       this.running = null;
