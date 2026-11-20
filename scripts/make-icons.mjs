@@ -1,6 +1,6 @@
 // Renders the icon SVGs to PNGs with Playwright's Chromium and packs a multi-size Windows .ico
 // (PNG-compressed entries, supported since Vista). Run after editing an SVG: npm run icons
-// Small sizes get their own artwork (bigger glyph, no detail) — a scaled-down master turns to mush at 16 px.
+// Small sizes get their own pixel-snapped artwork — a scaled-down master turns to mush at 16 px.
 import { chromium } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,9 +8,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (f) => fs.readFileSync(path.join(root, 'build', f), 'utf8');
-const art = { master: read('icon.svg'), s32: read('icon-32.svg'), small: read('icon-small.svg') };
-const svgFor = (s) => (s <= 24 ? art.small : s <= 32 ? art.s32 : art.master);
-const sizes = [16, 24, 32, 48, 64, 128, 256];
+const master = read('icon.svg');
+// Pixel-snapped art per small size (build/icon-<size>.svg: whole-pixel stem and cuts, the master's proportions).
+// Windows picks the exact size when the .ico has it: 100/125/150/200 % taskbars and lists stay sharp.
+const svgFor = (s) => (fs.existsSync(path.join(root, 'build', `icon-${s}.svg`)) ? read(`icon-${s}.svg`) : master);
+const sizes = [16, 20, 24, 30, 32, 36, 40, 48, 64, 128, 256];
 const browser = await chromium.launch();
 const page = await browser.newPage();
 const pngs = {};
@@ -40,5 +42,5 @@ sizes.forEach((s, i) => {
 fs.writeFileSync(path.join(root, 'build/icon.ico'), Buffer.concat([header, dir, ...sizes.map((s) => pngs[s])]));
 fs.writeFileSync(path.join(root, 'build/icon.png'), pngs[512]);
 fs.writeFileSync(path.join(root, 'src/renderer/public/icon.png'), pngs[256]);
-fs.copyFileSync(path.join(root, 'build/icon-small.svg'), path.join(root, 'src/renderer/public/favicon.svg')); // browser tab
+fs.copyFileSync(path.join(root, 'build/icon-16.svg'), path.join(root, 'src/renderer/public/favicon.svg')); // browser tab (16 px grid: crisp at 1x and 2x)
 console.log('icons → build/icon.ico, build/icon.png, src/renderer/public/icon.png, src/renderer/public/favicon.svg');

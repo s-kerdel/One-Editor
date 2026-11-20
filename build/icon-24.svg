@@ -1,0 +1,2 @@
+<!-- One mark, 24 px: pixel-snapped (stem 3 px), master proportions. Generated; edit, then: npm run icons -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="0" y="0" width="24" height="24" rx="5" fill="#00A3BA"/><polygon points="11,5 14,5 14,14.23 15,13 18.86,13 14,19 11,19 11,9.77 10,11 6.14,11" fill="#ffffff"/></svg>

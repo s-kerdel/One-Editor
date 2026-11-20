@@ -1,2 +1,2 @@
-<!-- One mark (25–32 px: heavier stroke): a point-symmetric '1' — constant stroke, 51° diagonals, flat cuts, white on teal. Edit, then: npm run icons -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect x="2" y="2" width="252" height="252" rx="44" fill="#00A3BA"/><polygon points="103,30 153,30 153,146.5 164.8,132 229.1,132 153,226 103,226 103,109.5 91.2,124 26.9,124" fill="#ffffff"/></svg>
+<!-- One mark, 32 px: pixel-snapped (stem 4 px), master proportions. Generated; edit, then: npm run icons -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="0" y="0" width="32" height="32" rx="6" fill="#00A3BA"/><polygon points="14,6 18,6 18,19.64 20.14,17 25.29,17 18,26 14,26 14,12.36 11.86,15 6.71,15" fill="#ffffff"/></svg>
