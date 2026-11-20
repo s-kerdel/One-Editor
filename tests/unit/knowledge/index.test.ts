@@ -153,6 +153,28 @@ describe('incremental updates', () => {
     expect(idx.files().some((f) => f.startsWith('notes/'))).toBe(false);
   });
 
+  // setFiles registers a new note's aliases; the update that follows must not register them again.
+  it('drops aliases of a note added through setFiles before its first update', () => {
+    const idx = new KnowledgeIndex();
+    idx.setFiles(['a.md']);
+    idx.update('a.md', '[[Ghost]]');
+    idx.backlinks('a.md');
+    idx.setFiles(['a.md', 'n.md']);
+    idx.update('n.md', '---\naliases: [Ghost]\n---\n# new');
+    idx.remove('n.md');
+    expect(idx.outgoing('a.md').map((o) => o.path)).toEqual([null]);
+    expect(idx.resolve('Ghost')).toBeNull();
+
+    const j = new KnowledgeIndex();
+    j.setFiles(['a.md']);
+    j.update('a.md', '[[Ghost]]');
+    j.backlinks('a.md');
+    j.setFiles(['a.md', 'n.md']);
+    j.update('n.md', '---\naliases: [Ghost]\n---\n# new');
+    j.update('n.md', '# alias removed');
+    expect(j.outgoing('a.md').map((o) => o.path)).toEqual([null]);
+  });
+
   it('incremental patches match a full rebuild', () => {
     const idx = build(ws);
     idx.backlinks('README.md'); // force derived state so later updates take the patch path

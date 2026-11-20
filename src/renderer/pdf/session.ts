@@ -71,13 +71,14 @@ export class PdfSession {
     const gen = ++this.generation;
     this.loading.value = true;
     this.error.value = null;
+    let task: Awaited<ReturnType<typeof openPdfDocument>> | undefined;
     try {
       const { lib, viewer: V } = await loadPdfjs();
       if (this.disposed || gen !== this.generation) return;
       if (!this.viewer) this.createViewer(lib, V);
       const data = await readPdfBytes(this.path);
       if (this.disposed || gen !== this.generation) return;
-      const task = await openPdfDocument(data);
+      task = await openPdfDocument(data);
       const doc = await task.promise;
       if (this.disposed || gen !== this.generation) {
         void task.destroy();
@@ -91,6 +92,8 @@ export class PdfSession {
       this.links!.setDocument(doc, null);
       void old?.destroy(); // a reload: the previous document (and its worker) go away now
     } catch (err) {
+      // A rejected open (password, corrupt, half-written file) still owns a pdf.js worker: only destroy() ends it.
+      if (task && task !== this.task) void task.destroy();
       if (this.disposed || gen !== this.generation) return;
       const e = err as Error & { name?: string };
       this.error.value = e?.name === 'PasswordException' ? 'This PDF is password protected.' : e?.name === 'InvalidPDFException' ? 'This file is not a valid PDF.' : (e?.message ?? String(err));

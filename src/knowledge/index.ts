@@ -789,8 +789,10 @@ export class KnowledgeIndex implements KnowledgeApi {
           for (const src of d.unresolvedBy.get(a) ?? []) affected.add(src);
           for (const other of l ?? []) for (const src of d.incoming.get(other) ?? []) affected.add(src);
         }
-        if (l) l.push(path);
-        else d.aliases.set(a, [path]);
+        // Guarded: a pending file add may already have registered this alias (applyFileChanges, then patch).
+        if (l) {
+          if (!l.includes(path)) l.push(path);
+        } else d.aliases.set(a, [path]);
       }
     }
   }
