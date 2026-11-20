@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Page } from '@playwright/test';
 import { test, expect, RENDERER_DIR } from './harness';
+import { BROWSER_CHUNK } from '../../src/server/server';
 // @ts-expect-error plain .mjs helper without types
 import { startupAssets, startupTotals } from '../perf/bundle-report.mjs';
 
@@ -46,6 +47,9 @@ function closure(names: string[]): Set<string> {
 
 const chunks = (re: RegExp) => fs.readdirSync(path.join(RENDERER_DIR, 'assets')).filter((f) => re.test(f));
 
+/** Browser mode's transport chunk (platform/web.ts), looked up the way the server does: Vite's manifest. */
+const browserChunk = (): string => JSON.parse(fs.readFileSync(path.join(RENDERER_DIR, '.vite/manifest.json'), 'utf8'))[BROWSER_CHUNK]?.file ?? '';
+
 function trackRequests(page: Page): string[] {
   const urls: string[] = [];
   page.on('request', (r) => {
@@ -69,6 +73,29 @@ test('startup bundle stays within budget and contains no lazy feature code', () 
   for (const marker of ['se-search-summary', 'se-palette-input', 'se-kn-', 'sec-edit-search', 'Document changed while formatting', 'se-settings', 'se-menu-item', 'se-welcome', 'se-ov-sec']) {
     expect(startupSrc.includes(marker), `"${marker}" leaked into the startup chunks`).toBe(false);
   }
+  // Browser mode's transport (token, launch code, RPC over fetch, SSE, media HMAC) is a chunk of its own
+  // that only the server's page runs: the desktop's index.html never pulls it in.
+  const web = browserChunk();
+  expect(web, `${BROWSER_CHUNK} has its own chunk`).toMatch(/^assets\/[\w.-]+\.js$/);
+  expect(t.assets.map((a) => a.file), 'browser-mode chunk on the desktop startup path').not.toContain(web);
+  for (const marker of ['x-sec-edit-token', 'sec-edit-token', 'api/launch', 'api/events', 'api/file', '__secEditEvents', 'sec-edit-os', 'mediaKey', 'Math.cbrt']) {
+    expect(startupSrc.includes(marker), `browser-mode code "${marker}" leaked into the startup chunks`).toBe(false);
+  }
+});
+
+test("browser mode: the server's index.html runs the transport chunk before the entry", async ({ page, ws }) => {
+  const web = path.basename(browserChunk());
+  const html = await (await page.request.get(ws.server.origin)).text();
+  const scripts = [...html.matchAll(/<script type="module"[^>]*src="\.\/assets\/([^"]+)"/g)].map((m) => m[1]);
+  // Downloads in parallel with the entry and has installed itself before main.tsx asks for a backend.
+  expect(scripts[0], 'platform/web.ts as the first module script').toBe(web);
+  expect(scripts[1], 'then the entry').toMatch(/^index-.*\.js$/);
+  await ws.open(page);
+  const used = await page.evaluate(() => {
+    const t = (window as any).__secEditTimings as Record<string, number>;
+    return (performance.getEntriesByType('resource') as PerformanceResourceTiming[]).filter((e) => e.startTime < t.ready).map((e) => e.name);
+  });
+  expect(used.map(assetName), 'transport chunk fetched before ready').toContain(web);
 });
 
 test('boots fast; only startup + editor chunks are fetched before ready', async ({ page, ws }) => {
@@ -90,7 +117,8 @@ test('boots fast; only startup + editor chunks are fetched before ready', async 
 
   const startup = (startupAssets(RENDERER_DIR) as Array<{ file: string }>).map((a) => path.basename(a.file));
   // The editor is deliberately fetched in parallel with boot (session restore needs it).
-  const allowed = closure([...startup, ...chunks(/^(editor|languages|Welcome)-.*\.(js|css)$/)]);
+  // Browser mode also loads its transport chunk (the server's index.html runs it, see the test above).
+  const allowed = closure([...startup, path.basename(browserChunk()), ...chunks(/^(editor|languages|Welcome)-.*\.(js|css)$/)]);
   for (const f of chunks(/^editor-.*\.css$/)) allowed.add(f);
   const unexpected = early.filter((f) => /\.(js|css)$/.test(f) && !allowed.has(f));
   expect(unexpected, 'chunks requested before ready that are not on the startup path').toEqual([]);

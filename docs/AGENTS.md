@@ -113,7 +113,17 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   refuses `openWorkspace` / `resolvePath` outside its folder, lists no recents, no process list, no `terminal.*` /
   `webserver.*` settings writes. The renderer chunk loads after the idle Popups chunk (zero startup bytes but the slot);
   browser mode has no bridge, so neither commands nor the Settings section (`SectionDef.desktopOnly`) exist there.
-- Browser-mode access (`src/server/server.ts`, `src/renderer/platform/index.ts`): the token travels in the
+- Browser-only renderer code lives in **`src/renderer/platform/web.ts`** (token, launch code, RPC over fetch, SSE,
+  media HMAC via `platform/hmac.ts`): its own chunk, which the desktop never fetches or evaluates (perf.spec checks the
+  startup chunks for its markers). Never import it statically; `platform/index.ts` keeps only sync shims
+  (`fileUrl` / `eventsUrl` / `webToken`), which `web.ts` fills through `installWeb()` as it evaluates. **Contract:**
+  the server finds the chunk in Vite's build manifest (`build.manifest` → `.vite/manifest.json`, key
+  `platform/web.ts`; the manifest is never served) and its index.html runs the chunk as a `<script type="module">`
+  **right before the entry**, plus `modulepreload` for any chunk it imports that index.html doesn't list yet. So it
+  downloads in parallel and is installed before `connectBackend()` runs, with no `import()` hop in front of the
+  bootstrap round trip. Without it (Vite dev server, older build) `connectBackend()` imports the chunk itself.
+  Renaming or moving `web.ts` means updating `BROWSER_CHUNK` in `server.ts`.
+- Browser-mode access (`src/server/server.ts`, `src/renderer/platform/web.ts`): the token travels in the
   `x-sec-edit-token` header only and lives in the tab's sessionStorage — **never a cookie** (cookies ignore ports: every
   127.0.0.1 server would get it) and never in a URL the page shows; index.html is a static shell. Media GETs carry a
   **per-file capability** instead: `fileUrl()` → `/api/file?path=…&m=HMAC(mediaKey, root + path)` (key from `bootstrap()`,

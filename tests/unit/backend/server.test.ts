@@ -4,7 +4,7 @@ import http from 'node:http';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { cspForOrigin, mediaMac, mediaSubject, startServer, type RunningServer } from '../../../src/server/server';
+import { BROWSER_CHUNK, browserChunks, cspForOrigin, mediaMac, mediaSubject, startServer, type RunningServer } from '../../../src/server/server';
 
 let tmp: string;
 let srv: RunningServer;
@@ -70,6 +70,35 @@ describe('server', () => {
     const up = await req('/../../etc/passwd');
     expect(up.body).not.toMatch(/root:/); // the app shell (SPA fallback) or a refusal, never the file
     expect((await req('/..%2f..%2fpackage.json')).status).toBe(403);
+  });
+
+  it("runs browser mode's own chunk before the entry (found in Vite's manifest); the manifest is not served", async () => {
+    const renderer = path.join(tmp, 'renderer');
+    const before = (await req('/')).body;
+    expect(before, 'no manifest: nothing added').not.toMatch(/type="module"|modulepreload/);
+    const manifest = {
+      'main.tsx': { file: 'assets/index-a1.js', isEntry: true, imports: ['_core-c3.js'] },
+      [BROWSER_CHUNK]: { file: 'assets/web-b2.js', isDynamicEntry: true, imports: ['_core-c3.js', '_shared-d4.js', '_bad.js'] },
+      '_core-c3.js': { file: 'assets/core-c3.js' },
+      '_shared-d4.js': { file: 'assets/shared-d4.js', imports: ['_core-c3.js'] },
+      '_bad.js': { file: 'assets/x.js"><script src="//evil.example/a.js' },
+    };
+    await fsp.mkdir(path.join(renderer, '.vite'), { recursive: true });
+    await fsp.writeFile(path.join(renderer, '.vite', 'manifest.json'), JSON.stringify(manifest));
+    try {
+      // Chunks index.html already lists (the entry's static imports) are not repeated; odd names never land.
+      const html = '<script type="module" crossorigin src="./assets/index-a1.js"></script><link rel="modulepreload" crossorigin href="./assets/core-c3.js">';
+      expect(await browserChunks(renderer, html)).toEqual(['assets/web-b2.js', 'assets/shared-d4.js']);
+      const page = (await req('/')).body;
+      expect(page).toContain('<script type="module" crossorigin src="./assets/web-b2.js"></script>');
+      expect(page).toContain('<link rel="modulepreload" crossorigin href="./assets/shared-d4.js">');
+      expect(page).not.toContain('evil.example');
+      expect(page.indexOf('assets/web-b2.js')).toBeLessThan(page.indexOf('</head>'));
+      expect((await req('/.vite/manifest.json')).status).toBe(404);
+      expect((await req('/assets/../.vite/manifest.json')).status).toBe(404);
+    } finally {
+      await fsp.rm(path.join(renderer, '.vite'), { recursive: true, force: true });
+    }
   });
 
   it('rejects foreign Host headers (DNS rebinding)', async () => {

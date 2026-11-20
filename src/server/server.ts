@@ -267,7 +267,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
           if (!Array.isArray(args)) throw new BackendFailure('EINVAL', 'args must be an array');
           const pin = pinned ? PINNED[m[1]] : undefined;
           let result = pin ? await pin(args) : await (service as any)[m[1]](...args);
-          // The renderer signs media URLs with this (platform/index.ts): it arrives with the first round-trip.
+          // The renderer signs media URLs with this (platform/web.ts): it arrives with the first round-trip.
           if (m[1] === 'bootstrap' && result && typeof result === 'object') result = { ...result, mediaKey };
           res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
           res.end(JSON.stringify({ ok: true, result: result ?? null }));
@@ -350,11 +350,68 @@ export function cspForOrigin(html: string, host: string | undefined): string {
   return html.replace(/app:\/\/sec-edit\/(assets\/|theme-boot\.js)/g, (_m, p: string) => (ok ? `http://${host}/${p}` : "'self'"));
 }
 
+/** Browser mode's own renderer chunk (the HTTP transport: token, launch code, SSE, media capability). The
+ *  desktop app never loads it; this server's index.html runs it (see withBrowserChunks). Found in Vite's
+ *  build manifest by source path, never a file-name guess; no manifest (older build) → the entry imports it. */
+export const BROWSER_CHUNK = 'platform/web.ts';
+const chunkCache = new Map<string, { stamp: string; files: string[] }>();
+
+/** The transport chunk's file first, then the chunks it imports that index.html does not list yet. */
+export async function browserChunks(dir: string, html: string): Promise<string[]> {
+  const file = path.join(dir, '.vite', 'manifest.json');
+  let stamp: string;
+  let manifest: Record<string, { file?: unknown; imports?: unknown }>;
+  try {
+    const st = await fsp.stat(file);
+    stamp = `${st.mtimeMs}:${st.size}`;
+    const hit = chunkCache.get(dir);
+    if (hit?.stamp === stamp) return hit.files;
+    manifest = JSON.parse(await fsp.readFile(file, 'utf8'));
+  } catch {
+    return [];
+  }
+  const files: string[] = [];
+  const seen = new Set<string>();
+  const visit = (key: string) => {
+    const c = manifest[key];
+    if (seen.has(key) || typeof c?.file !== 'string' || !/^assets\/[\w.-]+\.js$/.test(c.file)) return;
+    seen.add(key);
+    if (html.includes(`"./${c.file}"`)) return; // already on the startup path, its imports too
+    files.push(c.file);
+    if (Array.isArray(c.imports)) c.imports.forEach((k) => typeof k === 'string' && visit(k));
+  };
+  visit(BROWSER_CHUNK);
+  chunkCache.set(dir, { stamp, files });
+  return files;
+}
+
+/** The transport becomes a module script right before the entry: it downloads in parallel with it and,
+ *  as module scripts run in document order, has installed itself before main.tsx asks for a backend (no
+ *  import() hop in front of the bootstrap round trip). Chunks it needs that index.html does not list yet
+ *  are modulepreloaded after the entry's own. */
+function withBrowserChunks(html: string, files: string[]): string {
+  if (!files.length) return html;
+  const [chunk, ...deps] = files;
+  const insert = (s: string, at: number, tags: string) => (at >= 0 ? s.slice(0, at) + tags + s.slice(at) : s);
+  const entry = html.indexOf('<script type="module"');
+  let out = insert(html, entry >= 0 ? entry : html.indexOf('</head>'), `<script type="module" crossorigin src="./${chunk}"></script>`);
+  if (deps.length) {
+    const last = out.lastIndexOf('<link rel="modulepreload"');
+    out = insert(out, last >= 0 ? out.indexOf('>', last) + 1 : out.indexOf('</head>'), deps.map((f) => `<link rel="modulepreload" crossorigin href="./${f}">`).join(''));
+  }
+  return out;
+}
+
 async function serveStatic(dir: string, url: URL, host: string | undefined, res: http.ServerResponse) {
   let rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html';
   let file = path.resolve(dir, rel);
   if (file !== dir && !file.startsWith(dir + path.sep)) {
     res.writeHead(403).end();
+    return;
+  }
+  // Build metadata (.vite/manifest.json) is for the server, not the page.
+  if (path.relative(dir, file).split(path.sep)[0].toLowerCase() === '.vite') {
+    res.writeHead(404, { 'content-type': 'text/plain' }).end('not found');
     return;
   }
   let data: Buffer;
@@ -375,7 +432,8 @@ async function serveStatic(dir: string, url: URL, host: string | undefined, res:
     // A static shell: no token in it (the renderer brings its own from the link / sessionStorage).
     // sec-edit-os: the *server's* platform (Linux under WSL while the browser runs on Windows) — the UI uses
     // it for path separators and "Trash" vs "Recycle Bin", which are about the backend's file system.
-    const html = cspForOrigin(data.toString('utf8'), host).replace('<head>', `<head><meta name="sec-edit-os" content="${process.platform}">`);
+    const raw = data.toString('utf8');
+    const html = withBrowserChunks(cspForOrigin(raw, host), await browserChunks(dir, raw)).replace('<head>', `<head><meta name="sec-edit-os" content="${process.platform}">`);
     res.writeHead(200, {
       'content-type': MIME['.html'],
       'cache-control': 'no-store',

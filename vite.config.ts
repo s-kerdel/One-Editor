@@ -47,6 +47,8 @@ export default defineConfig({
     sourcemap: false,
     chunkSizeWarningLimit: 4000,
     modulePreload: { polyfill: false },
+    // .vite/manifest.json: the browser-mode server looks up platform/web.ts's chunk in it (index.html runs it first).
+    manifest: true,
     rolldownOptions: {
       output: {
         // app.ts + ui.ts are both startup code: keep them in one chunk. Otherwise a lazy feature that
