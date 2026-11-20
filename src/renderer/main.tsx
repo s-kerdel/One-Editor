@@ -24,6 +24,7 @@ import { installOverview, preloadOverview } from './overview';
 import { installTerminal } from './terminal/install';
 import { installGitLazy } from './git/install';
 import { installNav } from './nav/install';
+import { brandTitle } from '@shared/brand';
 
 const marks: Record<string, number> = { start: performance.now() };
 const mark = (k: string) => (marks[k] = Math.round(performance.now() * 10) / 10);
@@ -44,7 +45,7 @@ async function boot() {
   ui.recentFolders.value = b.recent;
   if (b.workspace) {
     app.workspace.value = b.workspace;
-    document.title = `${b.workspace.name} — sec-edit`;
+    document.title = brandTitle(b.workspace.name);
     applySessionLayout(b.session); // sidebar width etc. before first paint → no layout jump
   }
 

@@ -5,6 +5,7 @@ import { addIcons, Icon } from './icons';
 import './welcome.css';
 import { prettyKey, runCommand, getCommand } from './commands';
 import { openWorkspace } from './documents';
+import { BRAND } from '@shared/brand';
 
 // Icons only this lazily loaded chunk draws (see addIcons).
 addIcons({ history: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8|M3 3v5h5|M12 7v5l4 2', keyboard: 'M2 6h20v12H2z|M6 10h.01|M10 10h.01|M14 10h.01|M18 10h.01|M7 14h10' });
@@ -52,9 +53,21 @@ export function Welcome() {
         <div class="se-welcome-brand">
           {/* Same artwork as the app / taskbar icon (build/icon.svg → npm run icons). */}
           <img class="se-logo" src="./icon.png" alt="" width={56} height={56} draggable={false} />
-          <div>
-            <h1>sec-edit</h1>
-            <p class="se-welcome-sub">{ws ? ws.root : 'Markdown & code, straight from your folders.'}</p>
+          <div class="se-welcome-head">
+            <h1 class="se-brand-lockup" aria-label={ws ? `${BRAND} — ${ws.name}` : BRAND}>
+              <span class="se-brand-name">{BRAND}</span>
+              {ws && (
+                <>
+                  <span class="se-brand-sep" aria-hidden="true">
+                    ::
+                  </span>
+                  <span class="se-brand-slug" title={ws.name}>
+                    {ws.name}
+                  </span>
+                </>
+              )}
+            </h1>
+            <p class="se-welcome-sub">{ws ? ws.root : 'Code, Markdown and PDFs: one editor, straight from your folders.'}</p>
           </div>
         </div>
 

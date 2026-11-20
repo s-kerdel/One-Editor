@@ -4,6 +4,12 @@
 .se-welcome-brand { display: flex; align-items: center; gap: 16px; }
 .se-logo { width: 56px; height: 56px; display: block; flex: none; user-select: none; }
 .se-welcome h1 { margin: 0; font-size: 30px; font-weight: 650; letter-spacing: -0.02em; color: var(--text); }
+/* Brand lockup "One :: folder": the accent `::` reads like a scope operator; a long folder name ellipsizes. */
+.se-welcome-head { min-width: 0; }
+.se-brand-lockup { display: flex; align-items: baseline; min-width: 0; white-space: nowrap; }
+.se-brand-name { flex: none; font-weight: 750; }
+.se-brand-sep { flex: none; margin: 0 0.3em; font-family: var(--font-mono); font-weight: 600; font-size: 0.82em; letter-spacing: -0.12em; color: var(--accent); }
+.se-brand-slug { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 .se-welcome-sub { margin: 2px 0 0; color: var(--text-muted); font-size: 13.5px; word-break: break-all; }
 .se-welcome-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .se-welcome-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 28px; }

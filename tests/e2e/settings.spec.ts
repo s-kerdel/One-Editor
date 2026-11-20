@@ -191,10 +191,10 @@ test('the Settings nav shows the version and build details; Copy puts them on th
   const version = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8')).version as string;
   const build = dlg.getByTestId('settings-build');
   await expect(build).toBeVisible();
-  await expect(build).toContainText(`sec-edit ${version}`);
+  await expect(build).toContainText(`One ${version}`);
   await build.getByRole('button', { name: 'Copy build info' }).click();
   const text = await page.evaluate(() => navigator.clipboard.readText());
-  expect(text).toContain(`sec-edit ${version} (browser)`);
+  expect(text).toContain(`One ${version} (browser)`);
   expect(text).toMatch(/commit \S+/);
   expect(text).toMatch(/Chromium \d+/);
 });

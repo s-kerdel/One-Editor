@@ -1,6 +1,7 @@
 // Shell commands + window-level behaviour (OS drag & drop, open requests, Ctrl-Tab MRU switching).
 import { app } from './app';
 import * as ui from './ui';
+import { brandTitle } from '@shared/brand';
 import { addCommandSource, loadCommandSources, registerCommands } from './commands';
 import { openWorkspace } from './documents';
 import { newNote, openAbsolutePaths } from './fileops';
@@ -100,7 +101,8 @@ function installDrop() {
 function syncTitle() {
   const ws = app.workspace.value;
   const p = app.activePath.value;
-  document.title = [p?.split('/').pop(), ws?.name, 'sec-edit'].filter(Boolean).join(' — ');
+  // "notes.md — One :: folder": the file first, so taskbar entries stay tellable apart.
+  document.title = [p?.split('/').pop(), brandTitle(ws?.name)].filter(Boolean).join(' — ');
 }
 
 export function installShell() {

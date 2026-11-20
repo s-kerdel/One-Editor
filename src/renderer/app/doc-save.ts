@@ -5,6 +5,7 @@ import { batch } from '@preact/signals';
 import { app } from './app';
 import { RpcError } from '../platform';
 import * as ui from './ui';
+import { brandTitle } from '@shared/brand';
 import { autosaveTimers, clearConflict, discardDoc, getBeforeSave, markSessionUnrestored, openFile, persistSession, refreshTree, restoreSession, setConflict } from './documents';
 
 // ---- save -----------------------------------------------------------------------------------
@@ -191,7 +192,7 @@ export async function openWorkspace(absPath: string) {
     app.tree.value = null;
   });
   app.events.emit('active:changed', null);
-  document.title = `${ws.name} — sec-edit`;
+  document.title = brandTitle(ws.name);
   await refreshTree();
   app.events.emit('workspace:opened', ws);
   await restoreSession(await app.backend.getSession().catch(() => null));

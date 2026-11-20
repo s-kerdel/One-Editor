@@ -1,7 +1,8 @@
 // Version + build details at the bottom of the Settings nav (and "Copy" for bug reports).
 // Lives in the lazy Settings chunk. Commit / date come from the packaging script (scripts/stage.mjs);
 // a local `npm run build` shows "dev".
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
+import { BRAND } from '@shared/brand';
 import { version } from '../../../package.json';
 import { app } from './app';
 import { Icon } from './icons';
@@ -26,26 +27,49 @@ export function buildInfo(ua = typeof navigator === 'undefined' ? '' : navigator
     mode: typeof window !== 'undefined' && (window as any).secEditBridge ? 'desktop' : 'browser',
     electron: /Electron\/([\d.]+)/.exec(ua)?.[1],
     chromium: /Chrome\/([\d.]+)/.exec(ua)?.[1],
-    platform: app.backend?.os ?? 'unknown',
+    platform: osName(app.backend?.os ?? 'unknown'),
   };
+}
+
+const OS_NAMES: Record<string, string> = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' };
+/** "win32" is Node's name for Windows of any bitness: show what people call it. */
+export const osName = (os: string) => OS_NAMES[os] ?? os;
+
+/** CPU architecture ("x64", "arm64") from Chromium's client hints; undefined where unsupported. Desktop only:
+ *  in browser mode it would describe the viewing machine, not the one serving the folder. */
+export async function cpuArch(): Promise<string | undefined> {
+  const uad = (navigator as any).userAgentData;
+  try {
+    const v = await uad?.getHighEntropyValues?.(['architecture', 'bitness']);
+    if (v?.architecture === 'x86') return v.bitness === '64' ? 'x64' : 'x86';
+    if (v?.architecture === 'arm') return v.bitness === '64' ? 'arm64' : 'arm';
+  } catch {
+    /* no client hints: show the OS only */
+  }
+  return undefined;
 }
 
 export function buildInfoText(b: BuildInfo = buildInfo()): string {
   return [
-    `sec-edit ${b.version} (${b.mode})`,
+    `${BRAND} ${b.version} (${b.mode})`,
     `commit ${b.commit}${b.date ? ` · built ${b.date}` : ''}`,
     [b.electron && `Electron ${b.electron}`, b.chromium && `Chromium ${b.chromium}`, `platform ${b.platform}`].filter(Boolean).join(' · '),
   ].join('\n');
 }
 
 export function BuildFooter() {
-  const b = buildInfo();
+  const [arch, setArch] = useState<string | undefined>();
+  const base = buildInfo();
+  const b = arch ? { ...base, platform: `${base.platform} · ${arch}` } : base;
+  useEffect(() => void (b.mode === 'desktop' && cpuArch().then(setArch)), []);
   const [copied, setCopied] = useState(false);
   const text = buildInfoText(b);
   return (
     <div class="se-prefs-build" data-testid="settings-build" title={text}>
       <div class="se-prefs-build-row">
-        <span class="se-prefs-build-name">sec-edit {b.version}</span>
+        <span class="se-prefs-build-name">
+          {BRAND} {b.version}
+        </span>
         <button
           class="se-icon-btn tiny"
           aria-label="Copy build info"
