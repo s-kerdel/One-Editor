@@ -87,11 +87,11 @@ export const HELPER_SCRIPT = [
 
 const b64 = (s: string | Buffer) => Buffer.from(s).toString('base64');
 
-export function encodeRequest(id: number, cwd: string, args: readonly string[], input?: string, env?: readonly string[]): string {
+export function encodeRequest(id: number, cwd: string, args: readonly string[], input?: string | Buffer, env?: readonly string[]): string {
   if (args.some((a) => /[\n\r]/.test(a)) || /[\n\r]/.test(cwd)) throw new Error('Line breaks are not allowed in git arguments');
   if (env?.some((e) => !/^[A-Z_][A-Z0-9_]*=[^\n\r]*$/.test(e))) throw new Error('Invalid environment entry');
   const extra = env?.length ? ` ${env.map(b64).join(',')}` : '';
-  return `${id} ${b64(cwd)} ${args.map((a) => b64(a) || '-').join(',')} ${input ? b64(input) : '-'}${extra}\n`;
+  return `${id} ${b64(cwd)} ${args.map((a) => b64(a) || '-').join(',')} ${input?.length ? b64(input) : '-'}${extra}\n`;
 }
 
 export interface Frame {
@@ -161,7 +161,7 @@ export interface WslRunOptions {
   cwd: string;
   timeoutMs: number;
   maxBytes: number;
-  input?: string;
+  input?: string | Buffer;
   signal?: AbortSignal;
   low?: boolean;
   /** Long-running / interactive-ish commands (push, commit hooks): never through the helper. */
@@ -268,7 +268,7 @@ export class WslGit {
   constructor(
     readonly distro: string,
     private readonly opts: WslRunnerOptions,
-    private readonly direct: (exe: string, args: string[], o: { timeoutMs: number; maxBytes: number; input?: string; signal?: AbortSignal; env: NodeJS.ProcessEnv }) => Promise<RunResult>,
+    private readonly direct: (exe: string, args: string[], o: { timeoutMs: number; maxBytes: number; input?: string | Buffer; signal?: AbortSignal; env: NodeJS.ProcessEnv }) => Promise<RunResult>,
   ) {
     this.exe = opts.exe ?? defaultWslExe(opts.env);
   }

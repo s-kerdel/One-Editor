@@ -4,7 +4,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { signal } from '@preact/signals';
-import type { GitStatus } from '@shared/git';
+import type { GitHunk, GitStatus } from '@shared/git';
 import { app, type DocState } from '../../../src/renderer/app/app';
 import { GitStore, type GitBackend } from '../../../src/renderer/git/store';
 import { GitBranchItem, GitTreeMark, branchMenuItems } from '../../../src/renderer/git/ui';
@@ -162,6 +162,38 @@ describe('DiffView', () => {
     expect(el.querySelector('[data-testid="git-diff-empty"]')!.textContent).toContain('No changes since the last commit');
     expect(el.textContent).toContain('Only line endings differ.');
     expect(el.querySelector('.cm-editor')).toBeNull();
+  });
+
+  it('opened from the pane: a box per block (git’s ranges), a click reports it, new states update in place', () => {
+    const hunks = signal<readonly GitHunk[] | null>([
+      { a0: 1, a1: 2, b0: 1, b1: 2, state: 'staged' },
+      { a0: 3, a1: 3, b0: 3, b1: 4, state: 'unstaged' },
+    ]);
+    const file = signal<'on' | 'off' | 'mixed' | null>('mixed');
+    const staging = { hunks, file, busy: signal(false), toggleHunk: vi.fn(), toggleFile: vi.fn() };
+    for (const layout of ['unified', 'split'] as const) {
+      const el = host();
+      act(() => render(<DiffView {...props({ layout, staging })} />, el));
+      const boxes = () => [...el.querySelectorAll('.se-git-hunkbar [role="checkbox"]')].map((b) => b.getAttribute('aria-checked'));
+      expect(boxes()).toEqual(['true', 'false']);
+      expect(el.querySelector('[data-testid="git-diff-stats"]')!.textContent).toBe('+2 −1');
+      const second = el.querySelectorAll('.se-git-hunkbar')[1] as HTMLElement;
+      second.click();
+      expect(staging.toggleHunk).toHaveBeenLastCalledWith(1);
+      act(() => {
+        hunks.value = [hunks.value![0], { ...hunks.value![1], state: 'staged' }];
+      });
+      expect(boxes()).toEqual(['true', 'true']);
+      expect(el.querySelectorAll('.se-git-hunkbar')[1]).toBe(second); // same DOM: focus survives
+      const head = el.querySelector('.se-git-diff-include') as HTMLButtonElement;
+      expect(head.getAttribute('aria-checked')).toBe('mixed');
+      head.click();
+      expect(staging.toggleFile).toHaveBeenCalled();
+      act(() => {
+        hunks.value = [{ a0: 1, a1: 2, b0: 1, b1: 2, state: 'staged' }, { a0: 3, a1: 3, b0: 3, b1: 4, state: 'unstaged' }];
+      });
+      render(null, el);
+    }
   });
 });
 

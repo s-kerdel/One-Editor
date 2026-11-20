@@ -65,6 +65,10 @@ describe('command construction', () => {
     expect(args.split(',').map((a) => (a === '-' ? '' : Buffer.from(a, 'base64').toString()))).toEqual(['status', '', 'a b']);
     expect(Buffer.from(input, 'base64').toString()).toBe('in\n');
     expect(encodeRequest(1, '/', ['x'])).toMatch(/ -\n$/);
+    // Patch bytes (partial staging) go in byte for byte: CR, non-UTF-8, no re-encoding.
+    const bytes = Buffer.from([0x2d, 0xe9, 0x0d, 0x0a, 0xff]);
+    expect(Buffer.from(encodeRequest(3, '/', ['apply'], bytes).trim().split(' ')[3], 'base64')).toEqual(bytes);
+    expect(encodeRequest(1, '/', ['x'], Buffer.alloc(0))).toMatch(/ -\n$/);
     expect(() => encodeRequest(1, '/', ['a\nb'])).toThrow();
     // Optional 5th field: extra NAME=value for this call only (trace2 counters for status).
     const env = encodeRequest(2, '/', ['status'], undefined, ['GIT_TRACE2_EVENT=2', 'A_B=x y']).trim().split(' ')[4];

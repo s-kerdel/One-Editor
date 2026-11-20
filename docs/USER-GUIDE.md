@@ -615,16 +615,29 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 ### Commit and push (`Ctrl+Shift+G`)
 
 1. Open the **Git** panel (`Ctrl+Shift+G` or the branch pill in the sidebar).
-2. Hover a file → **+** to stage it (or **+** on the group header for all). **−** unstages.
-3. Type a message → **`Ctrl+Enter`** (or **Commit**). Nothing staged? It offers to stage everything.
+2. **Tick the files** that go into the commit. The button follows: **Commit 3 files**.
+3. Type a message → **`Ctrl+Enter`** (or **Commit**). Nothing ticked? It offers to include everything.
 4. **↑ Push** / **↓ Pull** at the top. A new branch shows **Publish** instead.
+
+**Only part of a file?** Click the file (not its box) → its changes open. Each block has its own **Include in commit** box. The file's box then shows **–** (partly).
+
+| Box | Means |
+|---|---|
+| ☑ | In the commit |
+| ☐ | Not in the commit (your edits stay, nothing is lost) |
+| – | Partly in. Click: the whole file goes in |
+
+- **Header box**: everything in / everything out. "3 of 7 selected" next to it.
+- **Keyboard**: `↑` / `↓` between files, **`Space`** ticks, `Enter` shows the changes.
+- A box **is** git's staging area (`git add`). A terminal sees the same. Your files are never changed.
+- Parts of a file: only for files in the last commit. New, deleted and binary files go in whole. Unsaved edits? Save first.
 
 | Also | How |
 |---|---|
 | Fix the last commit | Tick **Amend the last commit** (the old message is filled in) |
-| Commit and push in one go | **Commit & push** |
+| Commit and push in one go | **& push** next to Commit |
 | Let Claude write the message | **✦** next to Commit: types a prompt into Claude Code. **You** press Enter |
-| Throw away changes | Hover → **↺**. It **always asks**. New files go to the **Recycle Bin** |
+| Throw away changes | Hover → **↺**. It **always asks**. New files go to the **Recycle Bin**. Ticked parts are kept |
 | Switch branch | **Branches** → click one (many? type in the filter box). Uncommitted changes? It warns first |
 | New branch | **Branches** → **+** |
 | Old versions | **History** → click a commit → click a file to see its change. Scroll down for older commits |

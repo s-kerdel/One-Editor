@@ -3,6 +3,8 @@
 import './diff-view.css';
 import { useEffect, useMemo, useRef } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
+import type { ReadonlySignal } from '@preact/signals';
+import type { GitHunk } from '@shared/git';
 import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import { EditorView, highlightSpecialChars, lineNumbers, type Command } from '@codemirror/view';
 import { MergeView, goToNextChunk, goToPreviousChunk, unifiedMergeView, type Change } from '@codemirror/merge';
@@ -10,8 +12,25 @@ import { basename, dirname, isMarkdown } from '@shared/paths';
 import { chromeTheme, syntaxTheme } from '../editor/theme';
 import { loadLanguage } from '../editor/code';
 import { diffLines, diffStats } from './line-diff';
+import { hunksToChanges } from './compare-diff';
+import { hunkBars, setHunkBars } from './hunk-bars';
+import type { Check } from './selection';
 
 export type DiffLayout = 'unified' | 'split';
+
+/** Opened from the Source control pane: what goes into the commit, for the file and per block. */
+export interface StagingProps {
+  /** Blocks of base → current with their staged state; null: the whole file only (`note` says why). */
+  hunks: ReadonlySignal<readonly GitHunk[] | null>;
+  /** The file's own box; null: none (e.g. resolved away meanwhile). */
+  file: ReadonlySignal<Check | null>;
+  busy: ReadonlySignal<boolean>;
+  note?: string;
+  toggleHunk(index: number): void;
+  toggleFile(): void;
+}
+
+const ARIA: Record<Check, 'true' | 'false' | 'mixed'> = { on: 'true', off: 'false', mixed: 'mixed' };
 
 export interface DiffViewProps {
   path: string;
@@ -36,6 +55,7 @@ export interface DiffViewProps {
   tools?: ComponentChildren;
   /** Header title instead of the file name ("Compare text"). */
   title?: string;
+  staging?: StagingProps;
 }
 
 const COLLAPSE = { margin: 3, minSize: 6 };
@@ -50,7 +70,18 @@ const readOnly: Extension = [EditorState.readOnly.of(true), EditorView.editable.
 export function DiffView(p: DiffViewProps) {
   const host = useRef<HTMLDivElement>(null);
   const nav = useRef<EditorView | null>(null);
-  const stats = useMemo(() => p.stats ?? diffStats(diffLines(p.base, p.current)), [p.base, p.current, p.stats]);
+  const st = p.staging;
+  const blocks = st?.hunks.value ?? null;
+  // Blocks keep their ranges when staged or not: only a new range list rebuilds the editors.
+  const rangeKey = blocks ? blocks.map((h) => `${h.a0},${h.a1},${h.b0},${h.b1}`).join(';') : '';
+  const changes = useMemo(
+    () => p.changes ?? (blocks?.length ? hunksToChanges(p.base, p.current, blocks.map((h) => ({ oldStart: h.a0, oldCount: h.a1 - h.a0, newStart: h.b0, newCount: h.b1 - h.b0 }))) : undefined),
+    [p.changes, p.base, p.current, rangeKey],
+  );
+  const stats = useMemo(
+    () => p.stats ?? (blocks?.length ? blocks.reduce((t, h) => ({ added: t.added + h.b1 - h.b0, removed: t.removed + h.a1 - h.a0 }), { added: 0, removed: 0 }) : diffStats(diffLines(p.base, p.current))),
+    [p.base, p.current, p.stats, rangeKey],
+  );
   const same = stats.added === 0 && stats.removed === 0;
 
   useEffect(() => {
@@ -62,12 +93,14 @@ export function DiffView(p: DiffViewProps) {
     const common = (): Extension[] => [lineNumbers(), highlightSpecialChars(), syntaxTheme, chromeTheme, readOnly, lang.of([]), EditorView.editorAttributes.of({ class: 'se-editor' }), EditorView.contentAttributes.of({ 'aria-readonly': 'true' })];
     let views: EditorView[];
     let destroy: () => void;
-    const fixed = p.changes;
+    const fixed = changes;
     const diffConfig = fixed ? { override: () => fixed } : undefined;
+    const initial = st?.hunks.peek();
+    const bars: Extension = initial?.length && st ? hunkBars(initial, (i) => st.toggleHunk(i)) : [];
     if (p.layout === 'split') {
       const mv = new MergeView({
         a: { doc: p.base, extensions: [...common(), EditorView.contentAttributes.of({ 'aria-label': p.baseLabel })] },
-        b: { doc: p.current, extensions: [...common(), EditorView.contentAttributes.of({ 'aria-label': p.currentLabel })] },
+        b: { doc: p.current, extensions: [...common(), EditorView.contentAttributes.of({ 'aria-label': p.currentLabel }), bars] },
         parent: el,
         collapseUnchanged: COLLAPSE,
         gutter: true,
@@ -82,7 +115,7 @@ export function DiffView(p: DiffViewProps) {
         parent: el,
         state: EditorState.create({
           doc: p.current,
-          extensions: [...common(), unifiedMergeView({ original: p.base, mergeControls: false, gutter: true, collapseUnchanged: COLLAPSE, syntaxHighlightDeletions: true, diffConfig })],
+          extensions: [...common(), unifiedMergeView({ original: p.base, mergeControls: false, gutter: true, collapseUnchanged: COLLAPSE, syntaxHighlightDeletions: true, diffConfig }), bars],
         }),
       });
       views = [v];
@@ -97,7 +130,12 @@ export function DiffView(p: DiffViewProps) {
       nav.current = null;
       destroy();
     };
-  }, [p.layout, p.base, p.current, p.path, same, p.changes]);
+  }, [p.layout, p.base, p.current, p.path, same, changes]);
+
+  // New staged states (a toggle, a refresh): into the bars as they are.
+  useEffect(() => {
+    if (blocks?.length) nav.current?.dispatch({ effects: setHunkBars.of(blocks) });
+  }, [blocks]);
 
   const go = (cmd: Command) => {
     const v = nav.current;
@@ -136,9 +174,22 @@ export function DiffView(p: DiffViewProps) {
         <div class="se-git-diff-sub">
           {p.baseLabel} <span aria-hidden="true">{p.engine ? '↔' : '→'}</span> {p.currentLabel}
           {p.engine && <span class="se-git-diff-engine"> · {p.engine}</span>}
+          {st?.busy.value ? <span class="se-git-diff-engine"> · Staging…</span> : st?.note && <span class="se-git-diff-engine"> · {st.note}</span>}
         </div>
         <div class="se-git-diff-actions">
           {p.tools}
+          {st?.file.value && (
+            <button
+              type="button"
+              class="se-git-diff-tool se-git-diff-include"
+              role="checkbox"
+              aria-checked={ARIA[st.file.value]}
+              title={blocks?.length ? 'The whole file in or out of the commit (or tick single blocks below)' : 'Put this file into the commit, or leave it out'}
+              onClick={() => st.toggleFile()}
+            >
+              <span class="se-check" aria-hidden="true" data-checked={ARIA[st.file.value]} /> Include in commit
+            </button>
+          )}
           <div class="se-git-diff-seg" role="radiogroup" aria-label="Layout">
             {(['unified', 'split'] as const).map((l) => (
               <button type="button" role="radio" aria-checked={p.layout === l} class={p.layout === l ? 'on' : ''} onClick={() => p.onLayout(l)}>

@@ -8,7 +8,7 @@ import { logActivity } from '../app/activity';
 export type GitCall = <K extends GitOp>(op: K, ...args: Parameters<GitOps[K]>) => Promise<ReturnType<GitOps[K]>>;
 
 const BACKGROUND: Partial<Record<GitOp, string>> = { branches: 'branches', remoteBranches: 'remote branches', branchDetails: 'branch dates', log: 'history', commitFiles: 'commit files' };
-const ACTIONS = new Set<GitOp>(['stage', 'unstage', 'discard', 'commit', 'fetch', 'pull', 'push', 'switchBranch', 'createBranch']);
+const ACTIONS = new Set<GitOp>(['stage', 'unstage', 'stageHunks', 'discard', 'commit', 'fetch', 'pull', 'push', 'switchBranch', 'createBranch']);
 
 function outcome(r: unknown): string {
   if (!r || typeof r !== 'object') return '';

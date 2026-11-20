@@ -1,6 +1,7 @@
-// Source control pane (left sidebar, lazy chunk): changes grouped conflicts / staged / changes /
-// untracked, the commit box, sync (fetch / pull / push), branches and history. Every action goes
-// through ./actions (saves first, refreshes after, explains failures, hands prompts to a terminal).
+// Source control pane (left sidebar, lazy chunk): merge conflicts, one "Changes" list with a box per
+// file (ticked = staged = in the commit), the commit box, sync (fetch / pull / push), branches and
+// history. Every action goes through ./actions (saves first, refreshes after, explains failures, hands
+// prompts to a terminal).
 import './scm.css';
 import { signal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -14,8 +15,10 @@ import { revealInTree } from '../app/fileops';
 import { installGit } from './index';
 import type { GitStore } from './store';
 import { markOf } from './marks';
-import { openChange, openCommitDiff } from './diff-open';
-import { busy, discard, handOff, handOffLabel, lastError, markResolved, runGit, stage, unstage } from './actions';
+import { openCommitDiff } from './diff-open';
+import { busy, discard, handOff, handOffLabel, lastError, markResolved, runGit, stage } from './actions';
+import { allOf, ariaChecked, selectedCount, type Check } from './selection';
+import { openStaging, shownCheck, stager, toggleAll, toggleEntry } from './stage';
 import { branchLabel } from './ui';
 import { git, gitCall } from './rpc';
 
@@ -25,7 +28,7 @@ const cancelJob = (tag: 'branches' | 'remotes' | 'history' | 'files') => void gi
 /** Survive panel switches (the pane unmounts when another panel is shown). */
 const draft = signal('');
 const amend = signal(false);
-const open = signal<Record<string, boolean>>({ conflicts: true, staged: true, changes: true, untracked: true, branches: false, history: false });
+const open = signal<Record<string, boolean>>({ conflicts: true, changes: true, branches: false, history: false });
 const ROW_CAP = 400;
 
 /** Parent folder with several repositories: the one the pane works on ('' = the only one). */
@@ -45,24 +48,33 @@ function ago(sec: number): string {
 }
 
 // ---- rows / groups ---------------------------------------------------------------------------
+// One "Changes" list: every changed file with a box. Ticked = staged = goes into the commit (the index
+// is the selection, see ./selection). Conflicts stay apart with "Mark resolved" until they are resolved.
 
-type Group = 'conflicts' | 'staged' | 'changes' | 'untracked';
+type Group = 'conflicts' | 'changes';
+type Groups = Record<Group, GitEntry[]>;
 
-function groups(st: GitStatus): Record<Group, GitEntry[]> {
-  const g: Record<Group, GitEntry[]> = { conflicts: [], staged: [], changes: [], untracked: [] };
+function groups(st: GitStatus): Groups {
+  const g: Groups = { conflicts: [], changes: [] };
   for (const e of st.entries) {
     if (e.state === 'ignored') continue;
-    if (e.state === 'conflicted') g.conflicts.push(e);
-    else if (e.state === 'untracked') g.untracked.push(e);
-    else {
-      if (e.staged) g.staged.push(e);
-      if (e.unstaged) g.changes.push(e);
-    }
+    (e.state === 'conflicted' ? g.conflicts : g.changes).push(e);
   }
   return g;
 }
 
-function Row({ s, e, group }: { s: GitStore; e: GitEntry; group: Group }) {
+const CHECK_TEXT: Record<Check, string> = { on: 'in the commit', off: 'not in the commit', mixed: 'partly in the commit' };
+
+/** Up / Down between the rows of one list. */
+function moveFocus(ev: KeyboardEvent): boolean {
+  const el = ev.currentTarget as HTMLElement;
+  const next = (ev.key === 'ArrowDown' ? el.nextElementSibling : el.previousElementSibling) as HTMLElement | null;
+  if (!next?.classList.contains('se-scm-row')) return false;
+  next.focus();
+  return true;
+}
+
+function Row({ s, e, group, check, onCheck }: { s: GitStore; e: GitEntry; group: Group; check?: Check | null; onCheck?: () => void }) {
   const m = markOf(e);
   const name = e.path ? basename(e.path) : '(this folder)';
   const dir = dirname(e.path);
@@ -80,18 +92,42 @@ function Row({ s, e, group }: { s: GitStore; e: GitEntry; group: Group }) {
     </button>
   );
   const openFile = () => (e.state !== 'deleted' && !e.dir ? void app.openFile(e.path) : e.dir ? revealInTree(e.path) : undefined);
+  /** Something in the working copy to throw away (a fully staged file has nothing: untick it first). */
+  const discardable = group === 'changes' && (e.unstaged || e.state === 'untracked');
   return (
     <div
       class={`se-scm-row se-git-${e.state}`}
       role="listitem"
       tabIndex={0}
-      title={`${e.path || 'this folder'}\n${m.title}${group === 'conflicts' ? '' : ' — click to compare with the last commit'}`}
+      title={`${e.path || 'this folder'}\n${m.title}${group === 'conflicts' ? '' : '\nClick: show the changes · Box or Space: include in the commit'}`}
+      aria-label={`${name}, ${m.title}${check ? `, ${CHECK_TEXT[check]}` : ''}`}
       data-path={e.path}
       data-group={group}
-      onClick={() => (group === 'conflicts' || e.dir || e.submodule ? openFile() : void openChange(s, e.path))}
+      data-check={check ?? undefined}
+      onClick={() => (group === 'conflicts' || e.dir || e.submodule ? openFile() : void openStaging(s, e))}
       onDblClick={openFile}
-      onKeyDown={(ev) => ev.key === 'Enter' && (ev.currentTarget as HTMLElement).click()}
+      onKeyDown={(ev) => {
+        if (ev.target !== ev.currentTarget) return; // keys on the hover buttons are theirs
+        if (ev.key === 'Enter') (ev.currentTarget as HTMLElement).click();
+        else if (ev.key === ' ' && onCheck) {
+          ev.preventDefault();
+          onCheck();
+        } else if ((ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && moveFocus(ev)) ev.preventDefault();
+      }}
     >
+      {check && (
+        <span
+          class="se-check se-scm-check"
+          role="checkbox"
+          aria-checked={ariaChecked(check)}
+          aria-label={`Include ${e.path || 'this folder'} in the commit`}
+          onClick={(ev) => {
+            ev.stopPropagation();
+            onCheck?.();
+          }}
+          onDblClick={(ev) => ev.stopPropagation()}
+        />
+      )}
       <span class="se-scm-ficon">{e.dir || e.submodule ? <FolderIcon open={false} /> : <FileIcon path={e.path} />}</span>
       <span class="se-scm-name">
         {name}
@@ -102,52 +138,86 @@ function Row({ s, e, group }: { s: GitStore; e: GitEntry; group: Group }) {
       <span class="se-scm-acts">
         {!e.dir && e.state !== 'deleted' && btn('file', 'Open file', openFile)}
         {group === 'conflicts' && btn('check', 'Mark resolved', () => markResolved(s, e.path), 'resolve')}
-        {group === 'staged' && btn('minus', 'Unstage', () => unstage(s, [e.path]), 'unstage')}
-        {(group === 'changes' || group === 'untracked') && btn('undo', group === 'untracked' ? 'Discard (move to trash)' : 'Discard changes', () => discard(s, [e.path], group === 'untracked' ? 1 : 0), 'discard')}
-        {(group === 'changes' || group === 'untracked') && btn('plus', 'Stage', () => stage(s, [e.path]), 'stage')}
+        {discardable && btn('undo', e.state === 'untracked' ? 'Discard (move to trash)' : 'Discard changes', () => discard(s, [e.path], e.state === 'untracked' ? 1 : 0), 'discard')}
       </span>
     </div>
   );
 }
 
-const TITLES: Record<Group, string> = { conflicts: 'Merge conflicts', staged: 'Staged changes', changes: 'Changes', untracked: 'Untracked' };
+const headBtn = (icon: string, title: string, run: () => unknown, cls: string) => (
+  <button
+    class={`se-icon-btn tiny se-scm-act ${cls}`}
+    title={title}
+    aria-label={title}
+    onClick={(ev) => {
+      ev.stopPropagation();
+      void run();
+    }}
+  >
+    <Icon name={icon} size={13} />
+  </button>
+);
 
-function GroupView({ s, group, list }: { s: GitStore; group: Group; list: GitEntry[] }) {
+function Conflicts({ s, list }: { s: GitStore; list: GitEntry[] }) {
   if (!list.length) return null;
-  const isOpen = open.value[group];
-  const paths = list.map((e) => e.path);
-  const head = (icon: string, title: string, run: () => unknown, cls: string) => (
-    <button
-      class={`se-icon-btn tiny se-scm-act ${cls}`}
-      title={title}
-      aria-label={title}
-      onClick={(ev) => {
-        ev.stopPropagation();
-        void run();
-      }}
-    >
-      <Icon name={icon} size={13} />
-    </button>
-  );
+  const isOpen = open.value.conflicts;
   return (
-    <section class="se-scm-group" data-group={group}>
+    <section class="se-scm-group" data-group="conflicts">
       <div class="se-section-head se-scm-ghead">
-        <button class="se-scm-toggle se-section-toggle" aria-expanded={isOpen} onClick={() => toggle(group)}>
+        <button class="se-scm-toggle se-section-toggle" aria-expanded={isOpen} onClick={() => toggle('conflicts')}>
           <Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={12} class="se-section-chev" />
-          <span class="se-section-title">{TITLES[group]}</span>
+          <span class="se-section-title">Merge conflicts</span>
           <span class="se-scm-count">{list.length}</span>
         </button>
-        <span class="se-scm-acts">
-          {group === 'staged' && head('minus', 'Unstage all', () => unstage(s, null, R()), 'unstage-all')}
-          {group === 'changes' && head('undo', 'Discard all changes', () => discard(s, paths, 0), 'discard-all')}
-          {group === 'untracked' && head('undo', 'Discard all untracked (move to trash)', () => discard(s, paths, paths.length), 'discard-all')}
-          {(group === 'changes' || group === 'untracked') && head('plus', group === 'changes' ? 'Stage all changes' : 'Stage all untracked', () => stage(s, paths), 'stage-all')}
-        </span>
       </div>
       {isOpen && (
         <div role="list" class="se-scm-list">
           {list.slice(0, ROW_CAP).map((e) => (
-            <Row key={`${group}:${e.path}`} s={s} e={e} group={group} />
+            <Row key={`conflicts:${e.path}`} s={s} e={e} group="conflicts" />
+          ))}
+          {list.length > ROW_CAP && <div class="se-scm-more">… and {list.length - ROW_CAP} more</div>}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Changes({ s, list }: { s: GitStore; list: GitEntry[] }) {
+  if (!list.length) return null;
+  const b = stager(s);
+  const checks = list.map((e) => shownCheck(b, e) ?? 'off');
+  const all = allOf(checks);
+  const n = selectedCount(checks);
+  const isOpen = open.value.changes;
+  const work = list.filter((e) => e.unstaged || e.state === 'untracked');
+  return (
+    <section class="se-scm-group" data-group="changes">
+      <div class="se-section-head se-scm-ghead">
+        <button
+          type="button"
+          class="se-check se-scm-all"
+          role="checkbox"
+          aria-checked={ariaChecked(all)}
+          aria-label="Include all changes in the commit"
+          title={all === 'on' ? 'Leave everything out of the commit' : 'Include everything in the commit'}
+          onClick={(ev) => {
+            ev.stopPropagation();
+            toggleAll(b, list, all !== 'on');
+          }}
+        />
+        <button class="se-scm-toggle se-section-toggle" aria-expanded={isOpen} onClick={() => toggle('changes')}>
+          <Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={12} class="se-section-chev" />
+          <span class="se-section-title">Changes</span>
+          <span class="se-scm-sel" data-testid="scm-selected">
+            {n} of {list.length} selected
+          </span>
+        </button>
+        <span class="se-scm-acts">{!!work.length && headBtn('undo', 'Discard all changes', () => discard(s, work.map((e) => e.path), work.filter((e) => e.state === 'untracked').length), 'discard-all')}</span>
+      </div>
+      {isOpen && (
+        <div role="list" class="se-scm-list" aria-label="Changes: ticked files go into the commit">
+          {list.slice(0, ROW_CAP).map((e, i) => (
+            <Row key={`changes:${e.path}`} s={s} e={e} group="changes" check={checks[i]} onCheck={() => toggleEntry(b, e)} />
           ))}
           {list.length > ROW_CAP && <div class="se-scm-more">… and {list.length - ROW_CAP} more</div>}
         </div>
@@ -158,14 +228,29 @@ function GroupView({ s, group, list }: { s: GitStore; group: Group; list: GitEnt
 
 // ---- commit box ------------------------------------------------------------------------------
 
-async function doCommit(s: GitStore, st: GitStatus, g: Record<Group, GitEntry[]>, push: boolean) {
+/** The status as the pane shows it: one repository's entries when the folder holds several. */
+function paneView(s: GitStore, st: GitStatus): GitStatus {
+  const repos = st.repos ?? [];
+  if (repos.length <= 1) return st;
+  // Same choice as the pane's picker (it reads the signals, so the pane re-renders on a switch).
+  const sel = repos.find((r) => r.rel === paneRepo.value) ?? repos.find((r) => r.rel === s.repoOf(app.activePath.value ?? '')?.rel) ?? repos[0];
+  return { ...st, branch: sel.branch ?? st.branch, state: sel.state, entries: st.entries.filter((e) => e.path === sel.rel || e.path.startsWith(sel.rel + '/')) };
+}
+
+async function doCommit(s: GitStore, push: boolean) {
+  // Boxes clicked a moment ago go into git first (Ctrl+Enter right after a click).
+  await stager(s).drain();
   if (busy.value) return;
+  const cur = s.status.peek();
+  if (!cur?.ok) return;
+  const st = paneView(s, cur);
+  const g = groups(st);
   const merging = st.state === 'merge';
   if (g.conflicts.length) return void app.toast('Resolve the merge conflicts first (mark them resolved)', 'info');
-  if (!g.staged.length && !amend.value && !merging) {
-    const n = g.changes.length + g.untracked.length;
+  if (!g.changes.some((e) => e.staged) && !amend.value && !merging) {
+    const n = g.changes.length;
     if (!n) return void app.toast('Nothing to commit', 'info');
-    if (!(await ui.confirmDialog('Nothing is staged', `Stage all ${n} ${n === 1 ? 'change' : 'changes'} and commit them?`, 'Stage all & commit'))) return;
+    if (!(await ui.confirmDialog('Nothing is selected', `Include all ${n} ${n === 1 ? 'change' : 'changes'} and commit them?`, 'Stage all & commit'))) return;
     if (!(await stage(s, null, R())).ok) return;
   }
   const r = await runGit(s, 'Committing', () => git('commit', { message: draft.value, amend: amend.value, repo: R() }));
@@ -184,7 +269,7 @@ async function claudeMessage() {
   );
 }
 
-function CommitBox({ s, st, g }: { s: GitStore; st: GitStatus; g: Record<Group, GitEntry[]> }) {
+function CommitBox({ s, st, selected }: { s: GitStore; st: GitStatus; selected: number }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const merging = st.state === 'merge';
   const where = st.branch.head ? `“${st.branch.head}”` : 'detached HEAD';
@@ -194,7 +279,10 @@ function CommitBox({ s, st, g }: { s: GitStore; st: GitStatus; g: Record<Group, 
     const el = ref.current;
     if (el) el.style.height = `${Math.min(160, Math.max(56, el.scrollHeight))}px`;
   }, [draft.value]);
-  const label = amend.value ? 'Amend' : merging ? 'Commit merge' : 'Commit';
+  const files = `${selected} ${selected === 1 ? 'file' : 'files'}`;
+  // The button says what goes in: the ticked files (amend / merge keep their own wording).
+  const label = amend.value ? 'Amend' : merging ? 'Commit merge' : selected ? `Commit ${files}` : 'Commit';
+  const hint = !amend.value && !merging && !selected ? ' (nothing ticked: offers to include everything)' : '';
   return (
     <div class="se-scm-commit">
       <textarea
@@ -208,16 +296,17 @@ function CommitBox({ s, st, g }: { s: GitStore; st: GitStatus; g: Record<Group, 
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
-            void doCommit(s, st, g, false);
+            void doCommit(s, false);
           }
         }}
       />
       <div class="se-scm-commit-row">
-        <button class="se-btn primary small se-scm-commit-btn" disabled={working} onClick={() => doCommit(s, st, g, false)} title={`${label} (${prettyKey('Mod-Enter')})`}>
+        <button class="se-btn primary small se-scm-commit-btn" disabled={working} onClick={() => doCommit(s, false)} title={`${label} (${prettyKey('Mod-Enter')})${hint}`}>
           <Icon name="check" size={13} /> {label}
         </button>
-        <button class="se-btn small" disabled={working || !st.branch.head} onClick={() => doCommit(s, st, g, true)} title={`${label}, then push`}>
-          {label} & push
+        {/* Reads on from the primary ("Commit 2 files" "& push"): one short row, so ticking files never re-wraps it. */}
+        <button class="se-btn small se-scm-commit-push" disabled={working || !st.branch.head} onClick={() => doCommit(s, true)} title={`${label}, then push${hint}`} aria-label={`${label} and push`}>
+          & push
         </button>
         <span class="se-scm-spacer" />
         {app.runInTerminal && (
@@ -766,9 +855,11 @@ export function SourceControl() {
   const sel = multi ? (repos.find((r) => r.rel === paneRepo.value) ?? repos.find((r) => r.rel === s.repoOf(app.activePath.value ?? '')?.rel) ?? repos[0]) : null;
   if (sel && paneRepo.peek() !== sel.rel) queueMicrotask(() => (paneRepo.value = sel.rel));
   if (!multi && paneRepo.peek()) queueMicrotask(() => (paneRepo.value = ''));
-  const view: GitStatus = sel ? { ...st, branch: sel.branch ?? st.branch, state: sel.state, entries: st.entries.filter((e) => e.path === sel.rel || e.path.startsWith(sel.rel + '/')) } : st;
+  const view = paneView(s, st);
   const g = groups(view);
-  const clean = !g.conflicts.length && !g.staged.length && !g.changes.length && !g.untracked.length;
+  const clean = !g.conflicts.length && !g.changes.length;
+  const b = stager(s);
+  const selected = g.changes.reduce((n, e) => n + (shownCheck(b, e) === 'off' ? 0 : 1), 0);
   return (
     <div class="se-scm" data-testid="scm">
       {multi && (
@@ -786,13 +877,11 @@ export function SourceControl() {
       )}
       <SyncBar s={s} st={view} />
       {view.state && <div class="se-scm-state">{STATE_TEXT[view.state]}</div>}
-      <CommitBox s={s} st={view} g={g} />
+      <CommitBox s={s} st={view} selected={selected} />
       <ErrorBox />
       <div class="se-scm-scroll">
-        <GroupView s={s} group="conflicts" list={g.conflicts} />
-        <GroupView s={s} group="staged" list={g.staged} />
-        <GroupView s={s} group="changes" list={g.changes} />
-        <GroupView s={s} group="untracked" list={g.untracked} />
+        <Conflicts s={s} list={g.conflicts} />
+        <Changes s={s} list={g.changes} />
         {clean && <div class="se-scm-clean">No changes since the last commit.</div>}
         <Branches s={s} st={view} />
         <History st={view} />

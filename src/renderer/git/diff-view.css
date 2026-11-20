@@ -88,3 +88,23 @@
 .se-git-diff-tool:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
 .se-git-diff-tool:disabled { opacity: 0.45; cursor: default; }
 .se-git-diff-check input { margin: 0; }
+
+/* Choose what to commit: the file's box in the header, a bar with a box above each changed block. */
+.se-git-diff-include { gap: 7px; }
+.se-git-diff-include .se-check { pointer-events: none; }
+.se-git-diff .se-git-hunkbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* No vertical margin: CodeMirror measures block widgets without it (line numbers would drift). */
+  padding: 4px 12px 4px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text-muted);
+  font: 12px/18px var(--font-ui);
+  cursor: pointer;
+  user-select: none;
+}
+.se-git-diff .se-git-hunkbar:hover { background: var(--bg-hover); color: var(--text); }
+.se-git-diff .se-git-hunkbar[data-state='staged'] { color: var(--text); }
+.se-git-hunkbar-size { margin-left: auto; font: 11.5px var(--font-mono); color: var(--text-faint); }

@@ -1,5 +1,5 @@
 // Git in browser mode (local server): tree marks, branch item, change bars + revert, diff view,
-// and the Source control pane (stage, commit, push to a bare remote, branches, conflicts).
+// and the Source control pane (tick to stage, commit, push to a bare remote, branches, conflicts).
 import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect } from './harness';
@@ -120,7 +120,7 @@ test.describe('git tier 1', () => {
 });
 
 test.describe('source control pane', () => {
-  test('stage, commit (Ctrl+Enter), publish + push to a bare remote', async ({ page, ws }) => {
+  test('tick to stage, untick to unstage, header box, commit (Ctrl+Enter), publish + push to a bare remote', async ({ page, ws }) => {
     initRepo(ws.root);
     const remote = bareRemote(ws.root);
     fs.appendFileSync(path.join(ws.root, 'README.md'), '\nmore\n');
@@ -129,22 +129,37 @@ test.describe('source control pane', () => {
     await gitReady(page);
     await page.locator('[data-panel="git"]').click();
     const scm = page.getByTestId('scm');
-    await expect(scm.locator('[data-group="changes"] .se-scm-row')).toHaveCount(1);
-    await expect(scm.locator('[data-group="untracked"] .se-scm-row')).toHaveCount(1);
+    const box = (p: string) => scm.locator(`.se-scm-row[data-path="${p}"] [role="checkbox"]`);
+    const staged = () => git(ws.root, 'diff', '--cached', '--name-only').trim();
+    await expect(scm.locator('[data-group="changes"] .se-scm-row')).toHaveCount(2);
+    await expect(scm.getByTestId('scm-selected')).toHaveText('0 of 2 selected');
 
-    await scm.locator('.se-scm-row[data-path="README.md"]').hover();
-    await scm.locator('.se-scm-row[data-path="README.md"] .stage').click();
-    await expect(scm.locator('[data-group="staged"] .se-scm-row[data-path="README.md"]')).toBeVisible();
-    await scm.locator('[data-group="staged"] .se-scm-row[data-path="README.md"]').hover();
-    await scm.locator('[data-group="staged"] .se-scm-row[data-path="README.md"] .unstage').click();
-    await expect(scm.locator('[data-group="staged"]')).toHaveCount(0);
-    await scm.locator('[data-group="changes"] .se-scm-ghead').hover();
-    await scm.locator('[data-group="changes"] .stage-all').click();
-    await expect(scm.locator('[data-group="staged"] .se-scm-row')).toHaveCount(1);
+    // A box is the index: ticking stages, unticking unstages (an untracked file goes back to untracked).
+    await box('README.md').click();
+    await expect(box('README.md')).toHaveAttribute('aria-checked', 'true');
+    await expect.poll(staged).toBe('README.md');
+    await box('todo.md').click();
+    await expect.poll(staged).toBe('README.md\ntodo.md');
+    await box('todo.md').click();
+    await expect.poll(staged).toBe('README.md');
+    expect(git(ws.root, 'status', '--porcelain', 'todo.md').trim()).toBe('?? todo.md');
+    await expect(scm.getByTestId('scm-selected')).toHaveText('1 of 2 selected');
+    await expect(scm.locator('.se-scm-all')).toHaveAttribute('aria-checked', 'mixed');
+
+    // Header box: all, then none, then all again.
+    await scm.locator('.se-scm-all').click();
+    await expect.poll(staged).toBe('README.md\ntodo.md');
+    await expect(scm.locator('.se-scm-all')).toHaveAttribute('aria-checked', 'true');
+    await scm.locator('.se-scm-all').click();
+    await expect.poll(staged).toBe('');
+    await expect(scm.locator('.se-scm-all')).toHaveAttribute('aria-checked', 'false');
+    await box('README.md').click();
+    await expect(scm.locator('.se-scm-commit-btn')).toHaveText('Commit 1 file');
+    await expect.poll(staged).toBe('README.md');
 
     await scm.getByLabel('Commit message').fill('Update readme');
     await scm.getByLabel('Commit message').press('Control+Enter');
-    await expect(scm.locator('[data-group="staged"]')).toHaveCount(0);
+    await expect(scm.locator('.se-scm-row[data-path="README.md"]')).toHaveCount(0);
     expect(git(ws.root, 'log', '-1', '--format=%s').trim()).toBe('Update readme');
     await expect(scm.getByLabel('Commit message')).toHaveValue('');
 
@@ -152,10 +167,10 @@ test.describe('source control pane', () => {
     await expect(scm.locator('.se-scm-push')).toContainText('0', { timeout: 15000 });
     await expect.poll(() => lastSubject(remote)).toBe('Update readme');
 
-    // "Nothing staged" → offer to stage everything, then commit & push.
+    // Nothing ticked → offer to stage everything, then commit & push.
     await scm.getByLabel('Commit message').fill('Add todo');
     page.once('dialog', () => {});
-    await scm.locator('button', { hasText: 'Commit & push' }).click();
+    await scm.getByRole('button', { name: 'Commit and push' }).click();
     await page.locator('.se-dialog button', { hasText: 'Stage all & commit' }).click();
     await expect.poll(() => lastSubject(remote), { timeout: 15000 }).toBe('Add todo');
   });

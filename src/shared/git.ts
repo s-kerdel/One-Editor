@@ -237,6 +237,33 @@ export interface GitCommitFiles {
   message?: string;
 }
 
+// ---- choose what to commit (partial staging) ------------------------------------------------
+
+/** One changed block of a file: HEAD lines [a0, a1) became working-copy lines [b0, b1) (0-based). */
+export interface GitHunk {
+  a0: number;
+  a1: number;
+  b0: number;
+  b1: number;
+  /** In the index (goes into the commit), not, or partly. */
+  state: 'staged' | 'unstaged' | 'mixed';
+}
+
+/** A block from `hunks()` (by its ranges) to put into the commit (`include`) or take out. */
+export interface GitHunkPick {
+  a0: number;
+  a1: number;
+  b0: number;
+  b1: number;
+  include: boolean;
+}
+
+/** Why a file can only be staged as a whole. */
+export type GitWholeFileReason = 'untracked' | 'added' | 'deleted' | 'conflicted' | 'binary' | 'too-large' | 'lfs' | 'filter' | 'special' | 'unchanged' | 'unavailable';
+
+/** Texts are decoded + LF-normalised (what the diff view shows); the blocks' lines refer to them. */
+export type GitFileHunks = { mode: 'hunks'; head: string; work: string; hunks: GitHunk[] } | { mode: 'file'; reason: GitWholeFileReason };
+
 /** Every operation behind the single `git(op, ...args)` RPC. Mutating ones validate every path. */
 export interface GitOps {
   /** `since`: the version the caller has (→ same / delta / full); `fresh`: run now (after an action). */
@@ -254,6 +281,10 @@ export interface GitOps {
   unstage(paths: string[] | null, repo?: string): GitActionResult;
   /** Work-tree changes back to the index; untracked files go to the trash. */
   discard(paths: string[]): GitActionResult;
+  /** Blocks of HEAD → working copy with their staged state (`from`: the rename source from the status). */
+  hunks(path: string, from?: string | null): GitFileHunks;
+  /** Include / leave out blocks of `hunks()`: changes the index only (`git apply --cached`), never the file. */
+  stageHunks(path: string, picks: GitHunkPick[], from?: string | null): GitActionResult;
   commit(opts: { message: string; amend?: boolean; repo?: string }): GitActionResult;
   lastMessage(repo?: string): string;
   fetch(repo?: string): GitActionResult;
@@ -276,4 +307,4 @@ export interface GitOps {
   diffTexts(a: string, b: string, opts?: { ignoreWhitespace?: boolean }): GitTextDiff;
 }
 export type GitOp = keyof GitOps;
-export const GIT_OPS: readonly GitOp[] = ['status', 'headFile', 'diff', 'stage', 'unstage', 'discard', 'commit', 'lastMessage', 'fetch', 'pull', 'push', 'branches', 'createBranch', 'switchBranch', 'log', 'commitFiles', 'cancel', 'diffTexts', 'remoteBranches', 'branchDetails', 'nudge', 'visibility'];
+export const GIT_OPS: readonly GitOp[] = ['status', 'headFile', 'diff', 'stage', 'unstage', 'discard', 'commit', 'lastMessage', 'fetch', 'pull', 'push', 'branches', 'createBranch', 'switchBranch', 'log', 'commitFiles', 'cancel', 'diffTexts', 'remoteBranches', 'branchDetails', 'nudge', 'visibility', 'hunks', 'stageHunks'];

@@ -661,6 +661,17 @@ export class BackendService {
       case 'discard':
         // Untracked files go to the OS trash (recoverable), like a delete from the tree.
         return each(a, (svc, subs, rel) => svc.discard(subs, (sub) => this.remove(ws(rel, sub))));
+      case 'hunks':
+      case 'stageHunks': {
+        // Partial staging: one file; the rename source only when it is in the same repository.
+        const l = pathOf(a);
+        const from = op === 'hunks' ? b : c;
+        const src = typeof from === 'string' && from ? pathOf(from) : null;
+        const sub = src && src.svc === l?.svc ? src.sub : null;
+        if (op === 'hunks') return l ? l.svc.hunks(l.sub, sub) : { mode: 'file', reason: 'unavailable' };
+        if (!l) throw new BackendFailure('EINVAL', `Not inside a repository: ${String(a)}`);
+        return l.svc.stageHunks(l.sub, b, sub);
+      }
       case 'commit':
         return repo(optRepo(a)).commit(a);
       case 'lastMessage':

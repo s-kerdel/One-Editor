@@ -62,8 +62,9 @@ export function diffUnavailable(store: GitStore, path: string): string | null {
   return null;
 }
 
-/** Shows HEAD ↔ working copy for `path`. Resolves false (after a toast) when there is nothing to show. */
-export async function openDiffWithHead(store: GitStore, path: string): Promise<boolean> {
+/** Shows HEAD ↔ working copy for `path`. Resolves false (after a toast) when there is nothing to show.
+ *  `extra`: more view props (the pane's "include in commit" box). */
+export async function openDiffWithHead(store: GitStore, path: string, extra?: Partial<OverlayProps>): Promise<boolean> {
   const why = diffUnavailable(store, path);
   if (why) {
     app.toast(why, 'info');
@@ -95,6 +96,7 @@ export async function openDiffWithHead(store: GitStore, path: string): Promise<b
     baseLabel: `Last commit${head.oid ? ` (${head.oid.slice(0, 7)})` : ''}`,
     currentLabel: doc?.dirty.peek() ? 'Working copy, unsaved edits included' : 'Working copy',
     sameNote: mark ? 'Git still reports a change: line endings, encoding or the file mode differ.' : undefined,
+    ...extra,
   };
   showDiff(props);
   return true;
@@ -116,10 +118,10 @@ async function workingText(path: string): Promise<{ text: string; dirty: boolean
 }
 
 /** Source-control rows: like openDiffWithHead, but a new (untracked / added) file is shown against nothing. */
-export async function openChange(store: GitStore, path: string): Promise<boolean> {
-  if (store.headKey(path)) return openDiffWithHead(store, path);
+export async function openChange(store: GitStore, path: string, extra?: Partial<OverlayProps>): Promise<boolean> {
+  if (store.headKey(path)) return openDiffWithHead(store, path, extra);
   const cur = await workingText(path);
-  showDiff({ path, base: '', current: cur.text, baseLabel: 'Not in the last commit', currentLabel: cur.dirty ? 'Working copy, unsaved edits included' : 'New file' });
+  showDiff({ path, base: '', current: cur.text, baseLabel: 'Not in the last commit', currentLabel: cur.dirty ? 'Working copy, unsaved edits included' : 'New file', ...extra });
   return true;
 }
 

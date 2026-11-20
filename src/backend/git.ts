@@ -35,9 +35,13 @@ import {
   type GitStatus,
   type GitStatusResult,
   type GitUnavailable,
+  type GitFileHunks,
+  type GitHunkPick,
+  type GitWholeFileReason,
 } from '../shared/git';
 import { DETAIL_FORMAT, LOCAL_BRANCH_FORMAT, LOG_FORMAT, TRACE2_ENV, gitMessage, isAuthError, parseDetails, parseLocalBranches, parseLog, parseNameStatus, parseRemoteRefs, splitTrace2, terminalCommand } from './git-ops';
 import { gitSubcommand, logGitActivity } from './git-activity';
+import { buildPatch, composeBlocks, hunksForPicks, parseFileRecord, parseZeroDiff, type Block, type ParsedZeroDiff } from './git-hunks';
 import { WslGit, parseNetUse, parseWslPath, resolveMappedDrive, toUncPath, type WslPath } from './git-wsl';
 
 let netUse: Promise<Map<string, string>> | null = null;
@@ -195,7 +199,8 @@ interface RunOptions {
   /** 0 = no timeout, never killed (index refresh: a killed git can leave index.lock behind). */
   timeoutMs: number;
   maxBytes: number;
-  input?: string;
+  /** stdin; a Buffer goes in byte for byte (patches). */
+  input?: string | Buffer;
   /** POSIX: own session, no controlling terminal — ssh cannot block on a passphrase prompt in the
    *  terminal Electron was started from. Killed as a group on timeout. */
   detached?: boolean;
@@ -481,7 +486,7 @@ export interface GitServiceOptions {
 interface ExecOptions {
   timeoutMs: number;
   maxBytes: number;
-  input?: string;
+  input?: string | Buffer;
   signal?: AbortSignal;
   low?: boolean;
   trigger?: string;
@@ -851,7 +856,7 @@ export class GitService {
   }
 
   /** Runs a mutating git command and turns its outcome into an action result. */
-  private async act(repo: Repo, args: string[], o: { input?: string; timeoutMs?: number; net?: boolean; ok?: string; explain?: (text: string) => string | null } = {}): Promise<GitActionResult> {
+  private async act(repo: Repo, args: string[], o: { input?: string | Buffer; timeoutMs?: number; net?: boolean; ok?: string; explain?: (text: string) => string | null } = {}): Promise<GitActionResult> {
     const env = o.net ? { ...this.env } : this.env;
     if (o.net) delete env.GCM_INTERACTIVE; // the credential manager's own window is fine; terminal prompts are not
     const r = await this.exec(repo.git, ['-c', 'core.quotepath=off', '-c', 'color.ui=false', ...args], {
@@ -939,6 +944,107 @@ export class GitService {
       }
       for (const p of loose) await trash(p);
       return { ok: true, message: `Discarded ${tracked.length + loose.length} ${tracked.length + loose.length === 1 ? 'change' : 'changes'}` };
+    });
+  }
+
+  // ---- choose what to commit: blocks of one file in or out of the index -------------------------
+  // The index is the selection (the CLI and other tools see the same thing). Blocks come from git's
+  // zero-context diffs HEAD → index and index → working copy (git-hunks.ts composes them); a block goes
+  // in or out with `git apply --cached`, built from git's own diff bytes. The working tree is never touched.
+
+  /** Blocks of a file, or why it can only be staged as a whole. Read-only (repo.base: filters off). */
+  private async fileBlocks(repo: Repo, clean: string, from: string | null): Promise<{ repoPath: string; headPath: string; blocks: Block[] } | { reason: GitWholeFileReason }> {
+    const repoPath = repo.prefix + clean;
+    const specs = [`:(top,literal)${repoPath}`];
+    // Without the source in the pathspec git reports a staged rename as a new file.
+    if (from && from !== clean) specs.push(`:(top,literal)${repo.prefix}${from}`);
+    const st = await this.git(repo, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--ignore-submodules=dirty', '--', ...specs], { timeoutMs: T_READ, maxBytes: 1024 * 1024, trigger: 'hunks' });
+    if (st.code !== 0 || st.overflow) return { reason: 'unavailable' };
+    const rec = parseFileRecord(st.stdout.toString('utf8'), repoPath);
+    if (!rec) return { reason: 'unchanged' };
+    if (rec.kind === '?') return { reason: 'untracked' };
+    if (rec.kind === 'u') return { reason: 'conflicted' };
+    const x = rec.xy[0] ?? '.';
+    const y = rec.xy[1] ?? '.';
+    // Submodules, symlinks: no lines to pick from.
+    if (rec.sub !== 'N...' || rec.modes.some((m) => m !== '100644' && m !== '100755' && m !== '000000')) return { reason: 'special' };
+    if (x === 'A' || x === 'C') return { reason: 'added' };
+    if (x === 'D' || y === 'D') return { reason: 'deleted' };
+    if (!'.MR'.includes(x) || !'.M'.includes(y)) return { reason: 'special' }; // type changes
+    // A filter (Git LFS, clean/smudge drivers): the index holds something else than the file's lines.
+    const attr = await this.git(repo, ['check-attr', '-z', 'filter', '--', clean], { timeoutMs: T_QUICK, maxBytes: 64 * 1024, trigger: 'hunks' });
+    if (attr.code !== 0) return { reason: 'unavailable' };
+    const filter = attr.stdout.toString('utf8').split('\0')[2] ?? 'unspecified';
+    if (filter !== 'unspecified' && filter !== 'unset') return { reason: filter === 'lfs' ? 'lfs' : 'filter' };
+    const headPath = x === 'R' && rec.orig ? rec.orig : repoPath;
+    const base = ['diff', '-U0', '--inter-hunk-context=0', '--no-color', '--no-ext-diff', '--no-textconv'];
+    const o = { timeoutMs: T_READ, maxBytes: MAX_DIFF_BYTES, trigger: 'hunks' };
+    const [s, u] = await Promise.all([
+      x === '.' ? null : this.git(repo, [...base, `HEAD:${headPath}`, `:0:${repoPath}`], o), // blob ↔ blob: renames need no detection
+      y === '.' ? null : this.git(repo, [...base, '--', `:(top,literal)${repoPath}`], o),
+    ]);
+    const parse = (r: RunResult | null): ParsedZeroDiff | GitWholeFileReason => {
+      if (!r) return { binary: false, hunks: [] };
+      if (r.overflow) return 'too-large';
+      if (r.code !== 0) return 'unavailable';
+      return parseZeroDiff(r.stdout.toString('latin1')) ?? 'special';
+    };
+    const ps = parse(s);
+    const pu = parse(u);
+    if (typeof ps === 'string') return { reason: ps };
+    if (typeof pu === 'string') return { reason: pu };
+    if (ps.binary || pu.binary) return { reason: 'binary' };
+    return { repoPath, headPath, blocks: composeBlocks(ps.hunks, pu.hunks) };
+  }
+
+  private optionalRel(from: unknown): string | null {
+    return typeof from === 'string' && from ? this.validRel(from) : null;
+  }
+
+  /** The blocks of HEAD → working copy with their staged state, plus both texts the lines refer to. */
+  async hunks(rel: unknown, from?: unknown): Promise<GitFileHunks> {
+    const clean = this.validRel(rel);
+    const src = this.optionalRel(from);
+    const whole = (reason: GitWholeFileReason): GitFileHunks => ({ mode: 'file', reason });
+    const repo = await this.repo();
+    if (!repo.ok) return whole('unavailable');
+    const f = await this.fileBlocks(repo, clean, src);
+    if ('reason' in f) return whole(f.reason);
+    const head = await this.catFile(repo, 'HEAD', f.headPath);
+    if (head.tooLarge) return whole('too-large');
+    if (!head.data) return whole('unavailable');
+    let raw: Buffer;
+    try {
+      const abs = this.P.join(this.root, ...clean.split('/'));
+      if (fs.statSync(abs).size > GIT_MAX_BLOB_BYTES) return whole('too-large');
+      raw = fs.readFileSync(abs);
+    } catch {
+      return whole('unavailable');
+    }
+    const h = decode(head.data);
+    const w = decode(raw);
+    if (h.binary || w.binary) return whole('binary');
+    if (h.text.startsWith(LF_POINTER)) return whole('lfs');
+    // A lone CR is a line break for the editor but not for git: the lines would not line up.
+    if (/\r(?!\n)/.test(h.text) || /\r(?!\n)/.test(w.text)) return whole('special');
+    return { mode: 'hunks', head: toLf(h.text), work: toLf(w.text), hunks: f.blocks.map(({ a0, a1, b0, b1, state }) => ({ a0, a1, b0, b1, state })) };
+  }
+
+  /** Puts blocks into the index (`include`) or takes them out, by their ranges from `hunks()`. */
+  async stageHunks(rel: unknown, picks: unknown, from?: unknown): Promise<GitActionResult> {
+    const clean = this.validRel(rel);
+    const src = this.optionalRel(from);
+    const list = validPicks(picks);
+    const repo = await this.needRepo();
+    if (!('base' in repo)) return repo;
+    return this.serial(async () => {
+      // Recomputed inside the queue: positions always refer to the index as it is now.
+      const f = await this.fileBlocks(repo, clean, src);
+      if ('reason' in f) return { ok: false, message: f.reason === 'unchanged' ? 'There is nothing to stage in this file any more' : 'This file can only be staged as a whole' };
+      const { hunks, missing } = hunksForPicks(f.blocks, list);
+      if (missing) return { ok: false, message: 'The file changed meanwhile. Look at it again, then retry.' };
+      if (!hunks.length) return { ok: true };
+      return this.act(repo, ['apply', '--cached', '--unidiff-zero', '--whitespace=nowarn', '-'], { input: buildPatch(f.repoPath, hunks), ok: '' });
     });
   }
 
@@ -1390,6 +1496,21 @@ function readBatch(buf: Buffer, at: number): { ok: true; oid: string; type: stri
   if (!m) return { ok: false, next: nl + 1 };
   const size = Number(m[3]);
   return { ok: true, oid: m[1], type: m[2], size, start: nl + 1, next: nl + 1 + size + 1 };
+}
+
+/** Block picks from the renderer: whole, non-negative line numbers and an include flag, nothing else. */
+function validPicks(v: unknown): GitHunkPick[] {
+  if (!Array.isArray(v) || !v.length || v.length > 10_000) throw new BackendFailure('EINVAL', 'Expected a list of blocks');
+  return v.map((p) => {
+    const o = (p && typeof p === 'object' ? p : {}) as Record<string, unknown>;
+    const n = (k: string) => {
+      const x = o[k];
+      if (typeof x !== 'number' || !Number.isInteger(x) || x < 0 || x > 1e9) throw new BackendFailure('EINVAL', 'Invalid block');
+      return x;
+    };
+    if (typeof o.include !== 'boolean') throw new BackendFailure('EINVAL', 'Invalid block');
+    return { a0: n('a0'), a1: n('a1'), b0: n('b0'), b1: n('b1'), include: o.include };
+  });
 }
 
 /** Classifies a failed git call; null when it succeeded. */
