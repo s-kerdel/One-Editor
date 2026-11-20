@@ -57,6 +57,8 @@ test('Ctrl+F finds and highlights text; Enter goes to the next match', async ({ 
   await openSample(page);
   await page.locator('.se-pdf-scroll').focus();
   await page.keyboard.press('Control+f');
+  // Type only once the box has focus: keys sent earlier land elsewhere (a search for just 'e' under load).
+  await expect(page.locator('.se-pdf-find-input')).toBeFocused();
   await expect(page.locator('.se-pdf-find-input')).toBeFocused();
   await page.keyboard.type('needle');
   await expect(page.locator('.se-pdf-find-count')).toHaveText('1 / 3', { timeout: 10000 });

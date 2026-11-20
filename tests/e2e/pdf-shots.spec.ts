@@ -21,6 +21,8 @@ for (const theme of ['dark', 'light'] as const) {
     await page.screenshot({ path: `${SHOTS}/${theme}-viewer.png` });
     await page.locator('.se-pdf-scroll').focus();
     await page.keyboard.press('Control+f');
+    // Type only once the box has focus: keys sent earlier land elsewhere (a search for just 'e' under load).
+    await expect(page.locator('.se-pdf-find-input')).toBeFocused();
     await page.keyboard.type('needle');
     await expect(page.locator('.se-pdf-find-count')).toHaveText('1 / 2');
     await page.waitForTimeout(200);
