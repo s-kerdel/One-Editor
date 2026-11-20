@@ -612,6 +612,19 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 
 **Compare a whole file:** right-click it (tree or tab) → **Diff with last commit**. Or `Ctrl+Shift+P` → "Diff with last commit". Switch **Unified / Side by side** at the top. `F7` jumps to the next change, `Esc` closes.
 
+**Edit right in the diff.** The header says **Working copy · editable** when you can.
+
+| I want to… | Do this |
+|---|---|
+| Change a line | **Type** in the working copy (side by side: the **right** side) |
+| Save | **`Ctrl+S`** (autosave works too). The tab shows the unsaved dot until then |
+| Put one block back as it was | **Revert** on the block (side by side: the **→** between the sides), or **`Ctrl+F7`** at the cursor |
+| Take that back | **`Ctrl+Z`** |
+| Find text | `Ctrl+F` |
+
+- It **is** the file: the same text as its tab. Close the diff any time, **nothing is lost** (the file gets a tab if it had none).
+- **Read-only:** the last commit (left side), old commits in **History**, deleted files.
+
 ### Commit and push (`Ctrl+Shift+G`)
 
 1. Open the **Git** panel (`Ctrl+Shift+G` or the branch pill in the sidebar).
@@ -630,7 +643,8 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 - **Header box**: everything in / everything out. "3 of 7 selected" next to it.
 - **Keyboard**: `↑` / `↓` between files, **`Space`** ticks, `Enter` shows the changes.
 - A box **is** git's staging area (`git add`). A terminal sees the same. Your files are never changed.
-- Parts of a file: only for files in the last commit. New, deleted and binary files go in whole. Unsaved edits? Save first.
+- Parts of a file: only for files in the last commit. New, deleted and binary files go in whole.
+- **Edited in the diff, not saved yet?** Ticking a block **saves first**, then puts that block in. New blocks get their box after the save.
 
 | Also | How |
 |---|---|
@@ -661,6 +675,8 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 | A whole file with the clipboard | Right-click the file in the tree, or its tab → **Compare with Clipboard** |
 
 In the compare view: **Swap sides**, **Ignore whitespace**, **Copy as patch**, Unified / Side by side. `Esc` closes it; nothing is changed or saved.
+
+**Editable too:** when the **right** side is a whole open file (not a selection, not the clipboard), you can type in it and **Revert** blocks, like in a diff. **Swap sides** to bring your file to the right. Not while **Ignore whitespace** is on.
 
 - The diff is **git's own** (`git diff --histogram`). No git installed? A built-in diff is used and the header says "built-in diff".
 - The remembered selection is kept **in memory only**, and dropped when you open another folder.

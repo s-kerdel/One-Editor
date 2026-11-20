@@ -179,7 +179,7 @@ describe('DiffView', () => {
       expect(el.querySelector('[data-testid="git-diff-stats"]')!.textContent).toBe('+2 −1');
       const second = el.querySelectorAll('.se-git-hunkbar')[1] as HTMLElement;
       second.click();
-      expect(staging.toggleHunk).toHaveBeenLastCalledWith(1);
+      expect(staging.toggleHunk).toHaveBeenLastCalledWith(1, expect.any(Function)); // + where the bar is by then
       act(() => {
         hunks.value = [hunks.value![0], { ...hunks.value![1], state: 'staged' }];
       });

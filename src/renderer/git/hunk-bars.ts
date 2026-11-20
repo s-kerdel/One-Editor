@@ -6,6 +6,8 @@ import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemir
 import type { GitHunk } from '@shared/git';
 
 export const setHunkBars = StateEffect.define<readonly GitHunk[]>();
+/** `line`: the bar's working-copy line (0-based) at the time it is called. */
+export type ToggleBar = (index: number, line: () => number) => void;
 
 const CHECKED = { staged: 'true', unstaged: 'false', mixed: 'mixed' } as const;
 
@@ -13,7 +15,7 @@ class HunkBar extends WidgetType {
   constructor(
     readonly index: number,
     readonly h: GitHunk,
-    readonly toggle: (index: number) => void,
+    readonly toggle: ToggleBar,
   ) {
     super();
   }
@@ -22,7 +24,7 @@ class HunkBar extends WidgetType {
     return o.index === this.index && o.h.state === this.h.state && o.h.a0 === this.h.a0 && o.h.a1 === this.h.a1 && o.h.b0 === this.h.b0 && o.h.b1 === this.h.b1;
   }
 
-  toDOM() {
+  toDOM(view: EditorView) {
     const bar = document.createElement('div');
     bar.className = 'se-git-hunkbar';
     const box = document.createElement('button');
@@ -36,7 +38,8 @@ class HunkBar extends WidgetType {
     bar.append(box, label, size);
     // The whole bar is the click target; the index is read from the DOM (it survives updateDOM).
     bar.addEventListener('mousedown', (e) => e.preventDefault()); // no editor selection, no focus jump
-    bar.addEventListener('click', () => this.toggle(Number(bar.dataset.index)));
+    // The line is asked for later (the diff may be edited and saved first): where this bar is by then.
+    bar.addEventListener('click', () => this.toggle(Number(bar.dataset.index), () => view.state.doc.lineAt(view.posAtDOM(bar)).number - 1));
     this.sync(bar);
     return bar;
   }
@@ -70,7 +73,7 @@ class HunkBar extends WidgetType {
 /** Above the block's first working-copy line (a pure deletion: where its lines were). */
 const at = (doc: Text, line: number) => (line < doc.lines ? doc.line(line + 1).from : doc.length);
 
-function build(doc: Text, hunks: readonly GitHunk[], toggle: (i: number) => void): DecorationSet {
+function build(doc: Text, hunks: readonly GitHunk[], toggle: ToggleBar): DecorationSet {
   const b = new RangeSetBuilder<Decoration>();
   // side -2: above the unified view's deleted-lines widget (side -1) at the same spot.
   hunks.forEach((h, i) => {
@@ -80,13 +83,14 @@ function build(doc: Text, hunks: readonly GitHunk[], toggle: (i: number) => void
   return b.finish();
 }
 
-/** The bars for the working-copy editor; later states via `setHunkBars`. */
-export function hunkBars(initial: readonly GitHunk[], toggle: (index: number) => void): Extension {
+/** The bars for the working-copy editor; later states via `setHunkBars`. While the text is edited
+ *  they stay with their lines (git's blocks are read again after the save). */
+export function hunkBars(initial: readonly GitHunk[], toggle: ToggleBar): Extension {
   return StateField.define<DecorationSet>({
     create: (state) => build(state.doc, initial, toggle),
     update(deco, tr) {
       for (const e of tr.effects) if (e.is(setHunkBars)) return build(tr.state.doc, e.value, toggle);
-      return deco;
+      return tr.docChanged ? deco.map(tr.changes) : deco;
     },
     provide: (f) => EditorView.decorations.from(f),
   });

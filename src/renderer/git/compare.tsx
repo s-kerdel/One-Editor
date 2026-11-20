@@ -1,7 +1,8 @@
 // Compare text (lazy chunk): the selection or document vs the clipboard / a remembered selection, in the
 // diff view. The diff is git's own (`git diff --no-index --histogram`, via the backend); without git a
-// built-in line diff is used and the header says so. Sources are read-only; closing leaves nothing behind.
-import { useEffect, useState } from 'preact/hooks';
+// built-in line diff is used and the header says so. Sources are read-only, except a whole open file on the
+// right (it can be edited like any diff of the working copy); closing leaves nothing behind.
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Change } from '@codemirror/merge';
 import type { GitTextHunk } from '@shared/git';
 import { app } from '../app/app';
@@ -13,6 +14,7 @@ export type { CompareSource };
 import { DiffView, type DiffLayout } from './DiffView';
 import { builtinHunks, formatPatch, hunkStats, hunksToChanges, relabelPatch } from './compare-diff';
 import { gitCall } from './rpc';
+import { editableSide } from './diff-edit';
 
 
 const MAX = 5 * 1024 * 1024;
@@ -139,22 +141,37 @@ function close() {
 }
 
 function CompareOverlay({ left, right }: { left: CompareSource; right: CompareSource }) {
-  const [swapped, setSwapped] = useState(false);
+  /** In display order (a = left); "Swap sides" turns them around. */
+  const [pair, setPair] = useState({ a: left, b: right });
   const [ws, setWs] = useState(read(WS_KEY) === '1');
   const [layout, setLayout] = useState<DiffLayout>(read(LAYOUT_KEY) === 'split' ? 'split' : 'unified');
   const [res, setRes] = useState<Result | null>(null);
-  const a = swapped ? right : left;
-  const b = swapped ? left : right;
+  const { a, b } = pair;
+  /** The right side as edited in the view (it is the open file then); null: untouched. */
+  const edited = useRef<(() => string) | null>(null);
+  const bNow = (): CompareSource => (edited.current ? { ...b, text: edited.current() } : b);
+  // Editable when the right side is a whole workspace file, shown exactly as its open document is now.
+  const editable = useMemo(() => {
+    const doc = b.path && app.docs.has(b.path) ? app.editor?.getContent(b.path) : undefined;
+    return editableSide({ kind: 'compare', path: b.path, whole: b.label === b.path, live: doc !== undefined && doc === b.text, ignoreWhitespace: ws }) === 'b';
+  }, [pair, ws]);
   useEffect(() => {
     let alive = true;
+    edited.current = null;
     void computeCompare(a.text, b.text, ws, a.label, b.label).then((r) => alive && setRes(r));
     return () => {
       alive = false;
     };
-  }, [swapped, ws]);
+  }, [pair, ws]);
+  const copyPatch = () => {
+    if (!res) return;
+    const t = edited.current?.() ?? b.text;
+    if (t === b.text) return void copyText(res.patch, 'Patch');
+    void computeCompare(a.text, t, ws, a.label, b.label).then((r) => copyText(r.patch, 'Patch'));
+  };
   const tools = (
     <>
-      <button type="button" class="se-git-diff-tool" title="Swap left and right" onClick={() => (setRes(null), setSwapped(!swapped))}>
+      <button type="button" class="se-git-diff-tool" title="Swap left and right" onClick={() => (setRes(null), setPair({ a: bNow(), b: a }))}>
         ⇄ Swap sides
       </button>
       <label class="se-git-diff-tool se-git-diff-check" title="Treat lines that differ only in spaces / tabs as equal">
@@ -165,12 +182,13 @@ function CompareOverlay({ left, right }: { left: CompareSource; right: CompareSo
             const on = (e.currentTarget as HTMLInputElement).checked;
             write(WS_KEY, on ? '1' : '0');
             setRes(null);
+            setPair({ a, b: bNow() });
             setWs(on);
           }}
         />
         Ignore whitespace
       </label>
-      <button type="button" class="se-git-diff-tool" title="Copy the differences as a unified diff" disabled={!res?.patch} onClick={() => res && copyText(res.patch, 'Patch')}>
+      <button type="button" class="se-git-diff-tool" title="Copy the differences as a unified diff" disabled={!res?.patch && edited.current === null} onClick={copyPatch}>
         Copy as patch
       </button>
     </>
@@ -180,7 +198,7 @@ function CompareOverlay({ left, right }: { left: CompareSource; right: CompareSo
       {res ? (
         <DiffView
           title="Compare text"
-          path={a.path ?? b.path ?? ''}
+          path={editable ? b.path! : (a.path ?? b.path ?? '')} // an editable right side is bound by its path
           base={a.text}
           current={b.text}
           baseLabel={a.label}
@@ -193,6 +211,8 @@ function CompareOverlay({ left, right }: { left: CompareSource; right: CompareSo
           engine={res.engine}
           tools={tools}
           sameNote={ws ? 'Whitespace is ignored.' : undefined}
+          editable={editable}
+          onEdited={(get) => (edited.current = get)}
         />
       ) : (
         <div class="se-git-diff" aria-busy="true" />

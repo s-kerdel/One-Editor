@@ -5,6 +5,7 @@ import { basename } from '@shared/paths';
 import { app } from '../app/app';
 import type { GitStore } from './store';
 import type { DiffLayout, DiffViewProps } from './DiffView';
+import { editableSide } from './diff-edit';
 
 const LAYOUT_KEY = 'sec-edit.git.diffLayout';
 
@@ -79,22 +80,17 @@ export async function openDiffWithHead(store: GitStore, path: string, extra?: Pa
     );
     return false;
   }
-  const doc = app.docs.get(path);
-  let current = doc?.content ?? app.editor?.getContent(path);
-  if (current === undefined) {
-    try {
-      current = (await app.backend.readFile(path)).content;
-    } catch {
-      current = ''; // deleted on disk: everything shows as removed
-    }
-  }
+  const cur = await workingText(path);
+  const editable = editableSide({ kind: 'working', text: cur.exists }) === 'b';
   const mark = store.marks.peek().file(path);
   const props: OverlayProps = {
     path,
     base: head.content,
-    current,
+    current: cur.text,
     baseLabel: `Last commit${head.oid ? ` (${head.oid.slice(0, 7)})` : ''}`,
-    currentLabel: doc?.dirty.peek() ? 'Working copy, unsaved edits included' : 'Working copy',
+    // An editable diff says "unsaved edits" itself, live.
+    currentLabel: cur.dirty && !editable ? 'Working copy, unsaved edits included' : 'Working copy',
+    editable,
     sameNote: mark ? 'Git still reports a change: line endings, encoding or the file mode differ.' : undefined,
     ...extra,
   };
@@ -107,13 +103,15 @@ export function showDiff(props: OverlayProps) {
   app.overlay.value = () => <DiffOverlay {...props} />;
 }
 
-async function workingText(path: string): Promise<{ text: string; dirty: boolean }> {
+/** The file as the folder has it (unsaved edits included). `exists`: false when it is gone (everything
+ *  shows as removed) or not text — then there is nothing to edit. */
+export async function workingText(path: string): Promise<{ text: string; dirty: boolean; exists: boolean }> {
   const doc = app.docs.get(path);
-  const text = doc?.content ?? app.editor?.getContent(path);
-  if (text !== undefined) return { text, dirty: !!doc?.dirty.peek() };
+  const text = doc?.binary ? undefined : (doc?.content ?? app.editor?.getContent(path));
+  if (text !== undefined) return { text, dirty: !!doc?.dirty.peek(), exists: true };
   return app.backend.readFile(path).then(
-    (f) => ({ text: f.binary ? '' : f.content, dirty: false }),
-    () => ({ text: '', dirty: false }),
+    (f) => ({ text: f.binary ? '' : f.content, dirty: false, exists: !f.binary }),
+    () => ({ text: '', dirty: false, exists: false }),
   );
 }
 
@@ -121,7 +119,8 @@ async function workingText(path: string): Promise<{ text: string; dirty: boolean
 export async function openChange(store: GitStore, path: string, extra?: Partial<OverlayProps>): Promise<boolean> {
   if (store.headKey(path)) return openDiffWithHead(store, path, extra);
   const cur = await workingText(path);
-  showDiff({ path, base: '', current: cur.text, baseLabel: 'Not in the last commit', currentLabel: cur.dirty ? 'Working copy, unsaved edits included' : 'New file', ...extra });
+  const editable = editableSide({ kind: 'working', text: cur.exists }) === 'b';
+  showDiff({ path, base: '', current: cur.text, baseLabel: 'Not in the last commit', currentLabel: cur.dirty && !editable ? 'Working copy, unsaved edits included' : 'New file', editable, ...extra });
   return true;
 }
 
@@ -136,5 +135,5 @@ export async function openCommitDiff(file: { path: string; from?: string | null;
     app.toast(`“${basename(file.path)}” cannot be compared (binary or too large)`, 'info');
     return;
   }
-  showDiff({ path: file.path, base, current, baseLabel: commit.parent ? `Before (${commit.parent.slice(0, 7)})` : 'Before (nothing: first commit)', currentLabel: `Commit ${commit.oid.slice(0, 7)}` });
+  showDiff({ path: file.path, base, current, baseLabel: commit.parent ? `Before (${commit.parent.slice(0, 7)})` : 'Before (nothing: first commit)', currentLabel: `Commit ${commit.oid.slice(0, 7)}`, editable: editableSide({ kind: 'commit' }) === 'b' });
 }

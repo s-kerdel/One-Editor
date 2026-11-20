@@ -108,3 +108,25 @@
 .se-git-diff .se-git-hunkbar:hover { background: var(--bg-hover); color: var(--text); }
 .se-git-diff .se-git-hunkbar[data-state='staged'] { color: var(--text); }
 .se-git-hunkbar-size { margin-left: auto; font: 11.5px var(--font-mono); color: var(--text-faint); }
+
+/* Editable working copy: a quiet hint in the header and one revert control per changed block
+   (side by side: in the column between the editors; unified: at the block's top right). */
+.se-git-diff-editable { color: var(--text-faint); }
+.se-git-diff .se-git-diff-body .se-git-revert {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--text-muted);
+  font: 11px/16px var(--font-ui);
+  cursor: pointer;
+  opacity: 0.8;
+}
+.se-git-diff .se-git-diff-body .se-git-revert:hover,
+.se-git-diff .se-git-diff-body .se-git-revert:focus-visible { background: var(--bg-hover); color: var(--text); border-color: var(--border-strong); opacity: 1; }
+/* Anchored to its own block (the package leaves it to the nearest positioned ancestor). */
+.se-git-diff .se-git-diff-body .cm-deletedChunk { position: relative; }
+.se-git-diff .se-git-diff-body .cm-chunkButtons { top: 2px; inset-inline-end: 8px; z-index: 1; }
+.se-git-diff .se-git-diff-body .cm-chunkButtons .se-git-revert { margin: 0; padding: 0 7px; }
+.se-git-diff .se-git-diff-body .cm-merge-revert { width: 24px; background: var(--bg-elev); border-left: 1px solid var(--border); }
+.se-git-diff .se-git-diff-body .cm-merge-revert .se-git-revert { left: 3px; width: 18px; height: 18px; margin-top: 1px; padding: 0; line-height: 16px; text-align: center; }
+.se-git-diff .se-git-diff-body .cm-merge-revert + .cm-mergeViewEditor { border-left: 1px solid var(--border); }
