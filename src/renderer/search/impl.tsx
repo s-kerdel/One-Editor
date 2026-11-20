@@ -8,6 +8,7 @@ import { registerCommand } from '../app/commands';
 import { openPalette } from './Palette';
 import { SearchPanel, installPanelEffects, runSearchNow, stepResult } from './SearchPanel';
 import { focusTick, query, showReplace, useRegex } from './state';
+import '../app/overlays.css'; // palette base (shell; .se-omnibox resizes it)
 import './search.css';
 
 export { searchClient, openPalette, SearchPanel, stepResult };

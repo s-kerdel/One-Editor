@@ -6,11 +6,13 @@ import { signal } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import { app } from '../app/app';
 import { addIcons, Icon } from '../app/icons';
+import '../app/icon-pack'; // copy
 import { registerCommands, runCommand } from '../app/commands';
 import * as ui from '../app/ui';
 import { copyText } from '../app/fileops';
 import { STOPPED, optionsFromSettings, type WebServerOptions, type WebServerReply, type WebServerStatus, type WebServerUrl } from '@shared/web-server';
 import { webServerPill } from './slot';
+import '../app/overlays.css'; // dialog base (.se-wsrv resizes it)
 import './webserver.css';
 
 addIcons({

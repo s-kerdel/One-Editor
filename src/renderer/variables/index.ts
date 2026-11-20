@@ -1,6 +1,7 @@
 // {{variables}} — lazy chunk (loaded on idle when the folder uses them, or on the first action).
 // Plugs a provider into the editor (./cm), the render hook into preview + export (app.variables),
 // the status-bar pills (./slot) and the palette commands.
+import '../app/overlays.css'; // dialog / picker base (shell; .se-vars-targets resizes it)
 import './variables.css';
 import { setDiagnostics } from '@codemirror/lint';
 import type { EditorView } from '@codemirror/view';

@@ -4,10 +4,12 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { Settings } from '@shared/api';
 import { app } from './app';
 import { addIcons, Icon } from './icons';
+import './icon-pack'; // shell icons the first screen doesn't draw (check, refresh, pencil, …)
 import { BuildFooter } from './build-info';
 import { listCommands, onCommandsChanged, prettyKey } from './commands';
 import { flushSettings, setViewMode, updateSettings, ZOOM_STEPS } from './settings';
 import { SECTIONS, SETTINGS, filterSettings, isChanged, parseList, parseNumber, resetPatch, shortcutRows, valueOf, type Choice, type SectionId, type SettingDef } from './settings-registry';
+import './overlays.css'; // steppers
 import './settings-ui.css';
 import { primeClassic } from './classic-loader';
 import { lazyComponent } from './lazy';

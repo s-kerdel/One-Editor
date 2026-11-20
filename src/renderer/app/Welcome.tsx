@@ -2,6 +2,7 @@
 import { app } from './app';
 import * as ui from './ui';
 import { addIcons, Icon } from './icons';
+import './welcome.css';
 import { prettyKey, runCommand, getCommand } from './commands';
 import { openWorkspace } from './documents';
 

@@ -158,6 +158,11 @@ there only if it must beat the shell.
    already are (app.css); otherwise add class `se-no-drag`. Floating UI over the strip (menus, dialogs) must be no-drag too.
    Don't place anything under the window controls: the strip reserves them via `--wco-right`.
    Put your CSS in your own folder (e.g. `src/renderer/editor/editor.css`) and import it from your module. Prefix classes `se-`.
+   app.css holds only first-screen styles: classic-only rules are in `app/classic.css` (classic chunk); the palette,
+   dialog, picker and stepper bases (`.se-palette*`, `.se-dialog*`, `.se-picker*`, `.se-stepper`) are in `app/overlays.css` —
+   import it from any chunk that renders them (`.se-overlay` and `.se-menu*` stay in app.css).
+   Icons: `app/icons.tsx` holds only first-screen glyphs; others are in the lazy `app/icon-pack.ts` or your chunk's
+   `addIcons()`. An `<Icon>` whose name isn't registered yet draws an empty box and redraws when it arrives.
 4. **Dependencies**: install ONLY via `flock /tmp/sec-edit-npm.lock npm install <pkg>` (serialises concurrent agents).
    Edit `package.json` scripts ONLY via `flock /tmp/sec-edit-npm.lock npm pkg set scripts.x="..."`.
 5. **Testing is mandatory.** Unit tests in `tests/unit/<area>/`, E2E in `tests/e2e/<area>*.spec.ts` using `tests/e2e/harness.ts`

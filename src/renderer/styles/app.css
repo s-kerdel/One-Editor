@@ -314,44 +314,6 @@ html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220)
 .se-overview > .se-sash { right: auto; left: -6px; }
 .se-root.ov-open .se-content { margin-right: 0; }
 
-/* ---------- classic sidebar style (Settings → Appearance → Sidebar style) ----------
-   IDE-like: icon activity bar, flat sidebar, dense rows with guides, editor flush to the window. */
-.se-activity { width: 48px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; background: var(--bg-activity); border-right: 1px solid var(--border); }
-.se-activity-btn { position: relative; width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-faint); transition: color 0.12s, background 0.12s; }
-.se-activity-btn:hover { color: var(--text); background: var(--bg-hover); }
-.se-activity-btn.active { color: var(--text); }
-.se-activity-btn.active::before { content: ''; position: absolute; left: -6px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 var(--radius-xs) var(--radius-xs) 0; background: var(--accent); }
-.se-activity-spacer { flex: 1; }
-.se-tree-caret { width: 16px; height: 16px; flex: none; display: grid; place-items: center; color: var(--text-faint); }
-.se-tree-guide { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--border); }
-.se-tree-row:hover .se-tree-guide { background: var(--border-strong); }
-.se-root.ui-classic { background: var(--bg); }
-.ui-classic .se-sidebar { min-width: 170px; padding: 0; gap: 0; background: var(--bg-sunken); border-right: 1px solid var(--border); }
-.ui-classic .se-sidebar-body { margin: 0; }
-.ui-classic .se-sash { right: -4px; width: 8px; }
-.ui-classic .se-sash::after { left: 3px; top: 0; bottom: 0; border-radius: 0; }
-.ui-classic .se-content, .ui-classic .se-main.shelf-hidden .se-content { margin: 0; border: 0; border-radius: 0; box-shadow: none; }
-.ui-classic .se-overview { padding: 0; --ov-pad-r: 0px; background: var(--bg-sunken); border-left: 1px solid var(--border); }
-.ui-classic .se-overview > .se-sash { left: -5px; right: auto; }
-.ui-classic .se-panel-head { height: 38px; padding: 0 8px 0 16px; }
-.ui-classic .se-panel-title { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
-.ui-classic .se-filter { margin: 0 10px 6px; }
-.ui-classic .se-filter-input { height: 28px; border-radius: var(--radius); background: var(--bg-input); font-size: 12.5px; }
-.ui-classic .se-tree-row { height: var(--row-h-classic); gap: 5px; border-radius: var(--radius-sm); font-size: 13px; color: var(--text-muted); }
-.ui-classic .se-tree-row.dir { color: var(--text-muted); }
-.ui-classic .se-tree-row:hover { color: var(--text); }
-.ui-classic .se-tree-row.active { background: var(--accent-soft); box-shadow: none; }
-.ui-classic .se-tree-row.active .se-tree-name { font-weight: 500; }
-.ui-classic .se-tree-lead { display: contents; }
-/* Also on hover: 1 ↔ 0.8 would add / drop the span's paint layer — a layout for every row the pointer crosses. */
-.ui-classic .se-tree-ext, .ui-classic .se-tree-row:hover .se-tree-ext { opacity: 1; }
-.ui-classic .se-tree-input { height: 22px; border-radius: var(--radius-sm); }
-.ui-classic .se-tree-error { top: var(--row-h-classic); }
-.se-classic-ws { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; height: 26px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: var(--radius); background: transparent; text-align: left; }
-.se-classic-ws:hover { background: var(--bg-hover); }
-.se-classic-ws:hover .se-panel-title { color: var(--text); }
-.se-classic-ws-caret { color: var(--text-faint); }
-
 /* ---------- content / tabs ---------- */
 .se-tabbar { display: flex; align-items: stretch; height: var(--tab-h); flex: none; background: var(--bg-sunken); border-bottom: 1px solid var(--border); }
 .se-tabs { flex: 1; min-width: 0; display: flex; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
@@ -399,47 +361,13 @@ html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220)
 .se-editor-area.mode-preview .se-editor-host { display: none; }
 .se-editor-area.empty .se-editor-panes, .se-editor-area.viewer .se-editor-host, .se-editor-area.viewer .se-preview-host { display: none; }
 .se-editor-area.empty { overflow: auto; }
-.se-split-sash { position: relative; width: 1px; flex: none; z-index: 4; background: var(--border); }
-.se-split-sash::before { content: ''; position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; }
-.se-split-sash::after { content: ''; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: transparent; transition: background 0.15s 0.1s; pointer-events: none; }
-.se-split-sash:hover::after, body.se-resizing-x .se-split-sash::after { background: var(--accent); }
 
 .se-editor { height: 100%; font-size: var(--editor-font-size); }
 .se-editor .cm-scroller { font-family: var(--font-editor); line-height: var(--editor-line-height); }
 .se-editor.cm-focused { outline: none; }
 .se-editor .cm-content { max-width: var(--content-width); margin: 0 auto; padding: 24px 32px 40vh; caret-color: var(--accent); }
 
-.se-banner { display: flex; align-items: center; gap: 10px; padding: 8px 14px; flex: none; border-bottom: 1px solid var(--border); background: var(--warning-soft); color: var(--text); font-size: 12.5px; }
-.se-banner > .se-icon { color: var(--warning); }
-.se-banner-text { flex: 1; min-width: 0; }
-
-.se-viewer { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; overflow: auto; background: var(--bg); background-image: radial-gradient(var(--border) 1px, transparent 1px); background-size: 16px 16px; }
-.se-viewer-img { max-width: 100%; max-height: calc(100% - 40px); object-fit: contain; border-radius: var(--radius-sm); box-shadow: var(--shadow-sm); background: repeating-conic-gradient(var(--bg-hover) 0% 25%, var(--bg) 0% 50%) 50% / 16px 16px; }
-.se-viewer-caption { color: var(--text-muted); font-size: 12px; }
-.se-viewer-binary { display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--text-muted); padding: 32px 40px; border-radius: var(--radius-lg); background: var(--bg-elev); border: 1px solid var(--border); }
-
-/* ---------- welcome ---------- */
-.se-welcome { flex: 1; display: flex; align-items: center; justify-content: center; padding: 48px 32px; min-height: 100%; }
-.se-welcome-inner { width: min(720px, 100%); display: flex; flex-direction: column; gap: 28px; }
-.se-welcome-brand { display: flex; align-items: center; gap: 16px; }
-.se-logo { width: 56px; height: 56px; display: block; flex: none; user-select: none; }
-.se-welcome h1 { margin: 0; font-size: 30px; font-weight: 650; letter-spacing: -0.02em; color: var(--text); }
-.se-welcome-sub { margin: 2px 0 0; color: var(--text-muted); font-size: 13.5px; word-break: break-all; }
-.se-welcome-actions { display: flex; flex-wrap: wrap; gap: 10px; }
-.se-welcome-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 28px; }
-.se-welcome-section h2 { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
-.se-recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.se-recent li { position: relative; display: flex; align-items: center; }
-.se-recent-item { flex: 1; min-width: 0; display: grid; grid-template-columns: 18px auto 1fr; align-items: center; gap: 8px; padding: 7px 30px 7px 8px; border: 0; border-radius: var(--radius); background: transparent; text-align: left; color: var(--text); }
-.se-recent-item:hover { background: var(--bg-hover); }
-.se-recent-item .se-icon { color: var(--accent); }
 .se-shelf-recent-name { font-weight: 500; }
-.se-recent-path { color: var(--text-faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.se-recent-forget { position: absolute; right: 4px; opacity: 0; }
-.se-recent li:hover .se-recent-forget { opacity: 1; }
-.se-shortcuts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.se-shortcuts li { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-muted); padding: 2px 0; }
-.se-keys { display: inline-flex; gap: 3px; }
 
 /* ---------- status bar ---------- */
 .se-status { display: flex; align-items: center; gap: 2px; height: var(--status-h); flex: none; padding: 0 6px; font-size: 12px; color: var(--text-muted); background: var(--bg-sunken); border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; }
@@ -458,24 +386,10 @@ html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220)
 .se-save-state.dirty { color: var(--text-muted); }
 .se-save-state.warn { color: var(--warning); }
 
-/* ---------- overlays (palette shared with search / knowledge) ---------- */
+/* ---------- overlays (palette, dialogs, picker: app/overlays.css, with the chunks that open them) ----------
+   .se-overlay stays here (git's diff view uses it); menus too (the editor's toolbar menus reuse .se-menu). */
 .se-overlay { position: fixed; inset: 0; background: var(--overlay-bg); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; z-index: 100; animation: se-fade 0.12s ease-out both; }
-.se-palette { width: min(640px, 92vw); background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-xl); box-shadow: var(--shadow); overflow: hidden; animation: se-pop 0.14s ease-out both; }
-.se-palette-input { width: 100%; border: 0; outline: 0; padding: 14px 16px; font-size: 15px; background: transparent; color: var(--text); border-bottom: 1px solid var(--border); }
-.se-palette-list { list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow: auto; }
-.se-palette-item { display: flex; justify-content: space-between; gap: 12px; padding: 6px 10px; border-radius: var(--radius); cursor: pointer; }
-.se-palette-item.selected { background: var(--accent-soft); }
 
-.se-dialog-backdrop { align-items: center; padding-top: 0; }
-.se-dialog { width: min(440px, 92vw); padding: 20px 20px 16px; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-xl); box-shadow: var(--shadow); animation: se-pop 0.14s ease-out both; display: flex; flex-direction: column; gap: 10px; }
-.se-dialog-title { margin: 0; font-size: 15px; font-weight: 650; }
-.se-dialog-msg { margin: 0; color: var(--text-muted); line-height: 1.5; }
-.se-dialog-details { margin: 0; padding: 8px 12px 8px 28px; max-height: 160px; overflow: auto; background: var(--bg-sunken); border-radius: var(--radius); color: var(--text-muted); font: 12px/1.6 var(--font-mono); }
-.se-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
-.se-stepper { display: inline-flex; align-items: center; gap: 4px; }
-.se-stepper .se-icon-btn { font-size: 16px; color: var(--text); border: 1px solid var(--border-strong); width: 30px; height: 30px; }
-.se-stepper .se-input.narrow { width: 60px; padding: 0 4px; appearance: textfield; }
-.se-stepper .se-input::-webkit-inner-spin-button { appearance: none; }
 
 .se-menu { position: fixed; z-index: 300; min-width: 210px; max-width: 320px; padding: 5px; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-md); box-shadow: var(--shadow); outline: none; animation: se-pop 0.1s ease-out both; }
 .se-menu-item { width: 100%; display: flex; align-items: center; gap: 9px; height: var(--row-h); padding: 0 10px 0 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); text-align: left; font-size: 12.5px; }
@@ -489,19 +403,6 @@ html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220)
 .se-menu-keys { color: var(--text-faint); font-size: 11.5px; }
 .se-menu-sep { height: 1px; margin: 5px 6px; background: var(--border); }
 
-.se-picker-backdrop { position: fixed; inset: 0; z-index: 290; }
-.se-picker { position: fixed; z-index: 300; width: 270px; display: flex; flex-direction: column; background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow); overflow: hidden; animation: se-pop 0.1s ease-out both; }
-.se-picker.centered { top: 14vh; left: 50%; width: min(420px, 92vw); margin-left: max(-210px, -46vw); }
-.se-picker-input { flex: none; height: 36px; padding: 0 12px; border: 0; border-bottom: 1px solid var(--border); outline: 0; background: transparent; color: var(--text); font-size: 13px; }
-.se-picker-input::placeholder { color: var(--text-faint); }
-.se-picker-list { margin: 0; padding: 5px; overflow: auto; max-height: min(320px, 50vh); }
-.se-picker-item { display: flex; align-items: center; gap: 8px; height: var(--row-h); padding: 0 10px 0 6px; border-radius: var(--radius-sm); color: var(--text); font-size: 12.5px; cursor: pointer; white-space: nowrap; }
-.se-picker-item.selected { background: var(--accent-soft); }
-.se-picker-check { flex: none; width: 16px; display: grid; place-items: center; color: var(--accent); }
-.se-picker-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.se-picker-detail { color: var(--text-faint); font-size: 11.5px; }
-.se-picker-sep { height: 1px; margin: 5px 6px; background: var(--border); }
-.se-picker-empty { padding: 14px 12px; color: var(--text-faint); font-size: 12.5px; }
 
 .se-toasts { position: fixed; right: 16px; bottom: 36px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 200; pointer-events: none; }
 

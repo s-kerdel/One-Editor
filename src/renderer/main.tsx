@@ -6,7 +6,7 @@
 import { render } from 'preact';
 import './styles/app.css';
 import { app } from './app/app';
-import { Layout, FilesPanel, preloadPopups, preloadClassicUi } from './app/Layout';
+import { Layout, FilesPanel, preloadPopups, preloadClassicUi, preloadDocChrome } from './app/Layout';
 import { installGlobalKeymap } from './app/commands';
 import { applySessionLayout, installDocuments, openWorkspace, restoreSession } from './app/documents';
 import { installShell } from './app/shell';
@@ -72,6 +72,8 @@ async function boot() {
   root.textContent = ''; // drop the static skeleton in the same frame we render
   render(<Layout />, root);
   mark('rendered');
+  // The open file's status-bar / tab-strip parts: alongside the session restore, else on idle.
+  preloadDocChrome(!!(b.session?.openTabs?.length || b.openRequests.length));
   // Integrated window frame: colour the native window controls like the strip (tiny lazy chunk).
   if (app.backend.frame === 'integrated') void import('./app/titlebar').then((m) => m.installTitleBar());
   // Timings go to main once both "painted" and "ready" are known: they land within a few ms of each

@@ -1,0 +1,21 @@
+/* Welcome screen (moved from styles/app.css): arrives with the Welcome chunk. */
+.se-welcome { flex: 1; display: flex; align-items: center; justify-content: center; padding: 48px 32px; min-height: 100%; }
+.se-welcome-inner { width: min(720px, 100%); display: flex; flex-direction: column; gap: 28px; }
+.se-welcome-brand { display: flex; align-items: center; gap: 16px; }
+.se-logo { width: 56px; height: 56px; display: block; flex: none; user-select: none; }
+.se-welcome h1 { margin: 0; font-size: 30px; font-weight: 650; letter-spacing: -0.02em; color: var(--text); }
+.se-welcome-sub { margin: 2px 0 0; color: var(--text-muted); font-size: 13.5px; word-break: break-all; }
+.se-welcome-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.se-welcome-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 28px; }
+.se-welcome-section h2 { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
+.se-recent { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.se-recent li { position: relative; display: flex; align-items: center; }
+.se-recent-item { flex: 1; min-width: 0; display: grid; grid-template-columns: 18px auto 1fr; align-items: center; gap: 8px; padding: 7px 30px 7px 8px; border: 0; border-radius: var(--radius); background: transparent; text-align: left; color: var(--text); }
+.se-recent-item:hover { background: var(--bg-hover); }
+.se-recent-item .se-icon { color: var(--accent); }
+.se-recent-path { color: var(--text-faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.se-recent-forget { position: absolute; right: 4px; opacity: 0; }
+.se-recent li:hover .se-recent-forget { opacity: 1; }
+.se-shortcuts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.se-shortcuts li { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-muted); padding: 2px 0; }
+.se-keys { display: inline-flex; gap: 3px; }

@@ -43,9 +43,10 @@ export default defineConfig({
     modulePreload: { polyfill: false },
     rolldownOptions: {
       output: {
-        // app.ts + ui.ts are both startup code: keep them in one chunk. Otherwise a lazy feature that
-        // imports only one of them splits them apart (+1 request, ~100 B gzip on the startup budget).
-        codeSplitting: { groups: [{ name: 'core', test: /src[\\/]renderer[\\/]app[\\/](app|ui)\.tsx?$/ }] },
+        // Startup modules that lazy features import too (app, ui, icons, documents, tree-model, platform):
+        // one chunk. Otherwise each distinct set of importers splits them into its own startup chunk
+        // (+1 request and ~300 B gzip on the startup budget per chunk boundary; measured 37.8 → 36.1 kB).
+        codeSplitting: { groups: [{ name: 'core', test: /src[\\/]renderer[\\/](app[\\/](app|ui|icons|documents|tree-model)|platform[\\/]index)\.tsx?$/ }] },
       },
     },
   },

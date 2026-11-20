@@ -1,5 +1,6 @@
 // Inline SVG icons (stroke = currentColor, so they follow the theme). No emoji, no icon font, no requests.
 import type { JSX } from 'preact';
+import { signal } from '@preact/signals';
 import { extname, basename } from '@shared/paths';
 
 type P = { size?: number; class?: string; title?: string };
@@ -8,8 +9,6 @@ const BOX = 'M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-
 const PATHS: Record<string, string> = {
   files: 'M15 2H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V6z|M15 2v4h4|M3 7v12a2 2 0 0 0 2 2h9',
   search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z|M20 20l-4-4',
-  outline: 'M4 6h16|M8 12h12|M12 18h8',
-  link: 'M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5|M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5',
   settings:
     'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z|M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
   folder: 'M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2z',
@@ -21,21 +20,12 @@ const PATHS: Record<string, string> = {
   chevronRight: 'M9 6l6 6-6 6',
   chevronDown: 'M6 9l6 6 6-6',
   collapse: 'M7 20l5-5 5 5|M7 4l5 5 5-5',
-  refresh: 'M3 12a9 9 0 0 1 15.5-6.36L21 8|M21 3v5h-5|M21 12a9 9 0 0 1-15.5 6.36L3 16|M3 21v-5h5',
   close: 'M6 6l12 12|M18 6 6 18',
   plus: 'M12 5v14|M5 12h14',
-  eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z|M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
-  pencil: 'M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z|m15 5 4 4',
   code: 'm16 18 6-6-6-6|m8 6-6 6 6 6',
-  columns: `${BOX}|M12 3v18`,
-  copy: 'M8 8h12v12H8z|M4 16V4h12',
   sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z|M12 2v2|M12 20v2|m4.93 4.93 1.41 1.41|m17.66 17.66 1.41 1.41|M2 12h2|M20 12h2|m6.34 17.66-1.41 1.41|m19.07 4.93-1.41 1.41',
   moon: 'M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z',
-  alert: 'm21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3|M12 9v4|M12 17h.01',
-  check: 'M20 6 9 17l-5-5',
-  info: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z|M12 16v-4|M12 8h.01',
   sidebar: `${BOX}|M9 3v18`,
-  more: 'M12 12h.01|M19 12h.01|M5 12h.01',
   filter: 'M22 3H2l8 9.46V19l4 2v-8.54z',
   image: 'M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z|M9 9a1.5 1.5 0 1 0 0-.01|m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21',
   braces: 'M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1|M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1',
@@ -43,29 +33,39 @@ const PATHS: Record<string, string> = {
   terminal: 'm4 17 6-6-6-6|M12 19h8',
   hash: 'M9.5 3 7 21|M17 3l-2.5 18|M4 8.5h17|M3 15.5h17',
   lock: 'M5 11h14v10H5z|M8 11V7a4 4 0 0 1 8 0v4',
-  split: 'M12 3v18|M3 12h6|M15 12h6',
-  // content width (tab strip): a page whose text lines are narrow / wider / edge to edge
-  wreadable: `${BOX}|M10 8h4|M10 12h4|M10 16h4`,
-  wwide: `${BOX}|M7 8h10|M7 12h10|M7 16h10`,
-  wfull: `${BOX}|M3 8h18|M3 12h18|M3 16h18`,
 };
 
 export type IconName = keyof typeof PATHS;
 
+// Bumped by addIcons(): an <Icon> drawn before its path arrived reads it, so it redraws then.
+const registered = signal(0);
+let packLoaded = false;
+let packRequested = false;
+
 /** Icons only used by lazily loaded UI (menus, settings, welcome) are registered by those chunks,
- *  so their path data stays out of the startup bundle (e.g. `globe`: editor menu; `history`: Popups, Settings, Welcome). */
-export function addIcons(paths: Record<string, string>): void {
+ *  so their path data stays out of the startup bundle (e.g. `globe`: editor menu; `history`: Popups, Settings, Welcome).
+ *  `pack`: the shell's lazy icon pack (./icon-pack) — from then on unknown names draw the generic file icon. */
+export function addIcons(paths: Record<string, string>, pack = false): void {
   Object.assign(PATHS, paths);
+  if (pack) packLoaded = packRequested = true;
+  registered.value++;
 }
 
 export function Icon({ name, size = 16, class: cls, title }: P & { name: IconName | string }): JSX.Element {
-  const d = PATHS[name] ?? PATHS.file;
+  let d = PATHS[name];
+  if (d === undefined) {
+    // Not registered yet: same-size empty box until the icon pack (or the chunk that owns the name) adds it.
+    registered.value;
+    if (!packRequested) (packRequested = true), import('./icon-pack').catch(() => (packRequested = false));
+    d = packLoaded ? PATHS.file : '';
+  }
   return (
     <svg class={`se-icon${cls ? ` ${cls}` : ''}`} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden={title ? undefined : 'true'}>
       {title && <title>{title}</title>}
-      {d.split('|').map((p) => (
-        <path d={p} />
-      ))}
+      {d &&
+        d.split('|').map((p) => (
+          <path d={p} />
+        ))}
     </svg>
   );
 }
@@ -84,6 +84,7 @@ export function PanelIcon({ icon, size = 20 }: { icon: string; size?: number }) 
   }
   const legacy: Record<string, IconName> = { '🗀': 'files', '📁': 'files', '🔍': 'search', '🔎': 'search', '🔗': 'link', '☰': 'outline', '#': 'hash' };
   if (legacy[icon]) return <Icon name={legacy[icon]} size={size} />;
+  registered.value; // a name a lazy chunk registers later: redraw as an icon then
   return <span class="se-icon-text">{icon.slice(0, 2)}</span>;
 }
 

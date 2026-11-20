@@ -2,6 +2,7 @@
 // updates, git status …) with what triggered them, how long they took and how much they touched.
 import { app } from './app';
 import { activityLog } from './activity';
+import './overlays.css'; // dialog base (.se-actlog resizes it)
 import './activity-log.css';
 
 function ActivityLog() {

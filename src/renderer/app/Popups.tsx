@@ -7,6 +7,8 @@ import { app } from './app';
 import * as ui from './ui';
 import type { TreeNode } from '@shared/api';
 import { addIcons, FileIcon, Icon } from './icons';
+import './icon-pack'; // menu / toast icons the first screen doesn't draw (copy, refresh, check, info, …)
+import './overlays.css'; // dialogs, picker
 import './popups.css'; // tab switcher, drop overlay, toasts: not needed before this chunk
 import { prettyKey } from './commands';
 import { closeTabs, openWorkspace, persistSession, refreshTree } from './documents';

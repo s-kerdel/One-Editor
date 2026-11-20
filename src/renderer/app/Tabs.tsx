@@ -1,15 +1,13 @@
 // Tab strip: drag to reorder, middle-click to close, context menu, dirty dot, overflow scrolling,
 // and on the right the markdown view-mode switch + the file overview toggle.
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { Settings } from '@shared/api';
 import { basename, dirname } from '@shared/paths';
 import { app } from './app';
 import * as ui from './ui';
 import { FileIcon, Icon } from './icons';
 import { closeTabs, persistSession } from './documents';
-import { absolutePath, copyText, revealInOs, revealInTree, revealLabel } from './fileops';
-import { setViewMode, currentWidth, cycleContentWidth } from './settings';
 import { prettyKey, runCommand } from './commands';
+import { lazyComponent } from './lazy';
 
 const TAB_MIME = 'application/x-sec-edit-tab';
 const TREE_MIME = 'application/x-sec-edit-paths';
@@ -29,32 +27,8 @@ function labels(paths: string[]): Map<string, string | null> {
   return out;
 }
 
-const MODES: Array<{ id: Settings['viewMode']; icon: string; title: string; keys?: string }> = [
-  { id: 'live', icon: 'pencil', title: 'Live preview' },
-  { id: 'source', icon: 'code', title: 'Source' },
-  { id: 'split', icon: 'columns', title: 'Split', keys: 'Mod-\\' },
-  { id: 'preview', icon: 'eye', title: 'Reading view', keys: 'Mod-e' },
-];
-
-export function ViewModeSwitch() {
-  const mode = app.settings.value.viewMode;
-  return (
-    <div class="se-modes" role="radiogroup" aria-label="View mode">
-      {MODES.map((m) => (
-        <button
-          class={`se-mode${mode === m.id ? ' active' : ''}`}
-          role="radio"
-          aria-checked={mode === m.id}
-          data-mode={m.id}
-          title={m.keys ? `${m.title} (${prettyKey(m.keys)})` : m.title}
-          onClick={() => setViewMode(m.id)}
-        >
-          <Icon name={m.icon} size={15} />
-        </button>
-      ))}
-    </div>
-  );
-}
+/** Markdown view: content width + view-mode switch (lazy ./doc-chrome, preloaded with the first file). */
+export const TabDocTools = lazyComponent(() => import('./doc-chrome').then((m) => m.TabDocTools));
 
 /** Shows / hides the file overview column (right sidebar, src/renderer/overview). */
 function OverviewToggle() {
@@ -68,18 +42,6 @@ function OverviewToggle() {
       onClick={() => void runCommand('view.toggleOverview')}
     >
       <Icon name="ov-panel" size={16} />
-    </button>
-  );
-}
-
-const WIDTH_LABEL = { readable: 'Readable', wide: 'Wide', full: 'Full width' } as const;
-
-/** Markdown text column: readable → wide → full (also Settings → Appearance and "View: Content width…"). */
-export function WidthToggle() {
-  const w = currentWidth();
-  return (
-    <button class="se-width-btn" data-testid="content-width" data-width={w} aria-label={`Content width: ${WIDTH_LABEL[w]}`} title={`Content width: ${WIDTH_LABEL[w]} — click to change`} onClick={cycleContentWidth}>
-      <Icon name={`w${w}`} size={16} />
     </button>
   );
 }
@@ -217,14 +179,7 @@ export function TabBar() {
         <div class="se-tabs-end" aria-hidden="true" />
       </div>
       <div class="se-tabbar-tools">
-        {ui.isMarkdownView(active) && (
-          <>
-            <WidthToggle />
-            <span class="se-tools-sep" />
-            <ViewModeSwitch />
-            <span class="se-tools-sep" />
-          </>
-        )}
+        {ui.isMarkdownView(active) && <TabDocTools />}
         <OverviewToggle />
       </div>
     </div>

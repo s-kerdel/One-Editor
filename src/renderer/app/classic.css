@@ -1,0 +1,38 @@
+/* Classic sidebar style (Settings → Appearance → Sidebar style), moved from styles/app.css: loaded with
+   the classic chunk, which main.tsx resolves before the first render when classic is the saved style.
+   IDE-like: icon activity bar, flat sidebar, dense rows with guides, editor flush to the window. */
+.se-activity { width: 48px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; background: var(--bg-activity); border-right: 1px solid var(--border); }
+.se-activity-btn { position: relative; width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-faint); transition: color 0.12s, background 0.12s; }
+.se-activity-btn:hover { color: var(--text); background: var(--bg-hover); }
+.se-activity-btn.active { color: var(--text); }
+.se-activity-btn.active::before { content: ''; position: absolute; left: -6px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 var(--radius-xs) var(--radius-xs) 0; background: var(--accent); }
+.se-activity-spacer { flex: 1; }
+.se-tree-caret { width: 16px; height: 16px; flex: none; display: grid; place-items: center; color: var(--text-faint); }
+.se-tree-guide { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--border); }
+.ui-classic .se-tree-row:hover .se-tree-guide { background: var(--border-strong); }
+.se-root.ui-classic { background: var(--bg); }
+.ui-classic .se-sidebar { min-width: 170px; padding: 0; gap: 0; background: var(--bg-sunken); border-right: 1px solid var(--border); }
+.ui-classic .se-sidebar-body { margin: 0; }
+.ui-classic .se-sash { right: -4px; width: 8px; }
+.ui-classic .se-sash::after { left: 3px; top: 0; bottom: 0; border-radius: 0; }
+.ui-classic .se-content, .ui-classic .se-main.shelf-hidden .se-content { margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+.ui-classic .se-overview { padding: 0; --ov-pad-r: 0px; background: var(--bg-sunken); border-left: 1px solid var(--border); }
+.ui-classic .se-overview > .se-sash { left: -5px; right: auto; }
+.ui-classic .se-panel-head { height: 38px; padding: 0 8px 0 16px; }
+.ui-classic .se-panel-title { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.ui-classic .se-filter { margin: 0 10px 6px; }
+.ui-classic .se-filter-input { height: 28px; border-radius: var(--radius); background: var(--bg-input); font-size: 12.5px; }
+.ui-classic .se-tree-row { height: var(--row-h-classic); gap: 5px; border-radius: var(--radius-sm); font-size: 13px; color: var(--text-muted); }
+.ui-classic .se-tree-row.dir { color: var(--text-muted); }
+.ui-classic .se-tree-row:hover { color: var(--text); }
+.ui-classic .se-tree-row.active { background: var(--accent-soft); box-shadow: none; }
+.ui-classic .se-tree-row.active .se-tree-name { font-weight: 500; }
+.ui-classic .se-tree-lead { display: contents; }
+/* Also on hover: 1 ↔ 0.8 would add / drop the span's paint layer — a layout for every row the pointer crosses. */
+.ui-classic .se-tree-ext, .ui-classic .se-tree-row:hover .se-tree-ext { opacity: 1; }
+.ui-classic .se-tree-input { height: 22px; border-radius: var(--radius-sm); }
+.ui-classic .se-tree-error { top: var(--row-h-classic); }
+.se-classic-ws { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; height: 26px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: var(--radius); background: transparent; text-align: left; }
+.se-classic-ws:hover { background: var(--bg-hover); }
+.se-classic-ws:hover .se-panel-title { color: var(--text); }
+.se-classic-ws-caret { color: var(--text-faint); }

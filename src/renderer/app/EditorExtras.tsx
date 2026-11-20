@@ -6,6 +6,8 @@ import * as ui from './ui';
 import { keepMine, persistSession, closeTabs, discardDoc } from './documents';
 import { reloadFromDisk } from './disk-sync';
 import { addIcons, Icon, isImagePath } from './icons';
+import './icon-pack'; // alert (conflict banner)
+import './editor-extras.css';
 import { fileUrl } from '../platform';
 import { revealInOs, revealLabel } from './fileops';
 import { lazyComponent } from './lazy';

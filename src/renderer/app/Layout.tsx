@@ -3,10 +3,10 @@
 import { app } from './app';
 import * as ui from './ui';
 import { persistSession } from './documents';
-import { TabBar } from './Tabs';
+import { TabBar, TabDocTools } from './Tabs';
 import { EditorArea } from './EditorArea';
-import { StatusBar } from './StatusBar';
-import { lazyComponent, onIdle } from './lazy';
+import { StatusBar, StatusDocStart, StatusDocEnd } from './StatusBar';
+import { afterBootIdle, lazyComponent, onIdle } from './lazy';
 import { ShelfTop, ShelfFoot, ShelfReveal } from './Shelf';
 import { loadClassic, setClassicPrimer } from './classic-loader';
 import { panelOpen as terminalOpen, TerminalPanelSlot } from '../terminal/install';
@@ -38,6 +38,14 @@ const ToastList = lazyComponent(() => loadPopups().then((m) => m.ToastList));
 // (and the menu can take focus at once) instead of mounting one render later.
 export const preloadPopups = () =>
   onIdle(() => void Promise.all([DialogHost, ContextMenuHost, TabSwitcher, DropOverlay, ToastList].map((c) => c.preload())).catch(() => {}));
+
+/** The open file's status-bar / tab-strip parts (./doc-chrome). With a session to restore they load
+ *  alongside it, so they are resolved before the file shows and render in its frame; else on idle. */
+export function preloadDocChrome(now: boolean): void {
+  const go = () => void Promise.all([StatusDocStart, StatusDocEnd, TabDocTools].map((c) => c.preload())).catch(() => {});
+  if (now) go();
+  else afterBootIdle(go);
+}
 
 // Both side columns resize the same way; the overview sits on the right, so it grows leftwards.
 const SASHES = {

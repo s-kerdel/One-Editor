@@ -3,6 +3,7 @@
 import type { WorkspaceInfo } from '@shared/api';
 import { app } from './app';
 import { Icon, PanelIcon } from './icons';
+import './classic.css';
 import { persistSession } from './documents';
 import { runCommand, prettyKey } from './commands';
 import { newNote, startCreate } from './fileops';

@@ -7,6 +7,7 @@ import { stem } from '@shared/paths';
 import { app } from '../app/app';
 import { registerCommands } from '../app/commands';
 import { holdKeys } from '../app/lazy';
+import '../app/overlays.css'; // palette base (shell): the template picker
 import './knowledge.css';
 import { BacklinksPanel, OutlinePanel, TagsPanel, openSection } from './panels';
 import { index, indexBusy, insertTemplate, installIndexing, kv, openDailyNote, openLink, templateFiles, whenIndexed } from './state';
