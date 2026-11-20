@@ -224,4 +224,5 @@ Also pass a private results dir, or parallel runs clobber `test-results/`:
 ## Version control (lead only)
 - **Agents never run `git commit`, `git tag`, `git push` or anything that changes history.** The lead commits only verified-green states.
 - Commits: short subject titles (e.g. "Add multi-core search indexing"), no long bodies, **no co-author / tool trailers or links**. Author = the repo-local identity.
+- Before each release: `npm run security` (npm audit, outdated packages, newest Electron patch + end of support, fuses of a built package; exit 1 = fix first). Electron patches carry Chromium security fixes: take them every release.
 - Each iteration ends with `npm run iteration -- "summary"` (bumps the minor version, commits `Release vX.Y.0`, adds an annotated tag).

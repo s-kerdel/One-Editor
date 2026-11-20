@@ -20,7 +20,8 @@
     "test:electron": "playwright test -c playwright.electron.config.ts",
     "icons": "node scripts/make-icons.mjs",
     "analyze": "node scripts/analyze-bundle.mjs",
-    "iteration": "node scripts/iteration.mjs"
+    "iteration": "node scripts/iteration.mjs",
+    "security": "node scripts/security.mjs"
   },
   "keywords": [],
   "author": "",
@@ -70,7 +71,7 @@
     "@types/markdown-it": "^14.2.0",
     "@types/markdown-it-footnote": "^3.0.4",
     "@types/node": "^26.6.6",
-    "electron": "^45.3.4",
+    "electron": "^45.4.1",
     "esbuild": "^0.28.2",
     "happy-dom": "^21.0.4",
     "jsdom": "^31.0.1",
