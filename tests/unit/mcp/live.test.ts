@@ -7,7 +7,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { LiveFile } from '../../../src/mcp/live';
-import { McpService, pidAlive, type McpDeps } from '../../../src/main/mcp';
+import { McpService, MAX_LIVE_FILES, pidAlive, type McpDeps } from '../../../src/main/mcp';
+import { execFileSync } from 'node:child_process';
 import { MCP_IDLE_MS, MCP_LIVE_DIR, parseLiveFile, type McpStatus } from '../../../src/shared/mcp';
 
 const BASE = path.resolve(__dirname, '../../../.tmp/mcp/unit', `live-${crypto.randomBytes(4).toString('hex')}`);
@@ -89,6 +90,36 @@ describe('sessions (main)', () => {
     };
     return { svc: new McpService(deps), changes, dir, put };
   }
+
+  it('only small regular files are read: a FIFO, a link and a huge file under a live name are skipped, never waited on (review round 7)', async () => {
+    const now = 10_000_000;
+    const t = service(new Set([21, 22, 23, 24]), () => now);
+    const good = t.put(21, { client: 'LM Studio', started: now - 1000, lastCall: null });
+    // A FIFO with a live name: reading it would block forever.
+    if (process.platform !== 'win32') execFileSync('mkfifo', [path.join(t.dir, '22-aaaaaaaa.json')]);
+    // A link to a valid live file: not followed (and the target is left alone).
+    fs.symlinkSync(good, path.join(t.dir, '23-bbbbbbbb.json'));
+    // A huge "live" file: not read whole.
+    fs.writeFileSync(path.join(t.dir, '24-cccccccc.json'), JSON.stringify({ v: 1, pid: 24, client: 'big', started: now, lastCall: null }) + ' '.repeat(50_000));
+    const t0 = Date.now();
+    const s = await t.svc.scanSessions();
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(s.map((x) => x.client)).toEqual(['LM Studio']);
+    expect(fs.existsSync(good)).toBe(true);
+  });
+
+  it('at most MAX_LIVE_FILES files per scan, and kicks during a scan do not pile up', async () => {
+    const now = 10_000_000;
+    const alive = new Set<number>();
+    const t = service(alive, () => now);
+    for (let i = 0; i < MAX_LIVE_FILES + 20; i++) {
+      alive.add(1000 + i);
+      t.put(1000 + i, { client: `app${i}`, started: now - i, lastCall: null });
+    }
+    expect((await t.svc.scanSessions()).length).toBe(MAX_LIVE_FILES);
+    await Promise.all([t.svc.refreshSessions(), t.svc.refreshSessions(), t.svc.refreshSessions()]);
+    expect(t.changes.length).toBe(1); // one changed list → one event, not one per kick
+  });
 
   it("live processes are sessions (two for one app = two); a gone process's file is removed; idle after 2 minutes", async () => {
     const now = 10_000_000;

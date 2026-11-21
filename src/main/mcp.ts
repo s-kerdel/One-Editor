@@ -103,6 +103,32 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
+/** A live file is tiny; more files than this in mcp-live/ are not servers we started. */
+export const MAX_LIVE_FILES = 64;
+const MAX_LIVE_BYTES = 4096;
+
+/**
+ * A live file's text, or '' for anything that isn't a small regular file. Another process could leave a FIFO,
+ * a device, a link or a huge file under that name (review round 7: a FIFO hung main's file I/O for good):
+ * lstat first, then open without following links and without blocking, and read at most 4 kB.
+ */
+export async function readLiveFile(file: string): Promise<string> {
+  const st = await fs.promises.lstat(file).catch(() => null);
+  if (!st?.isFile() || st.size > MAX_LIVE_BYTES) return '';
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
+  const fh = await fs.promises.open(file, flags).catch(() => null);
+  if (!fh) return '';
+  try {
+    const buf = Buffer.alloc(MAX_LIVE_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, MAX_LIVE_BYTES, 0);
+    return buf.subarray(0, bytesRead).toString('utf8');
+  } catch {
+    return '';
+  } finally {
+    await fh.close().catch(() => {});
+  }
+}
+
 const TOKEN_STORE = 'mcp-tokens.json';
 const CLIENTS = ['lmstudio', 'codex', 'claude-desktop', 'claude-code'] as const;
 type ClientId = (typeof CLIENTS)[number];
@@ -208,16 +234,18 @@ export class McpService {
     const now = this.deps.now?.() ?? Date.now();
     const alive = this.deps.isAlive ?? pidAlive;
     const out: McpSession[] = [];
+    let seen = 0;
     for (const name of await fs.promises.readdir(dir).catch(() => [] as string[])) {
       const file = path.join(dir, name);
       if (name.endsWith('.tmp')) {
         // A writer's temp file left behind (it died between write and rename): old ones go.
-        const st = await fs.promises.stat(file).catch(() => null);
+        const st = await fs.promises.lstat(file).catch(() => null);
         if (st && now - st.mtimeMs > 60_000) await fs.promises.rm(file, { force: true }).catch(() => {});
         continue;
       }
       if (!/^\d+-[a-f0-9]{8}\.json$/.test(name)) continue;
-      const live = parseLiveFile(await fs.promises.readFile(file, 'utf8').catch(() => ''));
+      if (++seen > MAX_LIVE_FILES) break;
+      const live = parseLiveFile(await readLiveFile(file));
       if (!live || String(live.pid) !== name.split('-')[0]) continue; // half-written / foreign: left alone
       if (!alive(live.pid)) {
         await fs.promises.rm(file, { force: true }).catch(() => {}); // crashed: its file is ours to clean up
@@ -229,14 +257,30 @@ export class McpService {
     return out;
   }
 
-  /** Rescans; when the list changed, the page hears it (onChange, the usual status event). */
+  private scanBusy = false;
+  private scanAgain = false;
+
+  /** Rescans; when the list changed, the page hears it (onChange, the usual status event). One scan at a time:
+   *  a kick during a scan asks for one more afterwards instead of piling up reads. */
   async refreshSessions(): Promise<void> {
-    const next = await this.scanSessions();
-    const key = JSON.stringify(next);
-    if (key === this.sessionsKey) return;
-    this.sessionsKey = key;
-    this.sessions = next;
-    this.deps.onChange(await this.status());
+    if (this.scanBusy) {
+      this.scanAgain = true;
+      return;
+    }
+    this.scanBusy = true;
+    try {
+      do {
+        this.scanAgain = false;
+        const next = await this.scanSessions();
+        const key = JSON.stringify(next);
+        if (key === this.sessionsKey) continue;
+        this.sessionsKey = key;
+        this.sessions = next;
+        this.deps.onChange(await this.status());
+      } while (this.scanAgain);
+    } finally {
+      this.scanBusy = false;
+    }
   }
 
   /**
