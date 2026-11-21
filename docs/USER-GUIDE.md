@@ -933,9 +933,11 @@ Settings are **global**, not per folder.
 
 **Set it up (3 steps)**
 
-1. Settings → **MCP server** → switch it **on** (One asks once).
-2. **Add folder…** → pick a notes folder. It is shared **Read-only**.
-3. **Client setup** → pick your app → **Copy** → paste it where it says → **restart that app**.
+1. Settings → **MCP server** → pick your app under **Client setup** → switch it **on** (One asks once). Its setup, with a fresh **access token**, is now on the clipboard.
+2. Paste it where the table below says → **restart that app**.
+3. **Add folder…** → pick a notes folder. It is shared **Read-only**.
+
+**Updated One and an app stopped working?** Copy the setup again: **a token is now required** (see Access tokens).
 
 | App | Where the snippet goes |
 |---|---|
@@ -952,7 +954,7 @@ Example for One in `C:\Apps\One` (Settings shows your real paths):
     "one": {
       "command": "C:\\Apps\\One\\One.exe",
       "args": ["C:\\Apps\\One\\resources\\app.asar.unpacked\\dist\\mcp\\cli.mjs", "--stdio"],
-      "env": { "ELECTRON_RUN_AS_NODE": "1" }
+      "env": { "ELECTRON_RUN_AS_NODE": "1", "ONE_MCP_TOKEN": "one_…" }
     }
   }
 }
@@ -963,7 +965,7 @@ Example for One in `C:\Apps\One` (Settings shows your real paths):
 [mcp_servers.one]
 command = 'C:\Apps\One\One.exe'
 args = ['C:\Apps\One\resources\app.asar.unpacked\dist\mcp\cli.mjs', '--stdio']
-env = { ELECTRON_RUN_AS_NODE = '1' }
+env = { ELECTRON_RUN_AS_NODE = '1', ONE_MCP_TOKEN = 'one_…' }
 ```
 
 - **No Node.js needed:** One's own program runs the server (`ELECTRON_RUN_AS_NODE=1` = "run as a script runner, no window").
@@ -971,21 +973,56 @@ env = { ELECTRON_RUN_AS_NODE = '1' }
 - **Claude Code inside WSL** (One on Windows): `claude mcp add --scope user one -- cmd.exe /c "C:\Apps\One\One MCP.cmd"`
 - **Options** (add after `--stdio`): `--folder <name>` = only that folder · `--read-only` = never writes, whatever Settings say.
 
+**Access tokens** (one per app)
+
+| Do | How |
+|---|---|
+| **Another app** | Type its name → **New token for another app…** → One asks → its setup is copied |
+| **Copy setup again** | Pick the app under Client setup → **Copy setup** on its token |
+| **Regenerate** | New token, old one stops at once → paste the new setup |
+| **Revoke** | One asks → that app stops at once (a running server exits) |
+
+- **The token is in the app's `env` block** (`ONE_MCP_TOKEN`), never in the command line: process lists show those.
+- **One keeps only a fingerprint** (SHA-256) in `mcp.json`. To copy again later, the token itself is kept encrypted by your OS keyring (`mcp-tokens.json`, not the vault).
+- **No keyring** (some Linux desktops): a token is copied once, when it is made. Lost it? **Regenerate**.
+- **The page never sees a token:** One copies the setup itself. Settings shows the name, when it was made and last used, and its first 4 characters.
+- **Copy setup asks first**, and One **clears the clipboard after 2 minutes** (if it still holds the setup).
+- **Windows clipboard history (Win+V) and cloud clipboard sync keep their own copy.** Turn them off (Settings → System → Clipboard) before copying, or **Regenerate** the token if it was synced.
+- **Recent activity names the token** ("LM Studio"), not what the app calls itself.
+
 **What the AI can do**
 
 | Tool | Does |
 |---|---|
 | `list_folders` · `list_files` | The shared folders · files and subfolders (paged) |
-| `read_file` | A file's text, in pages (`offset_line`) |
-| `read_section` | One heading section, `^block`, or frontmatter key |
-| `get_outline` | Headings with line ranges, blocks, frontmatter keys (code: functions) |
-| `search_text` | Full text, same syntax as Find in files (`"phrase"`, `-word`, `path:`, `tag:`, `in:`) |
-| `search_files` · `search_headings` | File names (fuzzy) · headings across notes |
-| `list_tags` · `get_links` · `get_related` | Tags · links and backlinks · neighbours and related notes |
+| `search` | Full text, same syntax as **Find in files** (below). `mode`: `lines` (default) · `files` (paths + counts) · `names` (fuzzy file names) · `headings` |
+| `get_outline` | Headings with line ranges, `^blocks`, frontmatter keys (code: functions) |
+| `read_file` | A file's text in pages, only one `heading` / `block` / `frontmatter_key`, or a line range |
+| `list_tags` · `get_links` | Tags · links and backlinks (`show=related`: notes sharing links or tags) |
 
-> **This build is read-only.** AI apps can search and read; **Read-write** (the tools below) comes with the next build. The control is shown but switched off.
+**Filters the AI uses** (typed into the search query, as in Find in files)
 
-Only in **Read-write** folders (next build):
+| Query | Finds |
+|---|---|
+| `deploy path:notes/ -path:archive` | "deploy" under `notes/`, not in `archive` |
+| `select ext:php,sql` · `deploy lang:sql` | In PHP or SQL files · in SQL files and SQL code blocks |
+| `tag:project in:heading` | Notes tagged `project`, the hit in a heading |
+
+- **All filters:** `path:` `file:` `ext:` `lang:` `tag:` `in:` `case:yes`. A `-` in front negates; `ext:` and `lang:` take comma lists.
+- **`in:` values:** `code` · `block` (= `fence`) · `inline` · `text` · `heading` · `frontmatter` (= `fm` `meta` `yaml`) · `link` · `path`.
+- **No regular expressions** over MCP: `/…/` is searched as plain text.
+
+**How it saves tokens** (small local models)
+
+1. `search` with `mode=files` → which files.
+2. `get_outline` → which part.
+3. `read_file` with `heading` (or `offset_line` + `max_lines` around a hit) → only that part.
+4. Asked again? `if_none_match` with the etag → just "unchanged".
+
+- **Answers are plain text:** one summary line, then rows or the file's own text. No JSON.
+- **Short tool descriptions** (they go with every message); `folder` only shows up when you share more than one folder.
+
+Only in **Read-write** folders:
 
 | Tool | Does |
 |---|---|
@@ -994,7 +1031,7 @@ Only in **Read-write** folders (next build):
 | `patch_file` | Changes one heading section, `^block` or frontmatter key: append · prepend · replace · delete |
 | `replace_text` | Replaces one exact piece of text (it must occur once) |
 | `move_file` | Renames / moves a file or folder, never overwrites; updates links to it (**Update links on rename**) |
-| `create_folder` · `delete_file` | New folder · a file to the **Recycle Bin** (never deleted for good; no Recycle Bin → nothing is deleted) |
+| `create_folder` · `delete_file` | New folder · a file to the **Recycle Bin**. Every delete also keeps an undo copy (even with undo copies off), or is refused |
 
 **Let it make changes (Read-write)**
 
@@ -1003,9 +1040,22 @@ Only in **Read-write** folders (next build):
 3. Restart nothing: running AI apps see the change within a second.
 
 - **Read-only is the default** for every folder you add.
-- **Notes only by default:** `.md`, `.markdown`, `.txt`. Code and config files (`.json`, `.ts`, `.py`…) only with **Also allow code and config files** (off by default).
-- **Never, whatever you allow:** scripts, programs and shortcuts (`.bat`, `.cmd`, `.ps1`, `.vbs`, `.exe`, `.lnk`, `.url`, `desktop.ini`…), images, PDFs and other binaries, hidden files, key files and excluded folders.
-- **No new `{{placeholders}}`:** an AI edit that would add a `{{name}}` is refused. In One those fill in your values and secrets when you copy or run a block, so a planted one could leak a secret later. Existing ones may stay.
+- **Notes only by default:** `.md`, `.markdown`, `.txt`. Code and config files (`.json`, `.yaml`, `.ts`…) only with **Code files** on that folder (One asks; off by default).
+- **Never, whatever you allow:** scripts, programs and shortcuts (`.bat`, `.cmd`, `.ps1`, `.vbs`, `.js`, `.py`, `.exe`, `.lnk`, `.url`, `desktop.ini`…), images, PDFs and other binaries, hidden files, key files and excluded folders. A refused place always gets the same answer ("Cannot change …"), so an AI cannot probe your exclusions.
+
+**`{{placeholders}}` stay yours** (they fill in values and secrets when you copy or run a block)
+
+| The AI may | The AI may not |
+|---|---|
+| Use names your variables file gives a plain value (`{{host}}`) | Change your **variables file** (`variables.md`, any folder), create, move or delete one |
+| Use built-ins: `{{date}}` `{{time}}` `{{title}}` `{{target}}` `{{env}}` | Change frontmatter `vars` / `target` / `env` / `secrets`, or a code block's `{…}` attributes |
+| Edit lines and blocks without secrets | Add or change **any line with a secret name**, anywhere in the note (text, any code block, frontmatter), or the lines **right above and below** it |
+| Add code blocks below your secrets | Change a code block that holds a secret, or the code fences above a secret line |
+
+- **Secret** = listed in `secrets:`, or its value is `vault` / `vault:…` (also `TARGET.field` and the bare field), a value that uses one, or **a name nothing defines** (One would fill it from what you typed before).
+- **No variables file** between the note and the shared folder? Then every name but the built-ins counts as secret, everywhere in the note. `{{ title }}` in a Vue snippet still works; `{{ user.name }}` does not.
+- **Frontmatter is read the way One reads it:** quoted (`"vars":`), `? vars` or other unusual spellings of these keys are refused, and so is frontmatter that does not parse.
+- **Still check new blocks before you Run them:** an AI may add a block *without* placeholders that uses a shell variable an existing block of yours exports (`export TOKEN={{api_key}}` … `curl -H "$TOKEN" …`). Run the AI's block only if you trust it.
 - **Links are never followed** (symlinks, junctions): the AI only sees and changes files where they really are.
 - **A limit per session:** at most 60 changes a minute and 500 per connection, so a runaway AI cannot rewrite a whole folder.
 - **Your encoding stays:** CRLF line ends, a BOM, UTF-16 and Windows-1252 files are written back the same way. Text a Windows-1252 file cannot hold is refused instead of mangled.
@@ -1017,8 +1067,11 @@ Only in **Read-write** folders (next build):
 - **Recent activity** shows a **Revert** button on every change. It puts back exactly what was there before (a move: the move *and* the links it updated).
 - Only while the file is still as the AI left it. Edited since? Revert says so and changes **nothing**.
 - A reverted row says *reverted*. Revert of a new file moves it to the Recycle Bin.
-- **Keep undo copies of AI edits** (on by default): One keeps the old text of each change in `mcp-history` in the app data folder, for **30 days** (setting) and at most 100 MB.
-- **Off:** changes made from then on keep no copy and get no Revert. Copies already kept stay until they age out.
+- **Revert works on a folder that is read-only again:** it only puts back what was there.
+- **Undo → Keep undo copies of AI edits** (Settings → MCP server, on by default): the old text of each change, in `mcp-history` in the app data folder, for **30 days** (1–365) and at most 100 MB.
+- **Switching it off asks first.** Changes from then on get no Revert. Deletes still keep a copy.
+- **An AI cannot flush your history:** copies from the last 24 hours and of the running connection are never dropped for space. Full? New AI changes are refused until older copies expire (64 MB per connection at most).
+- **Two very busy AI sessions** can fill the 100 MB with copies that are all protected. New AI changes then get "history is full" for up to 24 hours. Your files are safe (nothing is changed without a copy); edit in One meanwhile.
 
 **What stays private**
 
@@ -1026,8 +1079,10 @@ Only in **Read-write** folders (next build):
 - **Always invisible:** hidden files and folders (`.git`, `.env`, `.obsidian`…), key files (`*.pem`, `*.key`, `id_rsa`, `*.kdbx`, `*.gpg`, `wallet.dat`, `*.tfstate`…), your **Excluded folders** (also patterns like `**/secrets` or `private/*.md`), and links. The AI gets "not found", the same as for a file that does not exist. Hidden files and key files stay invisible even with an empty exclude list.
 - **A broken settings file never opens things up:** if `settings.json` cannot be read, a starting MCP server refuses to run and a running one keeps your last exclusions.
 - **A secret typed into a normal note *is* readable.** Keep secrets in the vault.
+- **Excluded folders are a normal setting:** removing an entry from **Excluded folders** makes that folder visible to AI apps at once, without a question. Check the list before sharing a folder.
 - **Read-only unless you say so**, per folder (see above). `--read-only` in the client setup keeps an AI app read-only whatever the folder says.
-- **Off = off:** running servers stop within a second. A removed folder is gone at once.
+- **Off = off:** running servers stop within a second. A removed folder or revoked token is gone at once.
+- **Edge cases:** a heading that is only `#` counts as empty (no section). Frontmatter key lines over 10,000 characters are ignored by `read_file` / `patch_file`.
 
 **Answer size** (Settings → MCP server → Answer size)
 
@@ -1038,7 +1093,12 @@ Only in **Read-write** folders (next build):
 
 Small local model (8k context)? Keep the defaults or go lower. Big context (128k)? Raise both.
 
-**Recent activity:** the last 50 calls (time, app, tool, file, result), refreshed while Settings is open. Never the text or your search words. Kept in `mcp-audit.jsonl` in the app data folder (1 MB, then rotated).
+**Recent activity:** the last 50 calls, **newest first**: ✓ ok, **!** refused or failed, ↺ reverted, with time, app, tool, file and duration on one line.
+
+- Shows the last 5; **Show all N calls** opens the rest.
+- **Filter** by tool, file, folder, app or result; **Problems only** keeps the refused and failed calls.
+- **Click a row** for details (folder, full path, size, date). **Revert** sits on write rows that kept an undo copy.
+- Refreshed while Settings is open. Never the text or your search words. Kept in `mcp-audit.jsonl` in the app data folder (1 MB, then rotated).
 
 ### Security updates
 
@@ -1251,6 +1311,7 @@ After a paste a small **"Paste as…"** chip appears for a few seconds. Ignore i
 | **Phone / other PC cannot open the web server link** | Settings → Browser mode → **Network (LAN)**, then use the **network** address (not `127.0.0.1`), same Wi-Fi. Windows: allow One through the firewall (Windows Security → Firewall → Allow an app) |
 | **"Port … is in use"** (web server) | Leave **Port** empty (automatic), or pick another one |
 | **AI app: MCP server "failed" or "exited"** | Settings → **MCP server** must be **on** with at least one folder. Restart the app after pasting the snippet. Its MCP log shows One's message (e.g. "switched off") |
+| **AI app: "no access token" / "token is not valid"** | Settings → **MCP server** → **Copy setup** (or **Regenerate**) for that app → paste → restart the app |
 | **AI app: "is read-only"** | Settings → **MCP server** → that folder → **Read-write** (One asks once) |
 | **AI app: "changed since you read it"** | The file was edited meanwhile (in One or elsewhere). Normal: the AI reads it again and retries; nothing was overwritten |
 | **Revert: "changed after the MCP change"** | The file was edited after the AI's change, so Revert leaves it alone. Undo by hand, or use the editor's history |

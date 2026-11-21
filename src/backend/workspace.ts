@@ -132,7 +132,12 @@ export async function probeCaseSensitive(root: string): Promise<boolean | null> 
  * (the MCP server re-checks where the path really leads, its precondition, and journals the old bytes).
  * Throwing cancels the operation. `abs` is the lexical path; `role` says which end of a rename it is.
  */
-export type WriteGuard = (abs: string, role: 'target' | 'from' | 'to') => Promise<void>;
+export type WriteGuard = ((abs: string, role: 'target' | 'from' | 'to') => Promise<void>) & {
+  /** strict (the MCP server): never write through a link (refused at commit), never rewrite in place, no
+   *  in-place fallback, the parent's real location checked again after the write / rename (what landed
+   *  elsewhere through a link swapped in meanwhile is taken back), and a rename never overwrites. */
+  strict?: boolean;
+};
 
 /** How long the first walk's tree may answer the next full listTree (the renderer asks within ~1 s). */
 const BOOT_TREE_MS = 5_000;
@@ -358,6 +363,53 @@ export class Workspace {
       if (w === 'out') throw new BackendFailure('OUTSIDE_WORKSPACE', `Path leads outside the folder (through a link): ${rel}`);
       at = path.dirname(at);
     }
+  }
+
+  /**
+   * strict writes: the parent folder of `key` must really be where its path says (realpath = root + parent
+   * key). After the write (`ino`: what was written), a mismatch means a link was swapped in meanwhile: what
+   * landed there is taken back (moved back to `undoTo`, or removed) and the write fails.
+   */
+  /** Strict mkdir -p: one level at a time, each checked where it really is before and after (a parent
+   *  swapped for a link mid-way never gets folders made outside). */
+  private async mkdirStrict(key: string): Promise<void> {
+    const parts = key.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const k = parts.slice(0, i).join('/');
+      const p = this.abs(k);
+      const have = await fsp.lstat(p).catch(() => null);
+      if (have) {
+        if (!have.isDirectory()) throw new BackendFailure('OUTSIDE_WORKSPACE', `Not a folder: ${k}`);
+        continue;
+      }
+      await this.parentStillHere(k);
+      await fsp.mkdir(p);
+      await this.parentStillHere(k, { ino: (await fsp.lstat(p, { bigint: true })).ino });
+    }
+  }
+
+  /**
+   * Strict writes: is the folder of `key` still where it should be (its realpath)? If not, the entry we just
+   * made (`ino`) is taken back where it landed: renamed back to `undoTo` (a move), or replaced by the pinned
+   * victim `restore` (a hard link to the file our rename replaced, made in the same folder), or removed.
+   */
+  private async parentStillHere(key: string, o: { ino?: bigint; undoTo?: string; restore?: string | null } = {}): Promise<void> {
+    const parentKey = key.includes('/') ? key.slice(0, key.lastIndexOf('/')) : '';
+    const root = (await this.realRoot()) ?? this.root;
+    const want = parentKey ? path.join(root, ...parentKey.split('/')) : root;
+    const real = await fsp.realpath(path.dirname(this.abs(key))).catch(() => null);
+    if (real === want || (real !== null && this.foldsCase && real.toLowerCase() === want.toLowerCase())) return;
+    if (o.ino !== undefined && real !== null) {
+      const landed = path.join(real, path.basename(this.abs(key)));
+      const st = await fsp.lstat(landed, { bigint: true }).catch(() => null);
+      if (st && st.ino === o.ino) {
+        const back = o.restore ? path.join(real, path.basename(o.restore)) : null;
+        if (o.undoTo) await fsp.rename(landed, o.undoTo).catch(() => {});
+        // The pinned victim back over ours, when it sits next to it; otherwise ours goes.
+        else if (!(back && (await fsp.rename(back, landed).then(() => true, () => false)))) await (st.isDirectory() ? fsp.rmdir(landed) : fsp.rm(landed, { force: true })).catch(() => {});
+      }
+    }
+    throw new BackendFailure('OUTSIDE_WORKSPACE', `The folder of ${key} changed during the write`);
   }
 
   /** Inside a denied folder (as written, or where its nearest existing part really is)? */
@@ -689,7 +741,7 @@ export class Workspace {
         bom ??= d.bom;
         encoding ??= d.encoding;
       }
-      return this.commit(key, abs, st, encode(withEol(content, eol ?? 'lf'), encoding ?? 'utf8', bom ?? false));
+      return this.commit(key, abs, st, encode(withEol(content, eol ?? 'lf'), encoding ?? 'utf8', bom ?? false), !!guard?.strict);
     });
   }
 
@@ -708,7 +760,7 @@ export class Workspace {
       const st = await this.statForWrite(abs, rel);
       if (st && !(st.mode & 0o200)) throw new BackendFailure('EACCES', `File is read-only: ${rel}`);
       await guard?.(abs, 'target');
-      return this.commit(key, abs, st, Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+      return this.commit(key, abs, st, Buffer.from(data.buffer, data.byteOffset, data.byteLength), !!guard?.strict);
     });
   }
 
@@ -731,14 +783,29 @@ export class Workspace {
   }
 
   /** Shared write tail (caller holds the path's exclusive slot). */
-  private async commit(key: string, abs: string, st: fs.Stats | null, data: Buffer): Promise<{ mtime: number }> {
+  private async commit(key: string, abs: string, st: fs.Stats | null, data: Buffer, strict = false): Promise<{ mtime: number }> {
     let target = abs;
-    if (st && (await fsp.lstat(abs)).isSymbolicLink()) target = await fsp.realpath(abs); // write through, keep the link
+    if (st && (await fsp.lstat(abs)).isSymbolicLink()) {
+      if (strict) throw new BackendFailure('OUTSIDE_WORKSPACE', `A link appeared at ${key}`);
+      target = await fsp.realpath(abs); // write through, keep the link
+    }
     await fsp.mkdir(path.dirname(target), { recursive: true });
     this.noteParents(key); // before the write: a watcher flush in between must see these as ours
     // Hard links and files owned by someone else must be rewritten in place, or the rename would detach them.
     const inPlace = !!st && (st.nlink > 1 || (!isWin && typeof process.getuid === 'function' && st.uid !== process.getuid()));
-    if (inPlace) await fsp.writeFile(target, data);
+    if (strict) {
+      if (inPlace) throw new BackendFailure('EACCES', `Not rewritten in place: ${key}`);
+      await this.parentStillHere(key);
+      // The file the guard checked, in its folder as just verified: the rename may only replace this one.
+      const pin = st ? await fsp.lstat(target, { bigint: true }).catch(() => null) : null;
+      if (st && (!pin || !pin.isFile())) throw new BackendFailure('EXTERNAL_CHANGE', `${key} changed during the write`);
+      const w = await atomicWrite(target, data, st?.mode, { noFallback: true, pin });
+      try {
+        await this.parentStillHere(key, { ino: w.ino, restore: w.bak });
+      } finally {
+        if (w.bak) await fsp.unlink(w.bak).catch(() => {});
+      }
+    } else if (inPlace) await fsp.writeFile(target, data);
     else await atomicWrite(target, data, st?.mode);
     const after = await fsp.stat(target);
     this.noteEntry(key, { kind: 'file', mtime: after.mtimeMs, size: after.size });
@@ -753,14 +820,25 @@ export class Workspace {
       await this.real(key);
       await this.refuseCaseClash(key);
       await guard?.(abs, 'target');
-      await fsp.mkdir(path.dirname(abs), { recursive: true });
+      if (guard?.strict && key.includes('/')) await this.mkdirStrict(key.slice(0, key.lastIndexOf('/')));
+      else await fsp.mkdir(path.dirname(abs), { recursive: true });
       this.noteParents(key);
+      if (guard?.strict) await this.parentStillHere(key);
+      let ino = 0n;
       try {
-        await fsp.writeFile(abs, content, { flag: 'wx' });
+        // 'wx': never over anything that appeared meanwhile (a link included).
+        const fh = await fsp.open(abs, 'wx');
+        try {
+          await fh.writeFile(content);
+          ino = (await fh.stat({ bigint: true })).ino;
+        } finally {
+          await fh.close();
+        }
       } catch (err: any) {
         if (err?.code === 'EEXIST') throw new BackendFailure('EEXIST', `Already exists: ${rel}`);
         throw err;
       }
+      if (guard?.strict) await this.parentStillHere(key, { ino });
       const st = await fsp.stat(abs);
       this.noteEntry(key, { kind: 'file', mtime: st.mtimeMs, size: st.size });
       return { mtime: st.mtimeMs };
@@ -777,7 +855,8 @@ export class Workspace {
       const st = await fsp.stat(abs).catch(() => null);
       if (st) throw new BackendFailure('EEXIST', `Already exists: ${rel}`);
       await guard?.(abs, 'target');
-      await fsp.mkdir(abs, { recursive: true });
+      if (guard?.strict) await this.mkdirStrict(key);
+      else await fsp.mkdir(abs, { recursive: true });
       this.noteEntry(key, { kind: 'dir' });
       this.watchDir(key);
     });
@@ -804,6 +883,19 @@ export class Workspace {
       if (guard) {
         await guard(a, 'from');
         await guard(b, 'to');
+      }
+      if (guard?.strict && !(sb && sameEntry(sa, sb))) {
+        // Never over something created in the window: a file is linked in (EEXIST when the name is taken)
+        // and its old name removed; a folder can only replace an empty folder.
+        await fsp.mkdir(path.dirname(b), { recursive: true });
+        await this.parentStillHere(dst);
+        // The source too: only the entry the guard checked (sa), from its folder as verified, before and
+        // after it is linked in (its old name is removed last).
+        await this.parentStillHere(src);
+        const moved = await renameNoClobber(a, b, sa, () => this.parentStillHere(src));
+        await this.parentStillHere(dst, { ino: moved, undoTo: a });
+        this.moveEntries(src, dst);
+        return;
       }
       if (sb) {
         // Same inode → case-only rename on a case-insensitive FS (Windows/macOS). Anything else is a real clash.
@@ -836,7 +928,14 @@ export class Workspace {
       const st = await fsp.lstat(abs).catch(() => null);
       // A stale spelling must not delete the twin it resolves to on a case-insensitive folder.
       if (!st || (await this.caseClash(key, new Map()))) throw new BackendFailure('ENOENT', `Not found: ${rel}`);
+      const pin = guard?.strict ? await fsp.lstat(abs, { bigint: true }).catch(() => null) : null;
       await guard?.(abs, 'target');
+      if (guard?.strict) {
+        await this.parentStillHere(key);
+        // Still the entry the guard checked, in its folder: never trash what a racer put in its place.
+        const now = await fsp.lstat(abs, { bigint: true }).catch(() => null);
+        if (!pin || !now || !sameEntry(pin, now) || now.isSymbolicLink()) throw new BackendFailure('EXTERNAL_CHANGE', `${rel} changed during the delete`);
+      }
       if (trash) await trash(abs);
       else await retryWin(() => fsp.rm(abs, { recursive: true, force: true }));
       this.dropEntries(key);
@@ -1343,16 +1442,60 @@ export async function retryWin<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Write temp sibling → fsync → rename over the target, so a crash never truncates a note. */
-async function atomicWrite(target: string, data: Buffer, mode?: number) {
+/** Rename without ever replacing an existing file: link + unlink (EEXIST if the name is taken), else an
+ *  exclusive copy. Folders: a plain rename (it can only replace an empty folder). Returns the moved inode. */
+/**
+ * Strict move: never over an entry that appeared meanwhile, and only the entry `pin` (the one the guard
+ * checked). A file is hard-linked in (EEXIST when the name is taken), checked, and its old name removed
+ * last, after `beforeUnlink` (the source folder re-check); a failed removal takes the new link back so no
+ * second name is left. A folder is renamed only when the target is absent. Returns the moved inode.
+ */
+async function renameNoClobber(a: string, b: string, pin: fs.BigIntStats, beforeUnlink: () => Promise<void>): Promise<bigint> {
+  const same = (s: fs.BigIntStats | null) => !!s && sameEntry(pin, s) && !s.isSymbolicLink();
+  const changed = () => new BackendFailure('EXTERNAL_CHANGE', 'Changed during the move');
+  if (!same(await fsp.lstat(a, { bigint: true }).catch(() => null))) throw changed();
+  if (pin.isDirectory()) {
+    if (await fsp.lstat(b).then(() => true, () => false)) throw new BackendFailure('EEXIST', 'Already exists');
+    await retryWin(() => fsp.rename(a, b));
+    return pin.ino;
+  }
+  let linked = true;
+  try {
+    await fsp.link(a, b);
+  } catch (err: any) {
+    if (err?.code === 'EEXIST') throw new BackendFailure('EEXIST', 'Already exists');
+    // No hard links here (FAT, some network shares): an exclusive copy, then the original goes.
+    linked = false;
+    await fsp.copyFile(a, b, fs.constants.COPYFILE_EXCL).catch((e) => {
+      throw e?.code === 'EEXIST' ? new BackendFailure('EEXIST', 'Already exists') : e;
+    });
+  }
+  const undo = () => fsp.unlink(b).catch(() => {});
+  try {
+    if (linked && !same(await fsp.lstat(b, { bigint: true }).catch(() => null))) throw changed();
+    if (!same(await fsp.lstat(a, { bigint: true }).catch(() => null))) throw changed();
+    await beforeUnlink();
+    await retryWin(() => fsp.unlink(a));
+  } catch (err) {
+    await undo(); // e.g. Windows: the file is in use and keeps its old name: no nlink-2 lockout left behind
+    throw err;
+  }
+  return linked ? pin.ino : (await fsp.lstat(b, { bigint: true })).ino;
+}
+
+/** Write temp sibling → fsync → rename over the target, so a crash never truncates a note. Returns the
+ *  written file's inode. `noFallback`: never rewrite the target in place when the rename fails. */
+async function atomicWrite(target: string, data: Buffer, mode?: number, o: { noFallback?: boolean; pin?: fs.BigIntStats | null } = {}): Promise<{ ino: bigint; bak: string | null }> {
   // At most 32 code points of the original name: long names (≥ ~230 bytes) would otherwise push the temp
   // name past NAME_MAX (255) and every save of that file would fail with ENAMETOOLONG.
   const short = Array.from(path.basename(target)).slice(0, 32).join('');
   const tmp = path.join(path.dirname(target), `.~${short}.${crypto.randomBytes(4).toString('hex')}.sec-edit.tmp`);
   const fh = await fsp.open(tmp, 'wx', mode !== undefined ? mode & 0o777 : 0o666);
+  let ino = 0n;
   try {
     await fh.writeFile(data);
     await fh.datasync();
+    ino = (await fh.stat({ bigint: true })).ino;
   } catch (err) {
     await fh.close().catch(() => {});
     await fsp.rm(tmp, { force: true });
@@ -1360,14 +1503,36 @@ async function atomicWrite(target: string, data: Buffer, mode?: number) {
   }
   await fh.close();
   if (mode !== undefined && !isWin) await fsp.chmod(tmp, mode & 0o7777).catch(() => {});
+  // Strict: pin the file the rename will replace with a hard link next to it (same folder, whatever that
+  // folder is by now) and check it is the one the guard saw; a caller that finds the folder moved under
+  // it puts the pinned file back. No hard links (FAT, exFAT, some SMB): the same check on the name itself.
+  let bak: string | null = null;
+  if (o.pin) {
+    const b = path.join(path.dirname(target), `.~${short}.${crypto.randomBytes(4).toString('hex')}.sec-edit.bak`);
+    const linked = await fsp.link(target, b).then(() => true, () => false);
+    if (linked) bak = b;
+    const cur = await fsp.lstat(linked ? b : target, { bigint: true }).catch(() => null);
+    if (!cur || cur.dev !== o.pin.dev || cur.ino !== o.pin.ino) {
+      if (bak) await fsp.unlink(bak).catch(() => {});
+      await fsp.rm(tmp, { force: true });
+      throw new BackendFailure('EXTERNAL_CHANGE', 'The file changed during the write');
+    }
+  }
   try {
     await retryWin(() => fsp.rename(tmp, target));
-  } catch {
+  } catch (err) {
+    if (bak) await fsp.unlink(bak).catch(() => {});
+    if (o.noFallback) {
+      await fsp.rm(tmp, { force: true });
+      throw err;
+    }
     // Target locked against replacement (some sync clients / editors): rewrite it in place instead.
     try {
       await fsp.writeFile(target, data);
     } finally {
       await fsp.rm(tmp, { force: true });
     }
+    return { ino: (await fsp.stat(target, { bigint: true })).ino, bak: null };
   }
+  return { ino, bak };
 }

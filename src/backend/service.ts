@@ -32,6 +32,7 @@ import { GIT_OPS } from '../shared/git';
 import { ProcessExplorer, registerProcessSource } from './processes';
 import type { ProcRequest, ProcSnapshot } from '../shared/processes';
 import { winSystemExe } from './winsys';
+import { isMainOwnedKey } from '../shared/mcp';
 
 // Moved to ./appdata (dependency-light, shared with the MCP server); re-exported for existing callers.
 export { defaultConfigDir, defaultCacheDir, indexOptionsFrom } from './appdata';
@@ -410,6 +411,8 @@ export class BackendService {
   }
 
   async saveSettings(patch: Partial<Settings>): Promise<Settings> {
+    // Grants of the MCP server are main's (mcp.json, behind native dialogs): never set from a page.
+    if (patch && typeof patch === 'object') patch = Object.fromEntries(Object.entries(patch).filter(([k]) => !isMainOwnedKey(k))) as Partial<Settings>;
     await this.getSettings();
     // Merge into the *current* object after the await, so concurrent saves never drop each other's patch.
     const next = { ...this.settings!, ...patch } as Settings;

@@ -3,7 +3,7 @@
 //  - the renderer is served from a privileged app:// scheme so V8 code cache works (file:// gets none);
 //  - no default application menu (saves startup time and stray accelerators like Ctrl+R / Ctrl+W).
 import './env-boot'; // first: drops SEC_EDIT_* hooks in a packaged build before any module reads them
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, session, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -247,6 +247,37 @@ function main() {
     settings: () => service.getSettings(),
     // Revert of a file MCP created: to the trash, like a delete from the tree (tests: SEC_EDIT_TRASH_DIR).
     trash: (abs) => (process.env.SEC_EDIT_TRASH_DIR ? platformTrash(abs) : shell.trashItem(abs)),
+    confirmAllowCode: (f) =>
+      mcpConfirm({
+        buttons: ['Allow code files', 'Cancel'],
+        title: 'Allow code and config files?',
+        message: `Let MCP clients write code and config files in “${f.alias}”?`,
+        detail: `${f.path}\n\nBesides notes (.md, .txt), an AI model could then change files such as .json, .yaml, .ts or .sh. Programs, scripts that run on a double-click (.js, .py, .bat, .ps1…) and shortcuts are never written.`,
+      }),
+    confirmUndoOff: () =>
+      mcpConfirm({
+        buttons: ['Turn off', 'Cancel'],
+        title: 'Turn off undo copies?',
+        message: 'Stop keeping undo copies of AI changes?',
+        detail: 'Changes made from now on cannot be reverted in Settings → MCP server. Copies already kept stay until they expire. Deletes always keep a copy.',
+      }),
+    confirmToken: (q) =>
+      mcpConfirm(
+        q.kind === 'revoke'
+          ? { buttons: ['Revoke', 'Cancel'], title: 'Revoke the token?', message: `Revoke the access token “${q.name}”?`, detail: 'The app using it stops working at once, until you copy a new setup into it.' }
+          : { buttons: [q.kind === 'create' ? 'Create' : 'Regenerate', 'Cancel'], title: q.kind === 'create' ? 'New access token?' : 'Regenerate the token?', message: `${q.kind === 'create' ? 'Create' : 'Regenerate'} an access token for “${q.name}”?`, detail: `Its setup (with the token) is copied to the clipboard: paste it into that app's MCP configuration.${q.kind === 'regenerate' ? ' The old token stops working at once.' : ''}` },
+      ),
+    // Raw tokens for "Copy setup" again later: the OS keyring (safeStorage), never vault.json.
+    tokenCrypto: { available: () => safeStorage.isEncryptionAvailable(), encrypt: (s) => safeStorage.encryptString(s), decrypt: (b) => safeStorage.decryptString(b) },
+    writeClipboard: (text) => clipboard.writeText(text),
+    readClipboard: () => clipboard.readText(),
+    confirmCopy: (q) =>
+      mcpConfirm({
+        buttons: ['Copy', 'Cancel'],
+        title: 'Copy setup with the access token?',
+        message: `Copy the setup for “${q.name}” with its access token?`,
+        detail: `Anyone who gets the token can use One's MCP server as that app. One clears the clipboard after 2 minutes.${process.platform === 'win32' ? ' Windows clipboard history (Win+V) and cloud clipboard sync keep their own copy: turn them off, or regenerate the token if it was synced.' : ''}`,
+      }),
   });
 
   const rendererDir = path.resolve(process.env.SEC_EDIT_RENDERER_DIR || path.join(__dirname, '../renderer'));

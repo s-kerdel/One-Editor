@@ -250,19 +250,15 @@ describe('resources: one:// URIs decode, then go through the same resolver', () 
 });
 
 describe('index-based tools never show hidden content (links into hidden places)', () => {
-  it('search_text finds nothing behind notes/leak.md or link-dot/', async () => {
+  it('search finds nothing behind notes/leak.md or link-dot/', async () => {
     const server = new OneMcpServer({ configDir: path.join(tmp, 'config'), settings, transport: 'stdio', win: false });
     server.applyConfig({ version: 1, enabled: true, folders: [{ id: 'bbbbbbbb', alias: 'notes', path: root, mode: 'read' }] });
     await server.protocol.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't' } } });
-    const call = async (name: string, args: Record<string, unknown>) => JSON.parse(((await server.protocol.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } })) as any).result.content[0].text);
-    const hits = await call('search_text', { query: 'TOPSECRET' });
-    expect(hits.results).toEqual([]);
-    expect(hits.total_files).toBe(0);
-    const out = await call('search_text', { query: 'OUTSIDE-SECRET' });
-    expect(out.results).toEqual([]);
-    const files = await call('search_files', { query: 'leak' });
-    expect(files.results).toEqual([]);
-    expect((await call('search_files', { query: 'a.md' })).results).toContain('notes/a.md');
+    const call = async (name: string, args: Record<string, unknown>) => ((await server.protocol.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } })) as any).result.content[0].text as string;
+    expect(await call('search', { query: 'TOPSECRET' })).toMatch(/^No matches/);
+    expect(await call('search', { query: 'OUTSIDE-SECRET' })).toMatch(/^No matches/);
+    expect(await call('search', { query: 'leak', mode: 'names' })).toBe('No file names match');
+    expect((await call('search', { query: 'a.md', mode: 'names' })).split('\n')).toContain('notes/a.md');
     await server.dispose();
   });
 });

@@ -69,8 +69,10 @@ export function cleanPath(input: unknown, o: { win: boolean }): string {
       // Device names (CON, NUL, COM1, aux.txt), ':' (NTFS streams "a.md:secret"), trailing dots / spaces.
       const why = windowsNameProblem(seg) ?? windowsNameProblem(k);
       if (why) throw invalid(`"${seg}" ${why}`);
-      // 8.3 short names ("GIT~1", "PRIVAT~1.MD") are second names for other entries.
-      if (/~\d/.test(seg)) throw invalid(`"${seg}" looks like a Windows short (8.3) name; use the full name`);
+      // 8.3 short names ("GIT~1", "PRIVAT~1.MD") are second names for other entries. Only the real shape
+      // (a base of at most 8 characters with its ~N, an extension of at most 3): "notes~2026.md" is ordinary.
+      const short = /^([^.~]{1,6})~(\d{1,6})(\.[^.]{0,3})?$/.exec(seg);
+      if (short && short[1].length + 1 + short[2].length <= 8) throw invalid(`"${seg}" looks like a Windows short (8.3) name; use the full name`);
     }
     out.push(seg);
   }
@@ -153,6 +155,8 @@ const sameFile = (a: fs.Stats, b: fs.Stats) => a.dev === b.dev && a.ino === b.in
 export class Folder {
   alias: string;
   mode: McpMode;
+  /** mcp.json grant (main asks first): code and config files may be written too, not only notes. */
+  allowCode = false;
   readonly root: string;
   private ws: Workspace | null = null;
   private realRoot: string | null = null;
@@ -268,7 +272,7 @@ export class Folder {
       await ws.detectCase();
       this.fold = ws.foldsCase;
       this.live();
-      // The watcher keeps the file list (search_files) and the indexes current while the folder is awake.
+      // The watcher keeps the file list (search mode files) and the indexes current while the folder is awake.
       this.unwatch = ws.onEvents((e) => this.index?.onEvents(e));
       await ws.listTree();
       this.live();
@@ -342,10 +346,12 @@ export class Folder {
     this.live();
     const key = cleanPath(input, { win: this.env.win });
     if (!key) throw new ToolError('EINVAL', 'Invalid path: empty (the folder itself cannot be changed)');
-    if (this.vis.hidden(key)) throw new ToolError('EACCES', `Cannot change ${key}: hidden files, key files and excluded folders are off limits`);
-    const allowCode = this.env.settings()['mcp.allowCode'] === true;
+    // One neutral answer for every refusal of where: hidden, excluded, key file, through a link, hard link
+    // (the reason would let a client probe the user's exclusions name by name).
+    const refuse = () => new ToolError('EACCES', `Cannot change ${key}`);
+    if (this.vis.hidden(key)) throw refuse();
     const typeErr = () => {
-      const why = writeTypeProblem(key, allowCode);
+      const why = writeTypeProblem(key, this.allowCode);
       return why ? new ToolError('EINVAL', `Cannot change ${key}: ${why}`) : null;
     };
     if (o.kind === 'file' && o.exists === 'mustNot') {
@@ -359,20 +365,22 @@ export class Folder {
       abs = await ws.real(key);
     } catch (err) {
       if (err instanceof BackendFailure && err.code === 'EINVAL') throw invalid(String(err.message).replace(/^Invalid file name /, ''));
+      // Through a link out of the folder or into One's data folder: the same answer as any other refusal.
+      if (err instanceof BackendFailure && (err.code === 'OUTSIDE_WORKSPACE' || err.code === 'EACCES')) throw refuse();
       throw miss();
     }
     this.live();
     const w = await this.walkParts(key);
-    if (w.link) throw miss();
+    if (w.link) throw refuse();
     const exists = w.existing === w.parts.length;
     const st = exists ? await fsp.stat(abs).catch(() => null) : null;
     const caseRename = !!(st && o.sameAs && st.dev === o.sameAs.dev && st.ino === o.sameAs.ino);
     if (o.exists === 'must' && !st) throw miss();
     if (o.exists === 'mustNot' && st && !caseRename) throw new ToolError('EEXIST', `Already exists: ${key}`);
     const known = caseRename ? w.parts.slice(0, -1).join('/') : w.parts.slice(0, w.existing).join('/');
-    if (!(await this.spelledExactly(known))) throw miss();
+    if (!(await this.spelledExactly(known))) throw refuse();
     this.live();
-    if (st && st.isFile() && st.nlink > 1) throw miss(); // a hard link: possibly an outside file under an inside name
+    if (st && st.isFile() && st.nlink > 1) throw refuse(); // a hard link: possibly an outside file under an inside name
     if (st && o.kind === 'file' && !st.isFile()) throw new ToolError(st.isDirectory() ? 'EISDIR' : 'EINVAL', `${st.isDirectory() ? 'Is a folder' : 'Not a file'}: ${key}`);
     if (st && o.kind === 'dir' && !st.isDirectory()) throw new ToolError('ENOTDIR', `Not a folder: ${key}`);
     if (o.kind === 'file' || (st && o.kind === 'any' && st.isFile())) {
@@ -409,8 +417,10 @@ export class Folder {
    * as asked, it is visible, the file is still what the caller saw (`expect`), and `capture` gets the
    * bytes about to be replaced (the journal). `caseRenameOf`: the source of a case-only rename.
    */
-  guard(o: { expect?: Stamp | 'absent' | 'emptyDir'; capture?: (prev: Buffer | null, role: 'target' | 'from' | 'to') => void; caseRenameOf?: string } = {}): WriteGuard {
-    return async (abs, role) => {
+  guard(o: { expect?: Stamp | 'absent' | 'emptyDir'; capture?: (prev: Buffer | null, role: 'target' | 'from' | 'to') => void | Promise<void>; caseRenameOf?: string } = {}): WriteGuard {
+    // strict: the Workspace itself also refuses to follow a link at commit, never rewrites in place, and
+    // re-checks where the parent folder really is after the write / rename (WriteGuard docs).
+    return Object.assign(async (abs: string, role: 'target' | 'from' | 'to') => {
       if (this.disposed || this.mode !== 'write') throw new BackendFailure('EREADONLY', 'Not writable');
       const rel = path.relative(this.root, abs);
       if (!rel || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) throw new BackendFailure('OUTSIDE_WORKSPACE', 'Outside');
@@ -431,12 +441,12 @@ export class Folder {
       if (e === 'absent' && st) throw new BackendFailure('EEXIST', 'Already exists');
       if (e === 'emptyDir' && (!st?.isDirectory() || (await fsp.readdir(abs)).length)) throw new BackendFailure('EXTERNAL_CHANGE', 'Folder changed');
       if (e && typeof e === 'object' && (!st || Math.abs(st.mtimeMs - e.mtime) > 1 || st.size !== e.size)) throw new BackendFailure('EXTERNAL_CHANGE', 'File changed on disk');
-      if (o.capture) o.capture(st?.isFile() ? await fsp.readFile(abs) : null, role);
+      if (o.capture) await o.capture(st?.isFile() ? await fsp.readFile(abs) : null, role); // may refuse (journal quota)
       if (this.disposed || this.mode !== 'write') throw new BackendFailure('EREADONLY', 'Not writable');
-    };
+    }, { strict: true as const });
   }
 
-  /** Visible file paths (search_files), from the workspace's own listing (links are not in it). */
+  /** Visible file paths (search mode files, list_files), from the workspace's own listing (links are not in it). */
   async filePaths(): Promise<string[]> {
     const ws = await this.workspace();
     return ws.filePaths().filter((p) => !this.hidden(p));
@@ -472,7 +482,7 @@ export class Folder {
     return { key, abs, real, st };
   }
 
-  /** read_file / read_section / outline: text through the resolver, verified at the moment of the read. */
+  /** read_file / get_outline: text through the resolver, verified at the moment of the read. */
   async readText(input: unknown): Promise<TextFile> {
     return this.readResolved(await this.resolve(input));
   }
@@ -595,8 +605,9 @@ export function grantProblem(folder: string, env: Pick<FolderEnv, 'configDir' | 
 
 /** Notes everywhere; other text files only with Settings → MCP server → "Also allow code and config files". */
 export const NOTE_EXTS: ReadonlySet<string> = new Set(['md', 'markdown', 'txt']);
-/** Never written, whatever the settings: Windows shell / execution types and their Linux / macOS cousins. */
-const NEVER_EXTS = new Set(['lnk', 'url', 'scf', 'library-ms', 'bat', 'cmd', 'ps1', 'psm1', 'psd1', 'vbs', 'vbe', 'jse', 'wsf', 'wsh', 'hta', 'exe', 'dll', 'msi', 'msc', 'cpl', 'scr', 'pif', 'com', 'reg', 'jar', 'appref-ms', 'application', 'desktop', 'command']);
+/** Never written, whatever the grant: Windows shell / execution types (.js runs in Windows Script Host on a
+ *  double-click, .py / .pyw in the py launcher) and their Linux / macOS cousins. */
+const NEVER_EXTS = new Set(['lnk', 'url', 'scf', 'library-ms', 'bat', 'cmd', 'ps1', 'psm1', 'psd1', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'hta', 'exe', 'dll', 'msi', 'msc', 'cpl', 'scr', 'pif', 'com', 'reg', 'jar', 'appref-ms', 'application', 'desktop', 'command', 'py', 'pyw']);
 const NEVER_NAMES = new Set(['desktop.ini', 'autorun.inf']);
 
 /** Why a write to `key` is refused by its file type, or null. */
@@ -655,6 +666,7 @@ export class FolderPool {
         f.mode = mode;
         changed = true;
       }
+      f.allowCode = w.allowCode === true;
       next.set(w.alias, f);
     }
     this.folders = next; // config order

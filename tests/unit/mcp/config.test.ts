@@ -3,7 +3,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { aliasFor, journalFromSettings, limitsFromSettings, parseActivityLine, parseMcpConfig, setupSnippets, tomlString } from '../../../src/shared/mcp';
+import { aliasFor, limitsFromSettings, parseUndo, parseActivityLine, parseMcpConfig, setupSnippets, tomlString } from '../../../src/shared/mcp';
 import { loadSettings, readConfig, visibilityKey } from '../../../src/mcp/config';
 import { DEFAULT_SETTINGS } from '../../../src/shared/api';
 
@@ -12,7 +12,7 @@ afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 describe('parseMcpConfig', () => {
   it('a missing / broken file is off with no folders (never "everything")', () => {
-    for (const raw of [null, undefined, 'x', 42, [], { enabled: 'yes' }]) expect(parseMcpConfig(raw)).toEqual({ version: 1, enabled: false, folders: [] });
+    for (const raw of [null, undefined, 'x', 42, [], { enabled: 'yes' }]) expect(parseMcpConfig(raw)).toEqual({ version: 1, enabled: false, folders: [], undo: { on: true, days: 30 }, tokens: [] });
   });
 
   it('keeps valid folders, drops bad ids / aliases / paths and duplicates; only "write" grants writes', () => {
@@ -64,10 +64,16 @@ describe('limits', () => {
     expect(limitsFromSettings({ 'mcp.maxReadKB': 'x', 'mcp.maxResults': null })).toEqual({ readChars: 16 * 1024, results: 25 });
   });
 
-  it('undo copies: on by default, 30 days; off only when switched off; days clamped', () => {
-    expect(journalFromSettings({})).toEqual({ on: true, maxAgeMs: 30 * 24 * 3600_000 });
-    expect(journalFromSettings({ 'mcp.journal': false, 'mcp.journalDays': 9999 })).toEqual({ on: false, maxAgeMs: 365 * 24 * 3600_000 });
-    expect(journalFromSettings({ 'mcp.journal': 'no', 'mcp.journalDays': 0 }).on).toBe(true);
+  it('undo copies (mcp.json, main-owned): on by default, 30 days; off only when switched off; days clamped', () => {
+    expect(parseUndo(undefined)).toEqual({ on: true, days: 30 });
+    expect(parseUndo({ on: false, days: 9999 })).toEqual({ on: false, days: 365 });
+    expect(parseUndo({ on: 'no', days: 0 })).toEqual({ on: true, days: 1 });
+    expect(parseMcpConfig({ enabled: true, folders: [], undo: { on: false } }).undo).toEqual({ on: false, days: 30 });
+  });
+
+  it('code files are a per-folder grant: only allowCode === true', () => {
+    const c = parseMcpConfig({ enabled: true, folders: [{ id: 'aaaaaaaa', alias: 'a', path: '/a', mode: 'write', allowCode: true }, { id: 'bbbbbbbb', alias: 'b', path: '/b', mode: 'write', allowCode: 'yes' }] });
+    expect(c.folders.map((f) => !!f.allowCode)).toEqual([true, false]);
   });
 
   it('loadSettings takes only the keys the server uses, and fails closed on a bad file', () => {
@@ -120,7 +126,7 @@ describe('setupSnippets', () => {
 describe('parseActivityLine', () => {
   it('checks every field of a line another process wrote', () => {
     const ok = parseActivityLine(JSON.stringify({ t: 1, client: 'LM\u0007 Studio', transport: 'stdio', tool: 'read_file', folder: 'notes', path: 'a.md', ok: true, code: null, ms: 3.4, bytes: 10 }));
-    expect(ok).toEqual({ t: 1, client: 'LM Studio', transport: 'stdio', tool: 'read_file', folder: 'notes', path: 'a.md', ok: true, code: null, ms: 3, bytes: 10, journal: null });
+    expect(ok).toEqual({ t: 1, client: 'LM Studio', transport: 'stdio', tool: 'read_file', folder: 'notes', path: 'a.md', ok: true, code: null, ms: 3, bytes: 10, journal: null, token: null });
     // A write row's undo group: only a well-formed id survives (main joins it to a folder path).
     expect(parseActivityLine(JSON.stringify({ t: 1, tool: 'write_file', journal: 'mhx1a2b3-0a1b2c3d' }))?.journal).toBe('mhx1a2b3-0a1b2c3d');
     expect(parseActivityLine(JSON.stringify({ t: 1, tool: 'write_file', journal: '../../etc' }))?.journal).toBeNull();

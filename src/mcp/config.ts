@@ -6,7 +6,7 @@ import { DEFAULT_SETTINGS, type Settings } from '../shared/api';
 import { parseMcpConfig, type McpConfig } from '../shared/mcp';
 
 /** The settings this server uses (anything else in settings.json is ignored). */
-export const SETTINGS_USED = ['excludeGlobs', 'search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'links.updateOnRename', 'mcp.maxReadKB', 'mcp.maxResults', 'mcp.journal', 'mcp.journalDays', 'mcp.allowCode'] as const;
+export const SETTINGS_USED = ['excludeGlobs', 'search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'links.updateOnRename', 'variables.fileName', 'mcp.maxReadKB', 'mcp.maxResults'] as const;
 /** Changing one of these changes what is visible or indexed: folders start over. */
 export const VISIBILITY_KEYS = ['excludeGlobs', 'search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB'] as const;
 

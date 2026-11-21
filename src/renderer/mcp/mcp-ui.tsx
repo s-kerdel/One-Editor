@@ -1,18 +1,25 @@
 // Settings → MCP server (lazy chunk, desktop only: imported by the Settings overlay, nothing at startup).
 // Shows what main reports over `secEditBridge.mcp` and asks main to change it: main owns mcp.json and
-// shows the native dialogs (turn on, share a folder, allow changes). The page never names a folder path.
+// shows the native dialogs (turn on, share a folder, allow changes, code files, undo off, tokens). The page
+// never names a folder path and never sees an access token: "Copy setup" happens in main.
 import { signal } from '@preact/signals';
 import { useEffect, useState } from 'preact/hooks';
 import { app } from '../app/app';
 import { Icon } from '../app/icons';
 import '../app/icon-pack'; // refresh, copy
-import { copyText } from '../app/fileops';
-import { NO_MCP_STATUS, setupSnippets, type McpActivity, type McpFolder, type McpReply, type McpStatus, type SetupSnippet } from '@shared/mcp';
+import { NO_MCP_STATUS, TOKEN_ENV, UNDO_DAYS, setupSnippets, type McpActivity, type McpFolder, type McpReply, type McpStatus, type SetupSnippet } from '@shared/mcp';
+import { ActivityList } from './activity';
 import './mcp.css';
 
 interface Bridge {
   status(): Promise<unknown>;
-  setEnabled(on: boolean): Promise<unknown>;
+  setEnabled(on: boolean, client?: string): Promise<unknown>;
+  setAllowCode(id: string, on: boolean): Promise<unknown>;
+  setUndo(o: { on?: boolean; days?: number }): Promise<unknown>;
+  createToken(name: string, client: string): Promise<unknown>;
+  regenerateToken(id: string, client: string): Promise<unknown>;
+  revokeToken(id: string): Promise<unknown>;
+  copySetup(id: string, client: string): Promise<unknown>;
   addFolder(): Promise<unknown>;
   removeFolder(id: string): Promise<unknown>;
   setMode(id: string, mode: string): Promise<unknown>;
@@ -25,12 +32,17 @@ const bridge = () => (globalThis as { secEditBridge?: { mcp?: Bridge } }).secEdi
 async function call<T>(p: Promise<unknown> | undefined): Promise<T> {
   const r = (await p) as McpReply<T> | undefined;
   if (!r) throw new Error('Not available in this build');
-  if (!r.ok) throw new Error(r.error.message);
+  if (!r.ok) throw Object.assign(new Error(r.error.message), { code: r.error.code });
   return r.result;
 }
 
+/** "No" in one of main's native dialogs: the user's own choice, not an error worth a toast. */
+const cancelled = (err: unknown) => (err as { code?: string })?.code === 'ECANCELED';
+
 const status = signal<McpStatus>(NO_MCP_STATUS);
 const activity = signal<McpActivity[]>([]);
+/** The client tab: the setup main copies (with a token) is for this app. */
+const client = signal<SetupSnippet['id']>('lmstudio');
 let installed = false;
 
 function install() {
@@ -49,7 +61,7 @@ async function change(fn: (b: Bridge) => Promise<unknown>) {
   try {
     status.value = await call<McpStatus>(fn(b));
   } catch (err) {
-    app.toast(`MCP server: ${(err as Error).message}`, 'error');
+    if (!cancelled(err)) app.toast(`MCP server: ${(err as Error).message}`, 'error');
   }
 }
 
@@ -85,6 +97,12 @@ function FolderRow({ f, writes }: { f: McpFolder; writes: boolean }) {
           </button>
         ))}
       </div>
+      {mode === 'write' && (
+        <label class="se-mcp-check" title="Also code and config files (.json, .yaml, .ts…), not only notes. Asks first.">
+          <input type="checkbox" data-testid="mcp-allow-code" checked={!!f.allowCode} onChange={(e) => void change((b) => b.setAllowCode(f.id, (e.currentTarget as HTMLInputElement).checked))} />
+          Code files
+        </label>
+      )}
       <button class="se-btn small" data-testid="mcp-remove" title={`Stop sharing ${f.alias}`} onClick={() => void change((b) => b.removeFolder(f.id))}>
         Remove
       </button>
@@ -93,15 +111,15 @@ function FolderRow({ f, writes }: { f: McpFolder; writes: boolean }) {
 }
 
 function Setup({ s }: { s: McpStatus }) {
-  const [pick, setPick] = useState<SetupSnippet['id']>('lmstudio');
   if (!s.launch) return <p class="se-mcp-note">This build has no MCP server program (dist/mcp/cli.mjs). Build or install One again.</p>;
-  const all = setupSnippets(s.launch, s.platform);
-  const cur = all.find((x) => x.id === pick) ?? all[0];
+  // The preview shows where the token goes, masked: main puts the real one in when it copies.
+  const all = setupSnippets({ ...s.launch, env: { ...s.launch.env, [TOKEN_ENV]: 'one_••••' } }, s.platform);
+  const cur = all.find((x) => x.id === client.value) ?? all[0];
   return (
     <div class="se-mcp-setup" data-testid="mcp-setup">
       <div class="se-seg" role="tablist" aria-label="Client">
         {all.map((x) => (
-          <button class={`se-seg-btn${x.id === cur.id ? ' active' : ''}`} role="tab" aria-selected={x.id === cur.id} data-testid={`mcp-client-${x.id}`} onClick={() => setPick(x.id)}>
+          <button class={`se-seg-btn${x.id === cur.id ? ' active' : ''}`} role="tab" aria-selected={x.id === cur.id} data-testid={`mcp-client-${x.id}`} onClick={() => (client.value = x.id)}>
             {x.title}
           </button>
         ))}
@@ -112,13 +130,99 @@ function Setup({ s }: { s: McpStatus }) {
       <pre class="se-mcp-snippet" data-testid="mcp-snippet" data-lang={cur.lang}>
         {cur.text}
       </pre>
+      <p class="se-mcp-note">Copy a setup with its token below, paste it into the app, restart the app. Nothing needs Node.js: One runs the server itself.</p>
+    </div>
+  );
+}
+
+const day = (t: number | null) => (t ? new Date(t).toLocaleDateString(undefined, { dateStyle: 'medium' }) : 'never');
+
+/** Access tokens: one per app. The page sees names and dates only; copying runs in main. */
+function Tokens({ s }: { s: McpStatus }) {
+  const [name, setName] = useState('');
+  const copy = async (id: string) => {
+    const b = bridge();
+    if (!b) return;
+    try {
+      await call(b.copySetup(id, client.value));
+      app.toast('Setup with its token copied: paste it into the app', 'success');
+    } catch (err) {
+      if (!cancelled(err)) app.toast(`MCP server: ${(err as Error).message}`, 'error');
+    }
+  };
+  return (
+    <div class="se-mcp-tokens" data-testid="mcp-tokens">
+      <p class="se-mcp-note" data-testid="mcp-token-note">
+        Every app needs its own access token. Updated One? <strong>Copy the setup again: a token is now required.</strong>
+        {s.tokenStore === 'once' ? ' No keyring on this computer: a token can only be copied when it is made.' : ''}
+      </p>
+      {s.tokens.length > 0 && (
+        <ul class="se-mcp-folders">
+          {s.tokens.map((t) => (
+            <li class="se-mcp-folder" data-testid="mcp-token" data-name={t.name}>
+              <div class="se-mcp-folder-what">
+                <span class="se-mcp-alias">{t.name}</span>
+                <span class="se-mcp-path">
+                  one_{t.hint}… · made {day(t.created)} · last used {day(t.lastUsed)}
+                </span>
+              </div>
+              <button class="se-btn small" data-testid="mcp-token-copy" disabled={!t.copyable} title={t.copyable ? 'Copy the setup for the app chosen above, with this token' : 'Only copyable when made: regenerate it'} onClick={() => void copy(t.id)}>
+                <Icon name="copy" size={13} />
+                Copy setup
+              </button>
+              <button class="se-btn small" data-testid="mcp-token-regenerate" onClick={() => void change((b) => b.regenerateToken(t.id, client.value))}>
+                Regenerate
+              </button>
+              <button class="se-btn small" data-testid="mcp-token-revoke" onClick={() => void change((b) => b.revokeToken(t.id))}>
+                Revoke
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <div class="se-mcp-row">
-        <button class="se-btn small" data-testid="mcp-copy" onClick={() => void copyText(cur.text, `${cur.title} setup`)}>
-          <Icon name="copy" size={13} />
-          Copy
+        <input class="se-input" data-testid="mcp-token-name" placeholder="App name, e.g. Codex CLI" value={name} maxLength={60} onInput={(e) => setName((e.currentTarget as HTMLInputElement).value)} />
+        <button
+          class="se-btn small"
+          data-testid="mcp-token-new"
+          disabled={!name.trim()}
+          onClick={() =>
+            void change((b) => b.createToken(name.trim(), client.value)).then(() => {
+              setName('');
+            })
+          }
+        >
+          <Icon name="plus" size={13} />
+          New token for another app…
         </button>
-        <span class="se-mcp-note">Restart the client after adding it. Nothing needs Node.js: One runs the server itself.</span>
       </div>
+    </div>
+  );
+}
+
+/** Undo copies: on / off (off asks in a native dialog) and how long they are kept. */
+function Undo({ s }: { s: McpStatus }) {
+  return (
+    <div class="se-mcp-row" data-testid="mcp-undo">
+      <label class="se-mcp-check">
+        <input type="checkbox" data-testid="mcp-undo-on" checked={s.undo.on} onChange={(e) => void change((b) => b.setUndo({ on: (e.currentTarget as HTMLInputElement).checked }))} />
+        Keep undo copies of AI edits
+      </label>
+      <label class="se-mcp-check">
+        for
+        <input
+          class="se-input narrow"
+          type="number"
+          data-testid="mcp-undo-days"
+          min={UNDO_DAYS.min}
+          max={UNDO_DAYS.max}
+          value={s.undo.days}
+          disabled={!s.undo.on}
+          onChange={(e) => void change((b) => b.setUndo({ days: Number((e.currentTarget as HTMLInputElement).value) }))}
+        />
+        days
+      </label>
+      <span class="se-mcp-note">Off: AI changes made from then on cannot be reverted. Deletes always keep a copy.</span>
     </div>
   );
 }
@@ -136,10 +240,7 @@ async function revert(r: McpActivity) {
   await refreshActivity();
 }
 
-const when = (t: number) => new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
 function Activity() {
-  const rows = activity.value;
   return (
     <div class="se-mcp-activity">
       <div class="se-mcp-row">
@@ -149,38 +250,7 @@ function Activity() {
           Refresh
         </button>
       </div>
-      {rows.length ? (
-        <table class="se-mcp-table" data-testid="mcp-activity">
-          <tbody>
-            {rows.slice(0, 50).map((r) => (
-              <tr data-ok={r.ok ? 'yes' : 'no'}>
-                <td class="se-mcp-time">{when(r.t)}</td>
-                <td>{r.client}</td>
-                <td class="se-mcp-tool">{r.tool}</td>
-                <td class="se-mcp-target" title={[r.folder, r.path].filter(Boolean).join(': ')}>
-                  {[r.folder, r.path].filter(Boolean).join(': ')}
-                </td>
-                <td class="se-mcp-result">{r.ok ? 'ok' : (r.code ?? 'error')}</td>
-                <td class="se-mcp-undo">
-                  {r.reverted ? (
-                    <span class="se-mcp-reverted" data-testid="mcp-reverted">
-                      reverted
-                    </span>
-                  ) : r.ok && r.journal ? (
-                    <button class="se-link-btn" data-testid="mcp-revert" title="Undo this change (only if the file was not changed since)" onClick={() => void revert(r)}>
-                      Revert
-                    </button>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <p class="se-mcp-note" data-testid="mcp-activity-empty">
-          No calls yet. Each call is logged here (tool, folder, file, result: never the text or a search query). Changes get a Revert button.
-        </p>
-      )}
+      <ActivityList rows={activity.value} revert={(r) => void revert(r)} />
     </div>
   );
 }
@@ -197,7 +267,7 @@ export function SettingsPanel() {
   return (
     <div class="se-mcp-panel" data-testid="mcp-settings">
       <div class="se-mcp-head">
-        <button class={`se-switch${s.enabled ? ' on' : ''}`} role="switch" aria-checked={s.enabled} aria-label="Enable MCP server" data-testid="mcp-enable" onClick={() => void change((b) => b.setEnabled(!s.enabled))}>
+        <button class={`se-switch${s.enabled ? ' on' : ''}`} role="switch" aria-checked={s.enabled} aria-label="Enable MCP server" data-testid="mcp-enable" onClick={() => void change((b) => b.setEnabled(!s.enabled, client.value))}>
           <span class="se-switch-knob" />
         </button>
         <span class="se-mcp-headline" data-testid="mcp-state" data-on={s.enabled ? 'yes' : 'no'}>
@@ -224,11 +294,19 @@ export function SettingsPanel() {
         <span class="se-mcp-note" data-testid="mcp-folders-note">
           {s.writes
             ? 'Hidden files (.git, .env…), key files and your excluded folders stay invisible and can never be changed. Read-write lets AI apps edit, move and delete (to the Recycle Bin) notes; each change can be reverted below.'
-            : 'Hidden files (.git, .env…), key files and your excluded folders stay invisible. AI apps can only read in this build: Read-write comes in the next build.'}
+            : 'Hidden files (.git, .env…), key files and your excluded folders stay invisible. This build is read-only.'}
         </span>
       </div>
       <h4 class="se-set-group">Client setup</h4>
       <Setup s={s} />
+      <h4 class="se-set-group">Access tokens</h4>
+      <Tokens s={s} />
+      {s.writes && (
+        <>
+          <h4 class="se-set-group">Undo</h4>
+          <Undo s={s} />
+        </>
+      )}
       <Activity />
     </div>
   );

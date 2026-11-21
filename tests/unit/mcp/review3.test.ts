@@ -147,9 +147,9 @@ describe('3. hard links are not served', () => {
     fs.linkSync(path.join(outside, 'hard.md'), path.join(root, 'notes/hard.md'));
     const { call, s } = await server(root, 'read');
     expect((await call('read_file', { path: 'notes/hard.md' })).text).toBe('ENOENT: Not found: notes/hard.md');
-    expect((await call('search_text', { query: 'OUTSIDE-HARDLINK-CONTENT' })).head.total_files).toBe(0);
+    expect((await call('search', { query: 'OUTSIDE-HARDLINK-CONTENT' })).text).toMatch(/^No matches/);
     const f = s.pool.list()[0];
-    await expect(f.use(() => f.resolveTarget('notes/hard.md', { kind: 'file', exists: 'must' }))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(f.use(() => f.resolveTarget('notes/hard.md', { kind: 'file', exists: 'must' }))).rejects.toMatchObject({ code: 'EACCES', message: 'Cannot change notes/hard.md' });
   });
 });
 
@@ -166,19 +166,22 @@ describe('4. grant re-check on the real path', () => {
   });
 });
 
-describe('5. this build ships read-only (MCP_WRITES_ENABLED)', () => {
-  it('a folder set to write in mcp.json is served read-only; no write tool is listed or callable', async () => {
+describe('5. the writes switch (MCP_WRITES_ENABLED)', () => {
+  it('the build default lists write tools for a read-write folder', async () => {
+    const root = fresh('gate-on');
+    const { rpc } = await server(root, 'write'); // no `writes` override: the build's default
+    const tools: string[] = (await rpc('tools/list')).result.tools.map((t: any) => t.name);
+    expect(tools.includes('write_file')).toBe(MCP_WRITES_ENABLED);
+  });
+
+  it('switched off: a folder set to write in mcp.json is served read-only; no write tool is listed or callable', async () => {
     const root = fresh('gate');
     put(root, 'a.md', 'a\n');
-    const { call, rpc } = await server(root, 'write'); // no `writes` override: the build's default
+    const { call, rpc } = await server(root, 'write', { writes: false }); // what MCP_WRITES_ENABLED = false ships
     const tools: string[] = (await rpc('tools/list')).result.tools.map((t: any) => t.name);
-    const folders = (await call('list_folders')).head.folders;
-    if (MCP_WRITES_ENABLED) {
-      expect(tools).toContain('write_file');
-      return;
-    }
+    const folders = (await call('list_folders')).text;
     expect(tools.some((n) => /^(write|append|patch|replace|move|create|delete)_/.test(n))).toBe(false);
-    expect(folders[0].mode).toBe('read-only');
+    expect(folders).toMatch(/^1 folder\nnotes \(gate\) · read-only · /);
     expect((await call('write_file', { path: 'b.md', content: 'x' })).rpc).toBe(-32602);
     expect(fs.existsSync(path.join(root, 'b.md'))).toBe(false);
   });

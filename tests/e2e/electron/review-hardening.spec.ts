@@ -10,9 +10,11 @@ test('renderer is isolated: no Node, minimal bridge, hardened webPreferences', a
   expect((await page.evaluate(() => Object.keys((window as any).secEditBridge))).sort()).toEqual(
     ['approveClose', 'frame', 'getPathForFile', 'gpuStatus', 'indexToken', 'invoke', 'mcp', 'on', 'os', 'ready', 'relaunch', 'setTitleBarOverlay', 'setZoom', 'terminal', 'toggleDevTools', 'updates', 'vault', 'webServer', 'zenFullScreen'].sort(),
   );
-  // Settings → MCP server: fixed mcp:* calls only; folders come from main's native dialog, never a path from the page (src/main/mcp.ts).
+  // Settings → MCP server: fixed mcp:* calls only; folders come from main's native dialog, never a path from the page,
+  // and every widening step / token action asks natively in main; copySetup puts the token on the clipboard from main
+  // (the page never receives it) (src/main/mcp.ts).
   expect(await page.evaluate(() => Object.entries((window as any).secEditBridge.mcp).map(([k, v]) => `${k}:${typeof v}`).sort())).toEqual(
-    ['activity', 'addFolder', 'onChange', 'removeFolder', 'revert', 'setEnabled', 'setMode', 'status'].map((k) => `${k}:function`),
+    ['activity', 'addFolder', 'copySetup', 'createToken', 'onChange', 'regenerateToken', 'removeFolder', 'revert', 'revokeToken', 'setAllowCode', 'setEnabled', 'setMode', 'setUndo', 'status'].map((k) => `${k}:function`),
   );
   // Opt-in "Security updates": two calls + a listener, no URL or host ever comes from the page (src/main/update-check.ts).
   expect(await page.evaluate(() => Object.entries((window as any).secEditBridge.updates).map(([k, v]) => `${k}:${typeof v}`).sort())).toEqual(

@@ -1,7 +1,6 @@
 // Declarative list of every user setting: one entry drives the control, its description, the
 // search index and reset-to-default. Pure (no DOM, no app singleton) so it is unit-testable.
 import { DEFAULT_SETTINGS } from '@shared/api';
-import { MCP_WRITES_ENABLED } from '@shared/mcp';
 import { normalizeKey } from './commands';
 import { TERMINAL_SECTION, TERMINAL_SETTING_DEFS } from '../terminal/settings';
 
@@ -917,42 +916,6 @@ const defs: Draft[] = [
     control: { type: 'number', min: 5, max: 200, step: 5, stepper: true },
     desktopOnly: true,
     group: 'Answer size',
-  },
-  {
-    key: 'mcp.allowCode',
-    section: 'mcp',
-    label: 'Also allow code and config files',
-    description: 'Off: AI apps write notes only (.md, .markdown, .txt). Scripts and programs: never.',
-    keywords: ['mcp', 'ai', 'write', 'code', 'config', 'json', 'yaml', 'file types', 'extensions'],
-    default: false,
-    control: { type: 'toggle' },
-    desktopOnly: true,
-    group: 'Changes',
-    enabledWhen: () => MCP_WRITES_ENABLED, // greyed out while this build ships MCP read-only
-  },
-  {
-    key: 'mcp.journal',
-    section: 'mcp',
-    label: 'Keep undo copies of AI edits',
-    description: 'Off: AI changes made from now on keep no copy and cannot be reverted here. Old copies stay.',
-    keywords: ['mcp', 'ai', 'undo', 'revert', 'history', 'journal', 'backup', 'restore'],
-    default: true,
-    control: { type: 'toggle' },
-    desktopOnly: true,
-    group: 'Undo',
-    enabledWhen: () => MCP_WRITES_ENABLED,
-  },
-  {
-    key: 'mcp.journalDays',
-    section: 'mcp',
-    label: 'Keep undo copies for',
-    description: 'Older copies are removed (at most 100 MB in all).',
-    keywords: ['mcp', 'ai', 'undo', 'revert', 'history', 'days'],
-    default: 30,
-    control: { type: 'number', min: 1, max: 365, stepper: true, unit: 'days' },
-    desktopOnly: true,
-    group: 'Undo',
-    enabledWhen: (s) => MCP_WRITES_ENABLED && s['mcp.journal'] !== false,
   },
   // ---- Security updates (opt-in automatic check; main reads it before every automatic check: src/main/update-check.ts) ----
   {

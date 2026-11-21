@@ -35,12 +35,15 @@ let id = 10;
 async function call(name: string, args: Record<string, unknown> = {}) {
   const r = (await server.protocol.handle({ jsonrpc: '2.0', id: id++, method: 'tools/call', params: { name, arguments: args } })) as any;
   if (r.error) return { rpc: r.error.code, text: r.error.message };
-  return { isError: !!r.result.isError, text: r.result.content[0].text as string, data: r.result.isError ? null : JSON.parse(r.result.content[0].text), raw: r.result };
+  const text = r.result.content[0].text as string;
+  return { isError: !!r.result.isError, text, data: r.result.isError ? null : summary(text), raw: r.result };
 }
+/** A write answer is one plain line: `Saved a.md · etag 1732…-20 · undo: 1a2b3c4d`. */
+const summary = (text: string) => ({ text, created: /^Created /.test(text), etag: /· etag (\S+)/.exec(text)?.[1], undo: /· undo: ([a-f0-9]{8})$/.exec(text)?.[1] });
 const ok = async (name: string, args: Record<string, unknown>) => {
   const r = await call(name, args);
   expect(r.isError, `${name}: ${r.text}`).toBe(false);
-  return r.data;
+  return r.data!;
 };
 const err = async (name: string, args: Record<string, unknown>) => {
   const r = await call(name, args);
@@ -48,7 +51,7 @@ const err = async (name: string, args: Record<string, unknown>) => {
   expect(r.text).not.toContain(tmp); // never a host path
   return r.text;
 };
-const etag = async (rel: string) => JSON.parse((await call('read_file', { path: rel })).raw.content[0].text).etag as string;
+const etag = async (rel: string) => /etag (\S+)/.exec((await call('read_file', { path: rel })).text)![1];
 /** The newest audit row of a tool (its journal group). */
 const lastRow = async (tool: string) => {
   await server.audit.flush();
@@ -153,7 +156,7 @@ describe('write_file', () => {
     expect(await err('write_file', { path: 'image.png', content: 'x', if_none_match: '*' })).toMatch(/^EINVAL: Cannot change image.png: only notes/);
     expect(await err('write_file', { path: 'tool.exe', content: 'x' })).toMatch(/^EINVAL: Cannot change tool.exe: program, script and shortcut files are never written/);
     for (const p of ['.secret/x.md', '.env', 'id_rsa', 'keys/server.pem', 'node_modules/x.md', 'private/new.md', 'PRIVATE/new.md', 'notes/.hidden/x.md']) expect(await err('write_file', { path: p, content: 'x' }), p).toMatch(/^EACCES: Cannot change/);
-    for (const p of ['out/x.md', 'link-dot/x.md']) expect(await err('write_file', { path: p, content: 'x' }), p).toMatch(/^ENOENT/);
+    for (const p of ['out/x.md', 'link-dot/x.md']) expect(await err('write_file', { path: p, content: 'x' }), p).toBe(`EACCES: Cannot change ${p}`); // the same neutral answer
     expect(fs.existsSync(path.join(tmp, 'outside/x.md'))).toBe(false);
     expect(fs.existsSync(abs('.secret/x.md'))).toBe(false);
     for (const p of ['../x.md', '/etc/x.md', 'C:\\x.md', 'a\\b.md']) expect(await err('write_file', { path: p, content: 'x' }), p).toMatch(/^EINVAL/);
@@ -200,7 +203,7 @@ describe('append, patch, replace', () => {
 
   it('own writes reach the search index right away', async () => {
     await ok('write_file', { path: 'fresh.md', content: 'a zebrafish appears' });
-    await expect.poll(async () => JSON.parse((await call('search_text', { query: 'zebrafish' })).text).results.map((r: any) => r.path), { timeout: 5000 }).toEqual(['fresh.md']);
+    await expect.poll(async () => (await call('search', { query: 'zebrafish' })).text, { timeout: 5000 }).toContain('fresh.md');
   });
 });
 
@@ -211,11 +214,11 @@ describe('move_file, create_folder, delete_file', () => {
     expect(fs.existsSync(abs('a.md'))).toBe(false);
     expect(read('c.md')).toContain('[A](archive/a.md)');
     expect(read('b.md')).toContain('[[a]]'); // still resolves by name: untouched
-    expect(r.links_updated).toEqual(['c.md']);
+    expect(r.text).toMatch(/^Moved a\.md → archive\/a\.md · etag \S+ · links updated: c\.md · undo: [a-f0-9]{8}$/);
     expect(await err('move_file', { from: 'b.md', to: 'c.md' })).toMatch(/^EEXIST/);
     expect(await err('move_file', { from: 'b.md', to: 'b.exe' })).toMatch(/never written/);
     expect(await err('move_file', { from: 'b.md', to: '.secret/b.md' })).toMatch(/^EACCES/);
-    expect(await err('move_file', { from: 'b.md', to: 'link-dot/b.md' })).toMatch(/^ENOENT/);
+    expect(await err('move_file', { from: 'b.md', to: 'link-dot/b.md' })).toBe('EACCES: Cannot change link-dot/b.md');
     expect(await err('move_file', { from: '.secret/s.md', to: 'stolen.md' })).toMatch(/^EACCES/);
     expect(await err('move_file', { from: 'withhidden', to: 'moved' })).toMatch(/hidden, excluded or linked/);
     expect(await err('move_file', { from: 'sub', to: 'sub/inner' })).toMatch(/into itself/);
@@ -312,14 +315,12 @@ describe('journal and revert', () => {
 
   it('off: no undo copy, no journal id (no Revert); on again: copies again', async () => {
     const groups = () => fs.readdirSync(path.join(config, JOURNAL_DIR)).length;
-    settings = { ...settings, 'mcp.journal': false };
-    server.applySettings(settings);
+    server.applyConfig({ ...cfg('write'), undo: { on: false, days: 30 } }); // main-owned (mcp.json)
     const before = groups();
     await ok('append_file', { path: 'b.md', content: 'no copy' });
     expect((await lastRow('append_file')).journal).toBeUndefined();
     expect(groups()).toBe(before);
-    settings = { ...settings, 'mcp.journal': true };
-    server.applySettings(settings);
+    server.applyConfig({ ...cfg('write'), undo: { on: true, days: 30 } });
     await ok('append_file', { path: 'b.md', content: 'with copy' });
     expect((await lastRow('append_file')).journal).toBeTruthy();
     expect(groups()).toBe(before + 1);

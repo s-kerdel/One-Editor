@@ -9,7 +9,7 @@
  * and lists no write tools whatever mcp.json says, main refuses Read-write, Settings shows it disabled.
  * The write code and its tests stay in place (tests pass `writes: true` explicitly). Flip to true to ship writes.
  */
-export const MCP_WRITES_ENABLED = false;
+export const MCP_WRITES_ENABLED = true;
 
 export const MCP_CHANNELS = {
   status: 'mcp:status',
@@ -20,6 +20,16 @@ export const MCP_CHANNELS = {
   activity: 'mcp:activity',
   /** Undo one MCP write (a history group id from an activity row). */
   revert: 'mcp:revert',
+  /** A folder's grant for code and config files (turning on asks in a native dialog). */
+  setAllowCode: 'mcp:setAllowCode',
+  /** Undo copies on / off and how long they are kept (turning off asks in a native dialog). */
+  setUndo: 'mcp:setUndo',
+  /** Tokens: create / regenerate / revoke (each asks in a native dialog); copy a client setup (main writes the
+   *  clipboard: the token never reaches the page). */
+  createToken: 'mcp:createToken',
+  regenerateToken: 'mcp:regenerateToken',
+  revokeToken: 'mcp:revokeToken',
+  copySetup: 'mcp:copySetup',
   /** main → renderer: a new McpStatus. */
   changed: 'mcp:changed',
 } as const;
@@ -40,40 +50,112 @@ export interface McpFolder {
   /** Absolute real path, native separators. */
   path: string;
   mode: McpMode;
+  /** Code and config files may be written too, not only notes (a grant: main asks first). */
+  allowCode?: boolean;
   added?: number;
+}
+
+/** Undo copies of MCP writes. Main-owned (mcp.json): turning them off is a widening, so it asks first. */
+export interface McpUndo {
+  on: boolean;
+  days: number;
+}
+
+// ---- access tokens (parsing here, pure; generating / hashing / matching in src/mcp/tokens.ts) ----------
+
+/** The client's config passes its token in this environment variable (never argv: process lists show argv). */
+export const TOKEN_ENV = 'ONE_MCP_TOKEN';
+/** `one_` + 43 base64url characters = 256 random bits. */
+export const TOKEN_RE = /^one_[A-Za-z0-9_-]{43}$/;
+export const MAX_TOKENS = 32;
+
+export interface TokenRecord {
+  id: string;
+  /** What the user called it ("LM Studio"). */
+  name: string;
+  /** SHA-256 of the raw token: all mcp.json keeps. */
+  sha256: string;
+  /** The first 4 characters after "one_" (shown in Settings, to tell tokens apart). */
+  hint: string;
+  created: number;
+  lastUsed?: number;
+}
+
+export function cleanTokenName(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
+  return s || null;
+}
+
+/** mcp.json `tokens` → valid records only (a broken entry is dropped: it matches nothing). */
+export function parseTokens(raw: unknown): TokenRecord[] {
+  const out: TokenRecord[] = [];
+  const ids = new Set<string>();
+  for (const t of Array.isArray(raw) ? raw : []) {
+    if (!t || typeof t !== 'object') continue;
+    const { id, name, sha256, hint, created, lastUsed } = t as Record<string, unknown>;
+    const n = cleanTokenName(name);
+    if (typeof id !== 'string' || !/^[a-f0-9]{8,32}$/.test(id) || ids.has(id) || !n || typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256)) continue;
+    ids.add(id);
+    out.push({
+      id,
+      name: n,
+      sha256,
+      hint: typeof hint === 'string' && /^[A-Za-z0-9_-]{0,4}$/.test(hint) ? hint : '',
+      created: typeof created === 'number' && Number.isFinite(created) ? created : 0,
+      ...(typeof lastUsed === 'number' && Number.isFinite(lastUsed) ? { lastUsed } : {}),
+    });
+    if (out.length >= MAX_TOKENS) break;
+  }
+  return out;
 }
 
 export interface McpConfig {
   version: 1;
   enabled: boolean;
   folders: McpFolder[];
+  /** Access tokens (hashes only). Every client needs one. */
+  tokens?: TokenRecord[];
+  /** Always set by parseMcpConfig; optional for hand-built configs (missing = on, 30 days). */
+  undo?: McpUndo;
 }
 
-export const EMPTY_MCP_CONFIG: McpConfig = { version: 1, enabled: false, folders: [] };
+export const UNDO_DAYS = { min: 1, max: 365, def: 30 } as const;
+export const EMPTY_MCP_CONFIG: McpConfig = { version: 1, enabled: false, folders: [], undo: { on: true, days: UNDO_DAYS.def } };
+/** Grants live in mcp.json (main, behind native dialogs). A page may set only the result limits under `mcp.`;
+ *  every other `mcp.*` key (mcp.allowCode, mcp.journal… of earlier builds) is refused (deny by default). */
+export const isMainOwnedKey = (k: string) => k.startsWith('mcp.') && k !== 'mcp.maxReadKB' && k !== 'mcp.maxResults';
 export const MAX_MCP_FOLDERS = 32;
 export const ALIAS_RE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 const ID_RE = /^[a-f0-9]{8,32}$/;
 
 /** mcp.json → config. Anything odd is dropped (a broken file = off, never "everything shared"). */
+export function parseUndo(raw: unknown): McpUndo {
+  const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const d = typeof o.days === 'number' && Number.isFinite(o.days) ? Math.round(o.days) : UNDO_DAYS.def;
+  // Only an explicit false switches undo off (a broken file keeps it on).
+  return { on: o.on !== false, days: Math.min(UNDO_DAYS.max, Math.max(UNDO_DAYS.min, d)) };
+}
+
 export function parseMcpConfig(raw: unknown): McpConfig {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...EMPTY_MCP_CONFIG, folders: [] };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...EMPTY_MCP_CONFIG, folders: [], undo: { on: true, days: UNDO_DAYS.def }, tokens: [] };
   const o = raw as Record<string, unknown>;
   const folders: McpFolder[] = [];
   const ids = new Set<string>();
   const aliases = new Set<string>();
   for (const f of Array.isArray(o.folders) ? o.folders : []) {
     if (!f || typeof f !== 'object') continue;
-    const { id, alias, path, mode, added } = f as Record<string, unknown>;
+    const { id, alias, path, mode, added, allowCode } = f as Record<string, unknown>;
     if (typeof id !== 'string' || !ID_RE.test(id) || ids.has(id)) continue;
     if (typeof alias !== 'string' || !ALIAS_RE.test(alias) || aliases.has(alias)) continue;
     if (typeof path !== 'string' || !path || path.length > 4096 || /[\u0000-\u001f]/.test(path)) continue;
     ids.add(id);
     aliases.add(alias);
     // Only the exact word grants writes: a typo or a hand edit means read-only.
-    folders.push({ id, alias, path, mode: mode === 'write' ? 'write' : 'read', ...(typeof added === 'number' && Number.isFinite(added) ? { added } : {}) });
+    folders.push({ id, alias, path, mode: mode === 'write' ? 'write' : 'read', ...(allowCode === true ? { allowCode: true } : {}), ...(typeof added === 'number' && Number.isFinite(added) ? { added } : {}) });
     if (folders.length >= MAX_MCP_FOLDERS) break;
   }
-  return { version: 1, enabled: o.enabled === true, folders };
+  return { version: 1, enabled: o.enabled === true, folders, undo: parseUndo(o.undo), tokens: parseTokens(o.tokens) };
 }
 
 /** A folder's name → an alias ("My Notes" → "my-notes"), made unique against `taken`. */
@@ -100,19 +182,11 @@ export const MCP_LIMIT_KEYS = { readKB: 'mcp.maxReadKB', results: 'mcp.maxResult
 export const MCP_LIMIT_DEFAULTS = { readKB: 16, results: 25 } as const;
 export const MCP_LIMIT_RANGES = { readKB: { min: 4, max: 256 }, results: { min: 5, max: 200 } } as const;
 
-/** Undo copies of MCP writes (settings.json; off = no new copies, existing ones age out). */
-export const MCP_JOURNAL_KEYS = { on: 'mcp.journal', days: 'mcp.journalDays' } as const;
-export const MCP_JOURNAL_DEFAULTS = { on: true, days: 30 } as const;
-export const MCP_JOURNAL_DAYS = { min: 1, max: 365 } as const;
 /** A history group id (one per write call): base-36 time + random hex. */
 export const JOURNAL_GROUP_RE = /^[a-z0-9]{6,12}-[a-f0-9]{8}$/;
 
-export function journalFromSettings(s: Record<string, unknown>): { on: boolean; maxAgeMs: number } {
-  return { on: s[MCP_JOURNAL_KEYS.on] !== false, maxAgeMs: clampInt(s[MCP_JOURNAL_KEYS.days], MCP_JOURNAL_DEFAULTS.days, MCP_JOURNAL_DAYS) * 24 * 3600_000 };
-}
-
 export interface McpLimits {
-  /** Characters of file text per read_file / read_section call (and the size budget of any answer). */
+  /** Characters of file text per read_file call (and the size budget of any answer). */
   readChars: number;
   /** Rows per call (files, hits, headings, tags, links): the default and the maximum of `limit`. */
   results: number;
@@ -147,11 +221,16 @@ export interface McpStatus {
   platform: string;
   /** MCP_WRITES_ENABLED of this build (false: Read-write is not offered yet). */
   writes: boolean;
+  undo: McpUndo;
+  /** Tokens as the page may see them: never the token, never its hash. */
+  tokens: Array<{ id: string; name: string; hint: string; created: number; lastUsed: number | null; copyable: boolean }>;
+  /** keyring = "Copy setup" works again later; once = no OS keyring: the setup is copied when the token is made. */
+  tokenStore: 'keyring' | 'once';
 }
 
 export type McpReply<T> = { ok: true; result: T } | { ok: false; error: { code: string; message: string } };
 
-export const NO_MCP_STATUS: McpStatus = { enabled: false, folders: [], launch: null, platform: '', writes: MCP_WRITES_ENABLED };
+export const NO_MCP_STATUS: McpStatus = { enabled: false, folders: [], launch: null, platform: '', writes: MCP_WRITES_ENABLED, undo: { on: true, days: UNDO_DAYS.def }, tokens: [], tokenStore: 'once' };
 
 // ---- activity (mcp-audit.jsonl) -------------------------------------------------------------------
 
@@ -170,6 +249,8 @@ export interface McpActivity {
   journal?: string | null;
   /** Filled in by main: that change was reverted. */
   reverted?: boolean;
+  /** The access token the call came with (its id; "last used" in Settings). */
+  token?: string | null;
 }
 
 const short = (v: unknown, max: number): string | null => (typeof v === 'string' && v ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max) : null);
@@ -199,6 +280,7 @@ export function parseActivityLine(line: string): McpActivity | null {
     ms: num(r.ms),
     bytes: num(r.bytes),
     journal: typeof r.journal === 'string' && JOURNAL_GROUP_RE.test(r.journal) ? r.journal : null,
+    token: typeof r.token === 'string' && /^[a-f0-9]{8,32}$/.test(r.token) ? r.token : null,
   };
 }
 

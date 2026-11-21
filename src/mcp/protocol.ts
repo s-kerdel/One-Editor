@@ -74,6 +74,8 @@ export interface ToolDef {
   annotations: ToolAnnotations;
   /** Changes files: listed and callable only while the caller may write somewhere (see ServerHooks.tools). */
   write?: boolean;
+  /** Added to an "Unknown parameter" error (e.g. search: filters go inside the query). Never listed. */
+  argHint?: string;
   run(args: Record<string, unknown>, ctx: CallContext): Promise<ToolResult>;
 }
 
@@ -120,6 +122,8 @@ export interface ServerHooks {
   instructions: string;
   /** The tools this caller may use right now (write tools only where it may write), in a stable order. */
   tools(): ToolDef[];
+  /** Parameters still accepted but left out of tools/list right now (`folder` while one folder is shared). */
+  hiddenParams?(): readonly string[];
   resources?: ResourceProvider;
   onCall?(r: CallRecord): void;
 }
@@ -232,8 +236,10 @@ export class McpProtocol {
         return done({});
       case 'server/discover':
         return { resultType: 'complete', supportedVersions: SUPPORTED_VERSIONS, capabilities: this.capabilities('modern'), instructions: this.hooks.instructions, ttlMs: LIST_TTL_MS, cacheScope: 'private', _meta: { [META.serverInfo]: this.hooks.info } };
-      case 'tools/list':
-        return done({ tools: this.hooks.tools().map(describeTool) }, true);
+      case 'tools/list': {
+        const hidden = new Set(this.hooks.hiddenParams?.() ?? []);
+        return done({ tools: this.hooks.tools().map((t) => describeTool(t, era.version, hidden)) }, true);
+      }
       case 'tools/call':
         return done({ ...(await this.slot(() => this.call(params, era.client))) });
       case 'resources/list':
@@ -286,12 +292,17 @@ export class McpProtocol {
     let args: Record<string, unknown> = {};
     try {
       if (!isObj(raw)) throw new ToolError('EINVAL', 'arguments must be an object');
-      args = checkArgs(tool.inputSchema, raw);
+      try {
+        args = checkArgs(tool.inputSchema, raw);
+      } catch (err) {
+        if (tool.argHint && err instanceof ToolError && err.message.startsWith('Unknown parameter')) throw new ToolError(err.code, `${err.message} ${tool.argHint}`);
+        throw err;
+      }
       result = await tool.run(args, { client });
     } catch (err) {
       code = err instanceof ToolError ? err.code : 'EIO';
-      // Never a raw exception message: Node's fs errors carry absolute host paths.
-      result = { content: [{ type: 'text', text: err instanceof ToolError ? `${err.code}: ${err.message}` : 'EIO: The tool failed unexpectedly.' }], isError: true };
+      // Never a raw exception message: Node's fs errors carry absolute host paths. One line: `CODE: message`.
+      result = { content: [{ type: 'text', text: err instanceof ToolError ? `${err.code}: ${err.message.replace(/\s*[\r\n]+\s*/g, ' ')}` : 'EIO: The tool failed unexpectedly.' }], isError: true };
       if (!(err instanceof ToolError)) console.error('[mcp] tool failed', name, err);
     }
     const { journal, ...clean } = result;
@@ -301,8 +312,22 @@ export class McpProtocol {
   }
 }
 
-function describeTool(t: ToolDef) {
-  return { name: t.name, title: t.title, description: t.description, inputSchema: t.inputSchema, annotations: { title: t.title, ...t.annotations } };
+/**
+ * What tools/list sends: the definition minus what costs the model tokens on every turn and tells it
+ * nothing — `maxLength` (still enforced by checkArgs) and parameters hidden right now (still accepted).
+ * The title goes in annotations only for clients older than 2025-06-18 (no top-level `title` there).
+ */
+export function describeTool(t: ToolDef, version: string = LEGACY_VERSIONS[0], hidden: ReadonlySet<string> = new Set()) {
+  const properties: Record<string, Omit<PropSchema, 'maxLength'>> = {};
+  for (const [k, p] of Object.entries(t.inputSchema.properties)) {
+    if (hidden.has(k)) continue;
+    const { maxLength: _enforcedOnly, ...shown } = p;
+    properties[k] = shown;
+  }
+  const required = t.inputSchema.required?.filter((k) => !hidden.has(k));
+  const inputSchema = { type: 'object', properties, ...(required?.length ? { required } : {}), additionalProperties: false };
+  const annotations = version < '2025-06-18' ? { title: t.title, ...t.annotations } : t.annotations;
+  return { name: t.name, title: t.title, description: t.description, inputSchema, annotations };
 }
 
 const validId = (id: unknown): Id | null => (typeof id === 'string' || (typeof id === 'number' && Number.isFinite(id)) ? id : null);

@@ -13,6 +13,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { MCP_WRITES_ENABLED } from '../../src/shared/mcp';
+import { TOKEN_ENV, generateToken, hashToken, tokenHint } from '../../src/mcp/tokens';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '../..');
@@ -33,7 +34,7 @@ interface Rig {
   dir: string;
   ws: string;
   config: string;
-  writeConfig(c: unknown): void;
+  writeConfig(c: Record<string, unknown>): void;
   env: Record<string, string>;
 }
 
@@ -54,11 +55,14 @@ async function rig(o: { enabled?: boolean; mode?: 'read' | 'write'; settings?: R
   await fsp.writeFile(path.join(dir, 'outside/out.md'), 'HIDDENWORD outside');
   await fsp.symlink(path.join(dir, 'outside/out.md'), path.join(ws, 'notes/escape.md'));
   await fsp.writeFile(path.join(ws, 'notes/long.md'), Array.from({ length: 2000 }, (_, i) => `row ${i + 1}`).join('\n'));
-  const writeConfig = (c: unknown) => fs.writeFileSync(path.join(config, 'mcp.json'), JSON.stringify(c));
+  // Every client needs an access token: mcp.json keeps its hash, the client's env the token itself.
+  const token = generateToken();
+  const tokens = [{ id: 'c0ffee01', name: 'e2e-client', sha256: hashToken(token), hint: tokenHint(token), created: Date.now() }];
+  const writeConfig = (c: Record<string, unknown>) => fs.writeFileSync(path.join(config, 'mcp.json'), JSON.stringify({ tokens, ...c }));
   writeConfig({ version: 1, enabled: o.enabled ?? true, folders: [{ id: 'a1b2c3d4', alias: 'fixture', path: ws, mode: o.mode ?? 'read' }] });
   fs.writeFileSync(path.join(config, 'settings.json'), JSON.stringify({ 'mcp.maxReadKB': 4, ...o.settings }));
   // HOME and XDG_DATA_HOME inside the run folder: a delete's trash can never reach the real home.
-  return { dir, ws, config, writeConfig, env: { SEC_EDIT_CONFIG_DIR: config, SEC_EDIT_MCP_POLL_MS: '150', TMPDIR: path.join(dir, 'tmp'), HOME: dir, XDG_DATA_HOME: path.join(dir, 'xdg'), ...o.env } };
+  return { dir, ws, config, writeConfig, env: { SEC_EDIT_CONFIG_DIR: config, SEC_EDIT_MCP_POLL_MS: '150', TMPDIR: path.join(dir, 'tmp'), HOME: dir, XDG_DATA_HOME: path.join(dir, 'xdg'), [TOKEN_ENV]: token, ...o.env } };
 }
 
 async function connect(r: Rig, args: string[] = []) {
@@ -71,6 +75,10 @@ async function connect(r: Rig, args: string[] = []) {
 
 const text = (r: any, i = 0): string => r.content[i].text;
 const json = (r: any) => JSON.parse(text(r));
+/** Plain-text answers: a summary line, then rows (or the raw file text). */
+const head = (r: any) => text(r).split('\n')[0];
+const rows = (r: any) => text(r).split('\n').slice(1);
+const indexOf = (r: any) => /index (.+)$/.exec(rows(r)[0])![1];
 
 test.afterAll(async () => {
   await fsp.rm(BASE, { recursive: true, force: true }).catch(() => {});
@@ -81,27 +89,30 @@ test('every tool answers over stdio; hidden files stay hidden', async () => {
   const { client } = await connect(r);
   try {
     expect(client.getServerVersion()?.name).toBe('one');
-    expect(client.getInstructions()).toContain('search_text');
+    expect(client.getInstructions()).toContain('get_outline');
     const tools = (await client.listTools()).tools;
-    expect(tools.map((t) => t.name)).toEqual(['list_folders', 'list_files', 'read_file', 'read_section', 'get_outline', 'search_text', 'search_files', 'search_headings', 'list_tags', 'get_links', 'get_related']);
-    // Read-only folder: no write tools, and every tool says it only reads.
+    expect(tools.map((t) => t.name)).toEqual(['list_folders', 'list_files', 'read_file', 'get_outline', 'search', 'list_tags', 'get_links']);
+    // Read-only folder: no write tools, and every tool says it only reads. One folder: no `folder` parameter.
     for (const t of tools) {
       expect(t.annotations?.readOnlyHint, t.name).toBe(true);
       expect(t.inputSchema.additionalProperties).toBe(false);
+      expect(Object.keys(t.inputSchema.properties ?? {}), t.name).not.toContain('folder');
     }
     const call = (name: string, args: Record<string, unknown> = {}) => client.callTool({ name, arguments: args });
 
-    expect(json(await call('list_folders')).folders).toEqual([{ folder: 'fixture', name: 'workspace', mode: 'read-only', index: 'not built' }]);
+    expect(text(await call('list_folders'))).toBe('1 folder\nfixture (workspace) · read-only · index not built');
 
-    const top = json(await call('list_files', { depth: 2 }));
-    expect(top.entries).toContain('notes/kubernetes.md');
-    for (const p of ['.secret/', 'id_rsa', 'node_modules/', 'notes/escape.md']) expect(top.entries).not.toContain(p);
+    const top = rows(await call('list_files', { depth: 2 }));
+    expect(top).toContain('notes/kubernetes.md');
+    for (const p of ['.secret/', 'id_rsa', 'node_modules/', 'notes/escape.md']) expect(top).not.toContain(p);
 
-    const page = await call('read_file', { path: 'notes/long.md', max_lines: 50 });
-    expect(json(page)).toMatchObject({ path: 'notes/long.md', lines: '1-50', total_lines: 2000, next_offset_line: 51, truncated: true });
-    expect(text(page, 1).split('\n')).toHaveLength(50);
-    const crlf = json(await call('read_file', { path: 'notes/windows-crlf.md' }));
-    expect(crlf.eol).toBe('crlf');
+    const page: any = await call('read_file', { path: 'notes/long.md', max_lines: 50 });
+    expect(page.content).toHaveLength(1);
+    expect(head(page)).toMatch(/^notes\/long\.md · etag [\d.]+-\d+ · lines 1-50 of 2000 · more: offset_line=51$/);
+    expect(rows(page)).toHaveLength(50);
+    const etag = /etag (\S+)/.exec(head(page))![1];
+    expect(text(await call('read_file', { path: 'notes/long.md', if_none_match: etag }))).toBe(`notes/long.md · etag ${etag} · unchanged`);
+    expect(head(await call('read_file', { path: 'notes/windows-crlf.md' }))).toContain(' · crlf · ');
 
     for (const p of ['.secret/plan.md', 'id_rsa', 'node_modules/x.md', 'notes/escape.md', '../outside/out.md', 'nope.md']) {
       const res: any = await call('read_file', { path: p });
@@ -109,38 +120,42 @@ test('every tool answers over stdio; hidden files stay hidden', async () => {
       expect(text(res)).not.toContain(r.dir);
     }
 
-    const sec = await call('read_section', { path: 'README.md', heading: 'Commands' });
-    expect(text(sec, 1)).toContain('git push --force-with-lease');
-    const fm = json(await call('read_section', { path: 'notes/Daily notes.md', frontmatter_key: 'tags' }));
-    expect(fm.value).toEqual(['journal', 'daily']);
+    const sec = await call('read_file', { path: 'README.md', heading: 'Commands' });
+    expect(head(sec)).toMatch(/· heading "Commands" · lines \d+-\d+ of \d+$/);
+    expect(text(sec)).toContain('git push --force-with-lease');
+    const fm = await call('read_file', { path: 'notes/Daily notes.md', frontmatter_key: 'tags' });
+    expect(head(fm)).toContain('· frontmatter tags · ');
+    expect(rows(fm).join('\n')).toMatch(/^tags:.*journal[\s\S]*daily/);
 
-    const outline = json(await call('get_outline', { path: 'README.md' }));
-    expect(outline.headings.map((h: any) => h.text)).toEqual(['Welcome', 'Commands']);
-    const code = json(await call('get_outline', { path: 'code/app.ts' }));
-    expect(code.symbols.length).toBeGreaterThan(0);
+    const outline = rows(await call('get_outline', { path: 'README.md' }));
+    expect(outline.map((h) => h.replace(/^\d+-\d+ #+ /, ''))).toEqual(['Welcome', 'Commands']);
+    const code = await call('get_outline', { path: 'code/app.ts' });
+    expect(rows(code).length).toBeGreaterThan(0);
+    for (const s of rows(code)) expect(s).toMatch(/^\d+ \S+ \S+/);
 
-    const hits = json(await call('search_text', { query: 'needle haystack' }));
-    expect(hits.results.map((x: any) => x.path)).toEqual(['deep/nested/folder/Deep note.md']);
-    expect(json(await call('search_text', { query: 'HIDDENWORD' })).results).toEqual([]);
-    expect(json(await call('search_text', { query: 'kubectl path:notes/' })).results[0].path).toBe('notes/kubernetes.md');
+    const hits = await call('search', { query: 'needle haystack' });
+    expect(rows(hits).filter((x) => !x.startsWith('  '))).toEqual(['deep/nested/folder/Deep note.md (2 matches)']); // 2 hits, 1 line
+    expect(rows(hits)[1]).toBe('  3: Mentions [[kubernetes]] and the phrase "needle in a haystack".');
+    expect(text(await call('search', { query: 'HIDDENWORD' }))).toMatch(/^No matches/);
+    expect(rows(await call('search', { query: 'kubectl path:notes/' }))[0]).toMatch(/^notes\/kubernetes\.md/);
+    expect(rows(await call('search', { query: 'kubectl', mode: 'files' }))[0]).toMatch(/^notes\/kubernetes\.md \(\d+\)$/);
 
-    expect(json(await call('search_files', { query: 'kube' })).results[0]).toBe('notes/kubernetes.md');
-    expect(json(await call('search_headings', { query: 'cheatsheet' })).results[0]).toMatchObject({ path: 'notes/kubernetes.md', heading: 'Kubernetes cheatsheet' });
+    expect(rows(await call('search', { query: 'kube', mode: 'names' }))[0]).toBe('notes/kubernetes.md');
+    expect(rows(await call('search', { query: 'cheatsheet', mode: 'headings' }))[0]).toBe('notes/kubernetes.md:1 # Kubernetes cheatsheet');
 
-    const tags = json(await call('list_tags'));
-    expect(tags.tags.map((t: any) => t.tag)).toEqual(expect.arrayContaining(['tag', 'tag/project', 'idea', 'journal', 'daily']));
-    expect(json(await call('list_tags', { tag: 'journal' })).notes).toEqual(['notes/Daily notes.md']);
+    const tags = rows(await call('list_tags')).map((t) => t.replace(/^#| \(\d+\)$/g, ''));
+    expect(tags).toEqual(expect.arrayContaining(['tag', 'tag/project', 'idea', 'journal', 'daily']));
+    expect(rows(await call('search', { query: 'tag:journal', mode: 'files' })).map((x) => x.replace(/ \(\d+\)$/, ''))).toEqual(['notes/Daily notes.md']);
 
-    const links = json(await call('get_links', { path: 'README.md' }));
-    expect(links.outgoing.find((l: any) => l.target === 'Daily notes').path).toBe('notes/Daily notes.md');
-    expect(links.backlinks.map((b: any) => b.from)).toEqual(['notes/Daily notes.md']);
+    const links = rows(await call('get_links', { path: 'README.md' }));
+    expect(links).toContain('  5: Daily notes → notes/Daily notes.md');
+    expect(links.filter((b) => b.startsWith('  notes/')).map((b) => b.trim().split(':')[0])).toEqual(['notes/Daily notes.md']);
 
-    const rel = json(await call('get_related', { path: 'README.md' }));
-    expect(rel.neighbours.map((n: any) => n.path)).toEqual(['notes/Daily notes.md']);
+    expect(head(await call('get_links', { path: 'README.md', show: 'related' }))).toMatch(/^README\.md · \d+ related notes? · \d+ notes two links away$/);
 
     // A note written outside: its backlink is there on the next call (watcher → index).
     await fsp.writeFile(path.join(r.ws, 'notes/new.md'), '# New\n\nPoints at [[README]].\n');
-    await expect.poll(async () => json(await call('get_links', { path: 'README.md', direction: 'backlinks' })).backlinks.map((b: any) => b.from), { timeout: 10_000 }).toContain('notes/new.md');
+    await expect.poll(async () => rows(await call('get_links', { path: 'README.md', show: 'backlinks' })).map((b) => b.trim().split(':')[0]), { timeout: 10_000 }).toContain('notes/new.md');
 
     // Resources: one://<folder>/<path>
     const res = await client.listResources();
@@ -183,7 +198,7 @@ test('switching off in One ends a running server; removing a folder updates the 
   client.setNotificationHandler(ToolListChangedNotificationSchema, async () => void changed++);
   let closed = false;
   transport.onclose = () => void (closed = true);
-  expect(json(await client.callTool({ name: 'list_folders', arguments: {} })).folders).toHaveLength(2);
+  expect(head(await client.callTool({ name: 'list_folders', arguments: {} }))).toBe('2 folders');
   r.writeConfig({ version: 1, enabled: true, folders: [{ id: 'a1b2c3d4', alias: 'fixture', path: r.ws, mode: 'read' }] });
   await expect.poll(() => changed, { timeout: 5000 }).toBeGreaterThan(0);
   const gone: any = await client.callTool({ name: 'list_files', arguments: { folder: 'second' } });
@@ -197,7 +212,7 @@ test('--folder narrows to one folder, --read-only keeps a read-write folder read
   const r = await rig({ mode: 'write' });
   const { client } = await connect(r, ['--folder', 'fixture', '--read-only']);
   try {
-    expect(json(await client.callTool({ name: 'list_folders', arguments: {} })).folders[0].mode).toBe('read-only');
+    expect(rows(await client.callTool({ name: 'list_folders', arguments: {} }))[0]).toContain(' · read-only · ');
   } finally {
     await client.close();
   }
@@ -209,11 +224,11 @@ test('the index is freed when the folder has been idle', async () => {
   const r = await rig({ env: { SEC_EDIT_MCP_IDLE_MS: '1200' } });
   const { client } = await connect(r);
   try {
-    await client.callTool({ name: 'search_text', arguments: { query: 'kubectl' } });
-    expect(json(await client.callTool({ name: 'list_folders', arguments: {} })).folders[0].index).toMatch(/^ready/);
-    await expect.poll(async () => json(await client.callTool({ name: 'list_folders', arguments: {} })).folders[0].index, { timeout: 6000 }).toBe('not built');
+    await client.callTool({ name: 'search', arguments: { query: 'kubectl' } });
+    expect(indexOf(await client.callTool({ name: 'list_folders', arguments: {} }))).toMatch(/^ready/);
+    await expect.poll(async () => indexOf(await client.callTool({ name: 'list_folders', arguments: {} })), { timeout: 6000 }).toBe('not built');
     // …and comes back on the next search.
-    expect(json(await client.callTool({ name: 'search_text', arguments: { query: 'kubectl' } })).results.length).toBeGreaterThan(0);
+    expect(rows(await client.callTool({ name: 'search', arguments: { query: 'kubectl' } })).length).toBeGreaterThan(0);
   } finally {
     await client.close();
   }
@@ -227,7 +242,7 @@ test('stdout carries JSON-RPC only, in both protocol eras', async () => {
   const send = (m: unknown) => child.stdin.write(`${typeof m === 'string' ? m : JSON.stringify(m)}\n`);
   const modern = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientInfo': { name: 'raw', version: '1' } };
   send({ jsonrpc: '2.0', id: 1, method: 'server/discover', params: { _meta: modern } });
-  send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { _meta: modern, name: 'search_text', arguments: { query: 'kubectl' } } });
+  send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { _meta: modern, name: 'search', arguments: { query: 'kubectl' } } });
   send({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '1999-01-01' } } });
   send('this is not json');
   send({ jsonrpc: '2.0', id: 4, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'raw' } } });
@@ -242,7 +257,7 @@ test('stdout carries JSON-RPC only, in both protocol eras', async () => {
   const by = new Map(msgs.map((m) => [m.id, m]));
   expect(by.get(1).result.supportedVersions).toContain('2026-07-28');
   expect(by.get(2).result.resultType).toBe('complete');
-  expect(JSON.parse(by.get(2).result.content[0].text).results[0].path).toBe('notes/kubernetes.md');
+  expect(by.get(2).result.content[0].text.split('\n')[1]).toMatch(/^notes\/kubernetes\.md/);
   expect(by.get(3).error.code).toBe(-32022);
   expect(by.get(null).error.code).toBe(-32700);
   expect(by.get(4).result.protocolVersion).toBe('2025-03-26');
@@ -257,7 +272,7 @@ test('this build: a read-write folder in mcp.json is still served read-only (MCP
   try {
     const tools = (await client.listTools()).tools;
     expect(tools.some((t) => t.annotations?.readOnlyHint === false)).toBe(false);
-    expect(json(await client.callTool({ name: 'list_folders', arguments: {} })).folders[0].mode).toBe('read-only');
+    expect(rows(await client.callTool({ name: 'list_folders', arguments: {} }))[0]).toContain(' · read-only · ');
     await expect(client.callTool({ name: 'write_file', arguments: { path: 'x.md', content: 'x' } })).rejects.toThrow(/Unknown tool/);
     expect(fs.existsSync(path.join(r.ws, 'x.md'))).toBe(false);
   } finally {
@@ -275,16 +290,16 @@ test('read-write folder: write tools edit, move and delete (to the trash inside 
     const call = async (name: string, args: Record<string, unknown>) => {
       const res: any = await client.callTool({ name, arguments: args });
       expect(res.isError, `${name}: ${text(res)}`).toBeFalsy();
-      return json(res);
+      return text(res); // one plain line: what changed · etag · undo id
     };
-    const meta = json(await client.callTool({ name: 'read_file', arguments: { path: 'notes/windows-crlf.md' } }));
-    await call('write_file', { path: 'notes/windows-crlf.md', content: '# Replaced\n\nby the AI\n', if_match: meta.etag });
+    const meta = { etag: /etag (\S+)/.exec(text(await client.callTool({ name: 'read_file', arguments: { path: 'notes/windows-crlf.md' } })))![1] };
+    expect(await call('write_file', { path: 'notes/windows-crlf.md', content: '# Replaced\n\nby the AI\n', if_match: meta.etag })).toMatch(/^Saved notes\/windows-crlf\.md · etag \d+(\.\d+)?-\d+ · undo: [a-f0-9]{8}$/);
     expect(fs.readFileSync(path.join(r.ws, 'notes/windows-crlf.md'), 'utf8')).toBe('# Replaced\r\n\r\nby the AI\r\n');
     await call('patch_file', { path: 'README.md', heading: 'Commands', operation: 'append', content: 'echo added' });
     expect(fs.readFileSync(path.join(r.ws, 'README.md'), 'utf8')).toContain('#tag/project #idea\necho added'); // the section's last line
     await call('replace_text', { path: 'notes/kubernetes.md', old: 'Get pods in all namespaces:', new: 'All pods:' });
     const moved = await call('move_file', { from: 'notes/Daily notes.md', to: 'journal/Daily notes.md' });
-    expect(moved.to).toBe('journal/Daily notes.md');
+    expect(moved).toMatch(/^Moved notes\/Daily notes\.md → journal\/Daily notes\.md · etag \S+/);
     await call('create_folder', { path: 'archive' });
     const name = 'notes/kubernetes.md';
     await call('delete_file', { path: name });

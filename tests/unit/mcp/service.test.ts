@@ -6,7 +6,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { McpService, folderProblem, mcpLaunch, registerMcpIpc, type McpDeps } from '../../../src/main/mcp';
-import { MCP_CHANNELS, MCP_WRITES_ENABLED } from '../../../src/shared/mcp';
+import { MCP_CHANNELS, MCP_WRITES_ENABLED, TOKEN_ENV } from '../../../src/shared/mcp';
+import { hashToken, matchToken } from '../../../src/mcp/tokens';
 import { OneMcpServer } from '../../../src/mcp/server';
 import { DEFAULT_SETTINGS } from '../../../src/shared/api';
 
@@ -21,9 +22,10 @@ function setup(o: Partial<McpDeps> = {}) {
   const notes = path.join(home, 'notes');
   fs.mkdirSync(configDir, { recursive: true });
   fs.mkdirSync(notes, { recursive: true });
-  const answers = { enable: true, write: true, pick: notes as string | null };
+  const answers = { enable: true, write: true, pick: notes as string | null, code: true, undoOff: true, token: true, keyring: true, copy: true };
   const changes: unknown[] = [];
   const asked: string[] = [];
+  const clip: string[] = [];
   let id = 0;
   const svc = new McpService({
     configDir,
@@ -37,10 +39,19 @@ function setup(o: Partial<McpDeps> = {}) {
     isDirectory: (p) => fsp.stat(p).then((s) => s.isDirectory(), () => false),
     randomId: () => (++id).toString(16).padStart(16, '0'),
     onChange: (s) => changes.push(s),
+    confirmAllowCode: async () => (asked.push('code'), answers.code),
+    confirmUndoOff: async () => (asked.push('undoOff'), answers.undoOff),
+    confirmToken: async (q) => (asked.push(`token:${q.kind}`), answers.token),
+    // A stand-in keyring: reversible, but never the plain token on disk.
+    tokenCrypto: { available: () => answers.keyring, encrypt: (x) => Buffer.from(`enc:${[...x].reverse().join('')}`), decrypt: (b) => [...b.toString().slice(4)].reverse().join('') },
+    writeClipboard: (x) => void clip.push(x),
+    readClipboard: () => clip.at(-1) ?? '',
+    confirmCopy: async () => (asked.push('copy'), answers.copy),
+    clipboardClearMs: 60_000,
     ...o,
   });
   const file = () => JSON.parse(fs.readFileSync(path.join(configDir, 'mcp.json'), 'utf8'));
-  return { svc, answers, changes, asked, file, configDir, home, notes, dir };
+  return { svc, answers, changes, asked, clip, file, configDir, home, notes, dir };
 }
 
 describe('McpService', () => {
@@ -53,7 +64,7 @@ describe('McpService', () => {
     t.answers.enable = true;
     expect((await t.svc.setEnabled(true)).enabled).toBe(true);
     expect(t.file().enabled).toBe(true);
-    expect(t.asked).toEqual(['enable', 'enable']);
+    expect(t.asked).toEqual(['enable', 'enable']); // the first token is made in the same confirmed step
     expect((await t.svc.setEnabled(false)).enabled).toBe(false);
     expect(t.asked).toHaveLength(2);
     await expect(t.svc.setEnabled('yes')).rejects.toMatchObject({ code: 'EINVAL' });
@@ -83,15 +94,13 @@ describe('McpService', () => {
     await expect(t.svc.addFolder()).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('this build ships read-only: Read-write is refused without a dialog (MCP_WRITES_ENABLED)', async () => {
-    const t = setup();
+  it('writes switched off (MCP_WRITES_ENABLED = false): Read-write is refused without a dialog', async () => {
+    expect((await setup().svc.status()).writes).toBe(MCP_WRITES_ENABLED);
+    const t = setup({ writesEnabled: false });
     const id = (await t.svc.addFolder()).folders[0].id;
-    expect((await t.svc.status()).writes).toBe(MCP_WRITES_ENABLED);
-    if (!MCP_WRITES_ENABLED) {
-      await expect(t.svc.setMode(id, 'write')).rejects.toMatchObject({ code: 'ENOTSUP' });
-      expect(t.asked.filter((a) => a === 'write')).toEqual([]);
-      expect(t.file().folders[0].mode).toBe('read');
-    }
+    await expect(t.svc.setMode(id, 'write')).rejects.toMatchObject({ code: 'ENOTSUP' });
+    expect(t.asked.filter((a) => a === 'write')).toEqual([]);
+    expect(t.file().folders[0].mode).toBe('read');
   });
 
   it('allowing writes asks first; back to read-only and removing do not', async () => {
@@ -136,6 +145,7 @@ describe('Revert (main)', () => {
     const row = (await t.svc.activity()).find((r) => r.tool === 'append_file')!;
     expect(row.journal).toBeTruthy();
     expect(row.reverted).toBe(false);
+    await t.svc.setMode(id, 'read'); // Revert is restorative: it works on a folder that is read-only again
     expect(await t.svc.revert(row.journal)).toEqual({ reverted: 1 });
     expect(fs.readFileSync(path.join(t.notes, 'n.md'), 'utf8')).toBe('old text\n');
     const rows = await t.svc.activity();
@@ -145,6 +155,121 @@ describe('Revert (main)', () => {
     await expect(t.svc.revert('../x')).rejects.toMatchObject({ code: 'EINVAL' });
     await t.svc.removeFolder(id);
     await expect(t.svc.revert(row.journal)).rejects.toMatchObject({ code: 'EACCES' });
+  });
+});
+
+describe('grants behind native dialogs (main-owned, mcp.json)', () => {
+  it('code files per folder: allowing asks, a "no" changes nothing, back to notes only does not ask', async () => {
+    const t = setup({ writesEnabled: true });
+    const id = (await t.svc.addFolder()).folders[0].id;
+    t.answers.code = false;
+    expect((await t.svc.setAllowCode(id, true)).folders[0].allowCode).toBeFalsy();
+    t.answers.code = true;
+    expect((await t.svc.setAllowCode(id, true)).folders[0].allowCode).toBe(true);
+    expect(t.file().folders[0].allowCode).toBe(true);
+    expect((await t.svc.setAllowCode(id, false)).folders[0].allowCode).toBeFalsy();
+    expect(t.asked.filter((a) => a === 'code')).toHaveLength(2);
+    await expect(t.svc.setAllowCode(id, 'yes')).rejects.toMatchObject({ code: 'EINVAL' });
+  });
+
+  it('undo copies: switching off asks; on and the age do not; days are clamped', async () => {
+    const t = setup();
+    t.answers.undoOff = false;
+    expect((await t.svc.setUndo({ on: false })).undo.on).toBe(true);
+    t.answers.undoOff = true;
+    expect((await t.svc.setUndo({ on: false })).undo.on).toBe(false);
+    expect((await t.svc.setUndo({ on: true, days: 9999 })).undo).toEqual({ on: true, days: 365 });
+    expect(t.file().undo).toEqual({ on: true, days: 365 });
+    expect(t.asked.filter((a) => a === 'undoOff')).toHaveLength(2);
+    await expect(t.svc.setUndo({ on: 'off' })).rejects.toMatchObject({ code: 'EINVAL' });
+  });
+});
+
+describe('access tokens (main)', () => {
+  const rawIn = (snippet: string) => /one_[A-Za-z0-9_-]{43}/.exec(snippet)?.[0];
+
+  it('turning on makes the first token; its setup goes to the clipboard; mcp.json and the page only see hashes / names', async () => {
+    const t = setup();
+    const st = await t.svc.setEnabled(true, 'codex');
+    expect(t.clip).toHaveLength(1);
+    const raw = rawIn(t.clip[0])!;
+    expect(t.clip[0]).toContain(`env = { ELECTRON_RUN_AS_NODE = '1', ${TOKEN_ENV} = '${raw}' }`); // Codex TOML env table, never argv
+    expect(t.clip[0]).toMatch(/^\[mcp_servers\.one\]/);
+    expect(st.tokens).toEqual([{ id: expect.any(String), name: 'First app', hint: raw.slice(4, 8), created: expect.any(Number), lastUsed: null, copyable: true }]);
+    const onDisk = fs.readFileSync(path.join(t.configDir, 'mcp.json'), 'utf8');
+    expect(onDisk).not.toContain(raw);
+    expect(t.file().tokens[0].sha256).toBe(hashToken(raw));
+    expect(fs.readFileSync(path.join(t.configDir, 'mcp-tokens.json'), 'utf8')).not.toContain(raw);
+    expect(JSON.stringify(st)).not.toContain(raw);
+    expect(JSON.stringify(st)).not.toContain(hashToken(raw));
+    expect(JSON.stringify(t.changes)).not.toContain(raw);
+    // Turning off and on again keeps the token (no new one, no clipboard write).
+    await t.svc.setEnabled(false);
+    await t.svc.setEnabled(true);
+    expect(t.clip).toHaveLength(1);
+  });
+
+  it('a token per app: create / copy again / regenerate / revoke, each asked first; a "no" changes nothing', async () => {
+    const t = setup();
+    await t.svc.setEnabled(true);
+    t.answers.token = false;
+    expect((await t.svc.createToken('Codex CLI', 'codex')).tokens).toHaveLength(1);
+    t.answers.token = true;
+    await expect(t.svc.createToken('   ', 'codex')).rejects.toMatchObject({ code: 'EINVAL' });
+    const st = await t.svc.createToken('Claude Code', 'claude-code');
+    const tok = st.tokens.find((x) => x.name === 'Claude Code')!;
+    const raw = rawIn(t.clip.at(-1)!)!;
+    expect(t.clip.at(-1)).toContain(`--env ${TOKEN_ENV}=`);
+    t.answers.copy = false; // copying again asks first ("Copy setup with the access token?")
+    const n = t.clip.length;
+    await expect(t.svc.copySetup(tok.id, 'lmstudio')).rejects.toMatchObject({ code: 'ECANCELED' });
+    expect(t.clip).toHaveLength(n);
+    t.answers.copy = true;
+    expect(await t.svc.copySetup(tok.id, 'lmstudio')).toEqual({ copied: true });
+    expect(JSON.parse(t.clip.at(-1)!).mcpServers.one.env[TOKEN_ENV]).toBe(raw);
+    const records = () => t.file().tokens;
+    expect(matchToken(raw, records())?.name).toBe('Claude Code');
+    await t.svc.regenerateToken(tok.id, 'lmstudio');
+    const raw2 = rawIn(t.clip.at(-1)!)!;
+    expect(raw2).not.toBe(raw);
+    expect(matchToken(raw, records())).toBeNull();
+    expect(matchToken(raw2, records())?.id).toBe(tok.id);
+    await t.svc.revokeToken(tok.id);
+    expect(matchToken(raw2, records())).toBeNull();
+    expect(records().map((x: any) => x.name)).toEqual(['First app']);
+    await expect(t.svc.copySetup(tok.id, 'lmstudio')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(t.asked.filter((a) => a.startsWith('token:'))).toEqual(['token:create', 'token:create', 'token:regenerate', 'token:revoke']);
+  });
+
+  it('the clipboard is cleared after the delay, unless something else was copied meanwhile', async () => {
+    const t = setup({ clipboardClearMs: 60 });
+    await t.svc.setEnabled(true);
+    expect(/one_/.test(t.clip.at(-1)!)).toBe(true);
+    await expect.poll(() => t.clip.at(-1), { timeout: 2000 }).toBe('');
+    const id = (await t.svc.status()).tokens[0].id;
+    await t.svc.copySetup(id, 'lmstudio');
+    t.clip.push('something the user copied');
+    await new Promise((r) => setTimeout(r, 150));
+    expect(t.clip.at(-1)).toBe('something the user copied');
+  });
+
+  it('no keyring (Linux without one): copied once when made, never stored raw; Copy setup says to regenerate', async () => {
+    const t = setup();
+    t.answers.keyring = false;
+    const st = await t.svc.setEnabled(true);
+    expect(st.tokenStore).toBe('once');
+    expect(st.tokens[0].copyable).toBe(false);
+    expect(rawIn(t.clip[0])).toBeTruthy();
+    await expect(t.svc.copySetup(st.tokens[0].id, 'lmstudio')).rejects.toMatchObject({ code: 'ENOKEY' });
+    expect(fs.existsSync(path.join(t.configDir, 'mcp-tokens.json')) ? fs.readFileSync(path.join(t.configDir, 'mcp-tokens.json'), 'utf8') : '').not.toContain('one_');
+  });
+
+  it('"last used" comes from the activity log (the server records the token id)', async () => {
+    const t = setup();
+    const id = (await t.svc.setEnabled(true)).tokens[0].id;
+    fs.writeFileSync(path.join(t.configDir, 'mcp-audit.jsonl'), `${JSON.stringify({ t: 5_000_000, client: 'First app', transport: 'stdio', tool: 'read_file', folder: 'notes', path: 'a.md', ok: true, code: null, ms: 1, bytes: 1, token: id })}\n`);
+    expect((await t.svc.activity())[0]).toMatchObject({ client: 'First app', token: id });
+    await expect.poll(async () => (await t.svc.status()).tokens[0].lastUsed).toBe(5_000_000);
   });
 });
 

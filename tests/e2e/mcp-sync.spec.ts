@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { test, expect } from './harness';
 import { MCP_WRITES_ENABLED } from '../../src/shared/mcp';
+import { TOKEN_ENV, generateToken, hashToken, tokenHint } from '../../src/mcp/tokens';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '../..');
@@ -30,15 +31,17 @@ test('an MCP write reloads a clean tab; with unsaved edits the conflict banner s
   test.skip(!MCP_WRITES_ENABLED, 'writes are switched off in this build (MCP_WRITES_ENABLED)');
   const config = path.join(path.dirname(ws.root), 'mcp-config');
   fs.mkdirSync(config, { recursive: true });
-  fs.writeFileSync(path.join(config, 'mcp.json'), JSON.stringify({ version: 1, enabled: true, folders: [{ id: 'a1b2c3d4', alias: 'ws', path: ws.root, mode: 'write' }] }));
+  const token = generateToken(); // every client needs one: mcp.json keeps the hash, the client's env the token
+  const tokens = [{ id: 'c0ffee02', name: 'sync-e2e', sha256: hashToken(token), hint: tokenHint(token), created: Date.now() }];
+  fs.writeFileSync(path.join(config, 'mcp.json'), JSON.stringify({ version: 1, enabled: true, folders: [{ id: 'a1b2c3d4', alias: 'ws', path: ws.root, mode: 'write' }], tokens }));
   const run = path.dirname(ws.root);
-  const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, '--stdio'], env: { PATH: process.env.PATH ?? '', HOME: run, XDG_DATA_HOME: path.join(run, 'xdg'), SEC_EDIT_CONFIG_DIR: config }, stderr: 'pipe' });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, '--stdio'], env: { PATH: process.env.PATH ?? '', HOME: run, XDG_DATA_HOME: path.join(run, 'xdg'), SEC_EDIT_CONFIG_DIR: config, [TOKEN_ENV]: token }, stderr: 'pipe' });
   const client = new Client({ name: 'sync-e2e', version: '1' });
   await client.connect(transport);
   const call = async (name: string, args: Record<string, unknown>) => {
     const r: any = await client.callTool({ name, arguments: args });
     expect(r.isError, r.content[0].text).toBeFalsy();
-    return JSON.parse(r.content[0].text);
+    return r.content[0].text as string; // plain text: a summary line (path · etag …), then the text
   };
   try {
     await ws.open(page);
@@ -48,7 +51,7 @@ test('an MCP write reloads a clean tab; with unsaved edits the conflict banner s
     await row(page, 'README').click();
     await expect(page.locator('.cm-content')).toContainText('Welcome');
 
-    const { etag } = await call('read_file', { path: 'README.md' });
+    const etag = /etag (\S+)/.exec(await call('read_file', { path: 'README.md' }))![1];
     await call('write_file', { path: 'README.md', content: '# Rewritten by the AI\n', if_match: etag });
     await expect(page.locator('.cm-content')).toContainText('Rewritten by the AI');
     await expect(page.locator('.se-banner')).toHaveCount(0);

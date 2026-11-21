@@ -1,6 +1,6 @@
 // Text edits behind the write tools. Pure: LF text in → LF text out (or a ToolError the model can act
 // on). Section ranges come from the knowledge document map (code fences and frontmatter never count as
-// headings or blocks), so a patch lands where read_section reads.
+// headings or blocks), so a patch lands where read_file (heading / block / frontmatter_key) reads.
 import { documentMap, findBlock, findSection, type DocumentMap } from '../knowledge/sections';
 import { parseFrontmatter } from '../knowledge/extract';
 import { ToolError } from './protocol';

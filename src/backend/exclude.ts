@@ -18,7 +18,7 @@ export interface ExcludeMatcher {
 }
 
 /** Our own temp files (atomic saves, case-only renames) must never surface anywhere. */
-export const OWN_TEMP = /^\.~.*\.sec-edit\.tmp$|\.sec-edit-rename-\d+$/;
+export const OWN_TEMP = /^\.~.*\.sec-edit\.(?:tmp|bak)$|\.sec-edit-rename-\d+$/;
 
 /** `*` / `?` wildcard match of one name (both already lower case). O(|p|·|s|) at worst, no recursion. */
 export function wildcard(p: string, s: string): boolean {

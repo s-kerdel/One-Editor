@@ -27,7 +27,7 @@ browser mode served by a local Node server. Both share one renderer.
 | `src/main/update-check*.ts`, `src/shared/update-check.ts`, `src/renderer/updates/`, `scripts/shipped-deps.mjs` ("Security updates": opt-in check for a newer Electron patch / end of support / known vulnerabilities in what the build ships, desktop only. Pure rules in `shared/update-check.ts`; requests, cache `<app data>/update-check.json` (findings + summary of what was checked) and the weekly rule in `main/update-check.ts`; `updates/slot.ts` is the status-bar slot, the rest (incl. `updates/summary.tsx`, the Settings summary) is the lazy `updates-ui` chunk loaded after the idle Popups chunk; Settings → Security updates. `build-node.mjs` writes `dist/main/shipped-deps.json` from the lockfile: names + versions of every non-dev package) | **shell** |
 | `src/renderer/whitespace/` (trailing whitespace: paste trim via CodeMirror's `clipboardInputFilter`, trim on save through format's `beforeSave` hook in `src/format/install.ts`, the `editor.trimWhitespace` command; editor chunk only) | **variables** |
 | `src/renderer/pdf/` (PDF viewer: lazy chunk `PdfView` on pdf.js's `PDFViewer`; `engine.ts` is the only place documents are opened — security options live there; `model.ts` pure helpers; pdf.js data assets copied by `vite.config.ts` → `pdfjs/`; the worker gets `PDF_WORKER_CSP` from `src/shared/pdf.ts` in `main.ts` / `server.ts`) | **pdf** |
-| `src/mcp/`, `src/main/mcp*.ts`, `src/shared/mcp.ts`, `src/renderer/mcp/`, `build/windows/One MCP.cmd`, `build/linux/one-mcp.sh` (MCP server: a separate Node program, `dist/mcp/cli.mjs`, that MCP clients — LM Studio, Codex CLI, Claude — start over **stdio** with the app's executable in Node mode; one lazy `Workspace` + on-demand search / link indexes per shared folder; main owns `<app data>/mcp.json`; Settings → MCP server is the lazy `mcp-ui` chunk, zero startup bytes. `src/knowledge/sections.ts` (document map for `read_section` / `get_outline`) stays **knowledge**'s) | **mcp** |
+| `src/mcp/`, `src/main/mcp*.ts`, `src/shared/mcp.ts`, `src/renderer/mcp/`, `build/windows/One MCP.cmd`, `build/linux/one-mcp.sh` (MCP server: a separate Node program, `dist/mcp/cli.mjs`, that MCP clients — LM Studio, Codex CLI, Claude — start over **stdio** with the app's executable in Node mode; one lazy `Workspace` + on-demand search / link indexes per shared folder; main owns `<app data>/mcp.json`; Settings → MCP server is the lazy `mcp-ui` chunk, zero startup bytes. `src/knowledge/sections.ts` (document map for `read_file` parts / `get_outline`) stays **knowledge**'s) | **mcp** |
 | `src/renderer/nav/`, `src/shared/nav.ts` (Go back / forward: `nav/install.ts` is the startup stub — two key bindings, mouse side buttons, ~0.4 kB gzip; `nav/impl.ts` = recorder + restore, lazy on idle; `nav/history.ts` = the pure stack) | **nav** |
 | `tests/unit/<area>/`, `tests/e2e/<area>*.spec.ts` | the area's owner |
 
@@ -189,6 +189,16 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   (`inWritable` in `tools/write.ts`); its targets come from `folder.resolveTarget()` and it changes the disk only
   through `src/mcp/writes.ts` (Workspace write path + `folder.guard()` + a journal entry + `folder.changed()` for the
   indexes); its `ToolResult.journal` (never sent to the client) becomes the activity row's Revert.
+  **Tokens are the budget** (main clients: small local models in LM Studio): tool definitions + `INSTRUCTIONS` ride along
+  on every turn, so descriptions stay short, say each thing once (syntax in the tool, workflow in the instructions,
+  per-call hints in the answer), and `tests/unit/mcp/budget.test.ts` pins their size — re-measure before raising it.
+  Answers are **plain text** through `tools/format.ts` (`line()` = parts joined by " · ", `reply()`, `withBody()`, `P.*`
+  shared params): one summary line (`path · etag … · lines 1-40 of 300 · more: offset_line=41`), then rows or the raw
+  file text; a hint only when something was cut; errors one line `CODE: message`. Never JSON (keys repeated per row,
+  escaped quotes). tools/list is a view (`describeTool`): `maxLength` is enforced by `checkArgs` but not advertised,
+  `ServerHooks.hiddenParams` drops `folder` while one folder is shared (still accepted), annotations carry the title
+  only for clients before 2025-06-18. Prefer a parameter or `mode` on an existing tool over a new tool; structured
+  copies of query filters (`path`, `ext`…) are deliberately not parameters (`argHint` points the model at the query).
   stdout is the protocol channel: `cli.ts` imports `stdout-guard.ts` first; never write to stdout anywhere else.
 - Browser state is per origin = per port: `cli.ts` remembers the last port per folder (`web-ports.json` in app data,
   `server/ports.ts`) and tries it first without `--port`; when it is busy, the ready handshake carries `busy` and the
@@ -267,9 +277,25 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
 - **Processes:** Windows system programs only by absolute path (`backend/winsys.ts` `winSystemExe`; a bare name is looked up in the current directory = the open folder, guarded by `tests/unit/backend/winsys.test.ts`). A path inside a cmd.exe command line goes through `cmdQuote` (`main/terminal-shells.ts`).
 - **Outbound requests: one feature, two hosts** (`main/update-check.ts`, "Security updates"). Two triggers, one boolean from the page (`check(manual)`, never a URL or host): **"Check now"** (`manual: true`) always goes — the user clicked, no confirm dialog; the **automatic** check (once after launch when visible, 7-day rule) needs the setting `updates.check` ("Check automatically every week", off by default), which main reads itself and refuses without. Accepted residual: a hijacked page could trigger a manual check; it sends only names + versions to the same two hosts, like any check. `UPDATE_HOSTS` = `endoflife.date` + `api.osv.dev`, checked in the service before every fetch (`isAllowedUpdateUrl`: https, exact host, default port) and again by `webRequest` on its own in-memory session (`update-check` partition: no cookies, no cache, `User-Agent: update-check`, redirects are errors). Sent: a GET with nothing, and names + versions from `shipped-deps.json` — never an id, a path, a setting. **Don't add a host**, a header or a field: every extra host learns the user's IP and what they run; a new source needs the user's decision first (ask the lead). No timer: the renderer asks once after launch when visible (main applies the 7-day rule) and on "Check now"; failures stay quiet (`lastError` in Settings). Advisory text is untrusted: rendered as text, links rebuilt from the id (`vulnUrl`) or built from the version (`releases.electronjs.org`); the summary (`UpdateStatus.summary`: Electron line, every package checked + its advisory count, timing, per-source error) is local only, cached in `update-check.json`, re-validated on read (`parseSummary`) and dropped when the build changes (`sameBuild`); its only links are the two fixed source pages (`EOL_PAGE`, `OSV_PAGE`). Tests never use the real hosts: `SEC_EDIT_TEST_UPDATE_API=http://127.0.0.1:<port>` (test builds only; dropped when packaged) points both services at a local stub.
 - **Inbound access for AI clients: one feature** (`src/mcp`, Settings → MCP server). Off by default. Main owns
-  `<app data>/mcp.json` (on/off, the folder allow-list, per-folder mode, read-only by default); every widening step is a
-  **native dialog** — turning on, sharing a folder (only through main's folder dialog: the page never passes a path),
-  allowing writes; narrowing needs none. Refused folders (`src/mcp/grant.ts` `folderProblem`): a drive root, the home
+  `<app data>/mcp.json` (on/off, the folder allow-list, per-folder mode and `allowCode`, `undo`, token hashes; read-only
+  by default); every widening step is a **native dialog** in main — turning on, sharing a folder (only through main's
+  folder dialog: the page never passes a path), allowing writes, code files in a folder, undo copies off, creating /
+  regenerating / revoking a token; narrowing needs none. Grants never live in settings.json: `BackendService.saveSettings`
+  drops every `mcp.*` key but the two result limits (`isMainOwnedKey`), and the server reads none from there.
+  **Residual:** `excludeGlobs` is still a page setting, so a page can narrow the exclusions without a dialog
+  (main-owned MCP excludes are a later item).
+  **Access tokens** (`src/mcp/tokens.ts`, parsing in `shared/mcp.ts`; transport-neutral, a future HTTPS transport takes
+  them as bearer tokens): `one_` + 43 base64url (256 random bits), one per client, named. At rest mcp.json keeps only
+  `{ id, name, sha256, hint (4 chars), created, lastUsed }`; main also keeps the raw token encrypted with `safeStorage`
+  (`mcp-tokens.json`, never `vault.json`, no `vault:*` key; no keyring → show-once). **The raw token never reaches the
+  page:** `mcp:copySetup` / create / regenerate / turning on make main write the finished snippet to the clipboard and
+  answer "copied" (copying again asks first, "Copy setup with the access token?"; any copy is cleared after 2 minutes if
+  the clipboard still holds it); `McpStatus.tokens` carries names, dates, the hint. Clients pass it in `env` (`ONE_MCP_TOKEN`),
+  **never argv** (every snippet; the CLI refuses any argument containing `one_` + 20 token characters, and no CLI message
+  repeats an argument). `cli.ts` hashes it at
+  startup, compares with `timingSafeEqual` against every stored hash, refuses (one stderr line, exit 1, no stdout) when
+  missing / unknown / revoked, drops it from `process.env`, exits when it is revoked while running; audit rows carry the
+  token's id and name, `lastUsed` is set by main from the activity log. Refused folders (`src/mcp/grant.ts` `folderProblem`): a drive root, the home
   folder itself, anything around the app data folder — checked by main when adding **and by the server for every
   mcp.json entry** (the file is not trusted). The server refuses to run while off or while settings.json exists but
   cannot be parsed (at run time it keeps the last good settings: exclusions never fail open), exits once switched off
@@ -290,29 +316,54 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
   `{{variables}}`; no git, terminal, settings writes, network (stdio only) or processes of its own (only the shared
   watcher's fixed `wsl.exe inotifywait` backend for `\\wsl.localhost` roots, and `backend/trash.ts`'s fixed Recycle Bin
   call for `delete_file`) — `tests/unit/mcp/isolation.test.ts` checks the esbuild metafile of `cli.ts`;
-  `tests/unit/mcp/paths.test.ts` and `review.test.ts` have a case per attack. Test hooks `SEC_EDIT_TEST_MCP_CONFIRM` /
+  `tests/unit/mcp/paths.test.ts`, `review*.test.ts` and `tokens.test.ts` have a case per attack. Test hooks `SEC_EDIT_TEST_MCP_CONFIRM` /
   `SEC_EDIT_TEST_MCP_FOLDER` exist in main only; the Node-mode server applies env-guard's scrub itself when it runs from
   `app.asar.unpacked` (`src/mcp/env-boot.ts`), so `SEC_EDIT_CONFIG_DIR`, `SEC_EDIT_TRASH_DIR` and the `SEC_EDIT_MCP_*`
   knobs work in dev and tests only.
-  **Writes ship switched off for now:** `MCP_WRITES_ENABLED` (`src/shared/mcp.ts`, the ONE switch) is `false`: the server
-  serves every folder read-only (as `--read-only`), main refuses Read-write (`ENOTSUP`), Settings shows it disabled. The
-  write code and its tests stay live (tests pass `writes: true` / `writesEnabled: true`; gate-dependent E2E skip or
-  assert the gate). Flipping it to `true` is the whole change that ships writes.
+  **One switch for writes:** `MCP_WRITES_ENABLED` (`src/shared/mcp.ts`, now `true`). `false` ships a read-only build:
+  the server serves every folder read-only (as `--read-only`), main refuses Read-write (`ENOTSUP`), Settings shows it
+  disabled; tests keep the write code covered (`writes: true` / `writesEnabled: true`) and one asserts the gate.
   **Writes** (read-write folders only; `--read-only` removes them; `Folder.checkWritable()` in the tool and again in the
   guard; a per-session quota, `WriteQuota`): every target through `Folder.resolveTarget()` (hidden / key / excluded
-  names → `EACCES` by the name alone; file types by `writeTypeProblem`: notes `.md .markdown .txt` only unless the user
-  turns on `mcp.allowCode`, Windows shell / script / shortcut types never; no part may be a link; the existing part spelled
+  names, links, hard links, spelling aliases → one neutral `EACCES: Cannot change <path>`, so exclusions cannot be
+  probed; file types by `writeTypeProblem`: notes `.md .markdown .txt` only unless the folder has `allowCode` (mcp.json),
+  `NEVER_EXTS` (shell / script / shortcut types incl. `.js` `.py`) never; no part may be a link; the existing part spelled
   exactly as asked), then the existing `Workspace` write path (atomic, EOL / BOM / encoding kept, Windows-1252 text it
   cannot hold refused) with `folder.guard()` as its `WriteGuard`: inside the path's exclusive slot right before the disk
   changes it re-checks that nothing on the path is a link (no write through one, no swapped-in link to `.git/hooks`),
   the spelling, the visibility, the precondition (etag = mtime + size; a whole-file overwrite needs `if_match`) and
-  captures the bytes being replaced. No write may add a `{{…}}` placeholder (it would pull a secret into a command the
-  user runs later: `checkPlaceholders`). Binary files are never written, moved or deleted; deletes go to the Recycle Bin
-  only (`ETRASH`, nothing deleted, when there is none); a folder move is refused if it holds anything hidden, excluded or
-  linked. **Journal** (`src/mcp/journal.ts`, `<app data>/mcp-history/<group>/`, settings `mcp.journal` /
-  `mcp.journalDays`, 100 MB cap): old bytes per change; Revert runs in **main** (`McpService.revert`, `mcp:revert`) only
-  while the folder is still shared, through the same resolver and guard, all or nothing, only onto files still as MCP left
-  them. MCP-written notes get no special trust: they render through the normal sanitizer like any outside edit. Tests
+  captures the bytes being replaced (and reserves their journal room: `EQUOTA` aborts before the disk changes). The guard
+  is `strict`: the Workspace then refuses a link or hard link at commit, never rewrites in place, creates folders one level
+  at a time, re-verifies the parent's realpath before and after the write / rename (and takes a landed entry back), pins
+  the file a write replaces with a hard link next to it (`.~*.sec-edit.bak`, dev/ino must equal the guarded file; no hard
+  links on the volume → the same check on the name) and puts it back when the folder moved, and renames without
+  clobbering (`link` + `unlink`, `EEXIST` for a file created in the window; the source must still be the guarded entry
+  (dev/ino) in its verified folder before the link and before its old name goes; a failed `unlink` removes the new link).
+  A strict delete trashes only the guarded entry (dev/ino). Residual: a swap between the last check and the rename
+  syscall itself. **Placeholders** (`src/mcp/placeholders.ts`): variables files (`variables.fileName`, any folder) are
+  off limits; frontmatter `vars` / `target` / `env` / `secrets` are compared **as parsed** (yaml `parseDocument`, keys
+  by scalar value, like `parseNoteMeta`), and quoted / explicit / tagged / flow / duplicate spellings or frontmatter that
+  does not parse are refused; fence `{…}` attribute lines (any container) are frozen. Secret names (`secrets:`, `vault`
+  / `vault:*` values incl. `T.field` and the bare field, note frontmatter, closed over values, **and every name nothing
+  defines** — One fills those from remembered form values; built-ins only while not redefined) are frozen **note-wide
+  without a markdown parse**: no edit adds or changes a line holding one (multi-line `{{\n name }}` and `>`-prefixed
+  forms included) or adds an occurrence; the lines directly above and below each one stay exactly as they are (or stay
+  absent: start / end of file) — that alone stops any block grammar from turning a secret line into a new code block;
+  the fence lines down to the last secret line stay as they are. On top, every markdown-it `fence` / `code_block` that
+  holds a secret cannot change at all, parsed with One's preview options, footnotes and **One's own block rules**
+  (`src/shared/md-block-rules.ts`: frontmatter, `%%`, `$$`, `\pagebreak`; the preview registers the same module, so a
+  new preview block rule goes there). Residual (later item: a One-side warning on Run for AI-written blocks): a new
+  block without placeholders may still use a shell variable a frozen secret block exported. No variables file between note and share root → every non-built-in name is secret. Moves check
+  both places; the server never resolves a value. Binary files are never
+  written, moved or deleted; deletes go to the Recycle Bin only (`ETRASH`, nothing deleted, when there is none) and always
+  keep a journal copy, even with undo off (or are refused); a folder move is refused if it holds anything hidden,
+  excluded or linked, or if any destination pair lands somewhere hidden. **Journal** (`src/mcp/journal.ts`,
+  `<app data>/mcp-history/<group>/`, mcp.json `undo { on, days }`, 100 MB cap, 64 MB per session): old bytes per change;
+  groups of the running session and of the last 24 h are never evicted (new writes get `EQUOTA` instead; two busy
+  sessions can thus block MCP writes for up to 24 h — fails closed, by design). Revert runs in
+  **main** (`McpService.revert`, `mcp:revert`) only while the folder is still shared, through the same resolver and guard,
+  all or nothing, only onto files still as MCP left them; it is restorative, so it also works once the folder is
+  read-only again. MCP-written notes get no special trust: they render through the normal sanitizer like any outside edit. Tests
   never use the real trash: injected trash or `XDG_DATA_HOME` / `HOME` under `.tmp/` (`tests/unit/mcp/writes.test.ts`).
 - **One's own data folder is never served** (settings, mcp.json, the vault, git trust, the text cache): `BackendService`
   opens every workspace with `deny: [configDir, cacheDir]`, and `Workspace.real()` refuses (`EACCES`) any path inside a
