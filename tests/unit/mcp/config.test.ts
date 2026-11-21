@@ -126,7 +126,7 @@ describe('setupSnippets', () => {
 describe('parseActivityLine', () => {
   it('checks every field of a line another process wrote', () => {
     const ok = parseActivityLine(JSON.stringify({ t: 1, client: 'LM\u0007 Studio', transport: 'stdio', tool: 'read_file', folder: 'notes', path: 'a.md', ok: true, code: null, ms: 3.4, bytes: 10 }));
-    expect(ok).toEqual({ t: 1, client: 'LM Studio', transport: 'stdio', tool: 'read_file', folder: 'notes', path: 'a.md', ok: true, code: null, ms: 3, bytes: 10, journal: null, token: null });
+    expect(ok).toEqual({ t: 1, client: 'LM Studio', transport: 'stdio', tool: 'read_file', folder: 'notes', path: 'a.md', ok: true, code: null, ms: 3, bytes: 10, journal: null, token: null, note: null });
     // A write row's undo group: only a well-formed id survives (main joins it to a folder path).
     expect(parseActivityLine(JSON.stringify({ t: 1, tool: 'write_file', journal: 'mhx1a2b3-0a1b2c3d' }))?.journal).toBe('mhx1a2b3-0a1b2c3d');
     expect(parseActivityLine(JSON.stringify({ t: 1, tool: 'write_file', journal: '../../etc' }))?.journal).toBeNull();

@@ -38,13 +38,70 @@
 | New note | `Ctrl+N`, then type its name |
 | Rename / delete | `F2` / `Del` in the file tree |
 | Move | Drag the file onto a folder |
+| **Select several** | `Ctrl`+click, `Shift`+click, `Shift+↑/↓`, `Ctrl+A` in the file tree ([below](#select-several-files)) |
+| **Bookmark** a file or folder | Right-click → **Bookmark** (tree or tab). Panel: `Ctrl+Alt+K` ([below](#bookmarks)) |
 | Close tab | `Ctrl+W`, **double-click the tab name**, middle-click the tab, or its × |
 | Switch tabs | `Ctrl+Tab` (most recently used first) |
-| **Go back / forward** | `Alt+←` / `Alt+→` (macOS: `Cmd+[` / `Cmd+]`), or the **mouse side buttons** anywhere in the window |
+| **Go back / forward** | `Alt+←` / `Alt+→` (macOS: `Cmd+[` / `Cmd+]`), the **← → buttons** at the start of the tab strip, or the **mouse side buttons** anywhere in the window |
 
 **A workspace stays inside its folder.** A link in it (symlink, Windows junction) that points **outside** the folder is not shown, opened, searched or written through. Links to places **inside** the folder work as before. Need that other folder? Open it itself.
 
 **Go back returns to where you were**: the previous file (reopened if you closed it), or the spot before a big jump (find, go to line, outline, a click far away). PDFs go back to the page before a link or a typed page. Typing and small cursor moves are not steps.
+
+**The ← → buttons** sit left of the first tab: `← → │ tabs…`. Sidebar hidden: right after the **show sidebar** button. Same spot in Classic and in zen mode.
+
+| | |
+|---|---|
+| **Greyed out** | Nothing to go back / forward to yet |
+| **Jump several steps** | **Right-click or hold** an arrow → the recent places that way (file + heading or line). Click one |
+| **Keyboard** | `Tab` to an arrow · `Shift+F10` (or the menu key) opens the list · `↑` `↓` `Enter` · `Esc` closes it |
+| **Hide them** | Settings → Appearance → **Back and forward buttons**. The shortcuts and side buttons keep working |
+
+### Select several files
+
+| Do this | How |
+|---|---|
+| Add / remove one row | `Ctrl`+click (macOS: `Cmd`+click) |
+| A range | `Shift`+click, or `Shift+↑` / `Shift+↓` (also `Shift+Home` / `End` / `PgUp` / `PgDn`) |
+| Add a range | `Ctrl+Shift`+click |
+| Everything shown | `Ctrl+A` while the tree has focus |
+| **Back to one row** | `Esc`, a plain click, or a plain arrow key |
+
+The tree's foot says **"N selected"**. The **focused row** (where the arrows go on from) has a ring.
+
+**What works on a selection** — right-click a selected row, or press the key:
+
+| Action | What happens |
+|---|---|
+| **Open** (`Enter`) | The files open as tabs; folders are skipped. **At most 20** at once. |
+| **Delete** (`Del`) | **One question** with the count and the first names. A selected folder takes its selected children along. |
+| **Move** | Drag any selected row onto a folder: **all of them move** and stay selected. A folder never goes into itself: that drop is refused. |
+| **Copy paths** / **Copy relative paths** | One path per line, in tree order. |
+| **Bookmark N items** | All of them go to [Bookmarks](#bookmarks). A selected folder takes its selected children along. |
+| **Stage changes** / **Unstage** | In a git folder: the files among them that can be. |
+
+- **One-item actions are hidden** while several rows are selected: rename, new note / folder here, duplicate, reveal, export, diff. `F2` renames the focused row only.
+- **Rows that disappear leave the selection**: deleted, moved, filtered out, or inside a folder you fold. Files changing on disk keep it.
+- Right-clicking a row **outside** the selection selects just that row.
+
+### Bookmarks
+
+**Pin the files and folders you use most.** The **Bookmarks** panel (bookmark icon, 4th in the sidebar) lists them in your order. `Ctrl+Alt+K` opens it.
+
+| Do this | How |
+|---|---|
+| **Add** | Right-click a file, folder or tab → **Bookmark** · several selected rows → **Bookmark N items** · palette: "Bookmark current file" · the **+** in the panel |
+| **Add by dragging** | Drag tree rows or a tab onto the **Bookmarks icon** (rest on it to open the panel), or into the panel at the place you want |
+| **Open** | Click a file. A **folder unfolds** right there as a small tree (click its files and folders) |
+| **Reorder** | Drag a bookmark up or down · `Alt+↑` / `Alt+↓` · right-click → Move up / down |
+| **Name it** | Right-click → **Rename bookmark…** (or `F2`). Only the bookmark is renamed, never the file. Empty = the file name again |
+| **Remove** | The **✕** on hover · right-click → Remove bookmark · `Del` · or **Remove bookmark** in the tree / tab menu |
+
+- **Renames and moves are followed**: in One (rename, drag to another folder) and **outside** it (Explorer, git, a script). A renamed folder takes the bookmarks inside it along.
+- **Gone?** A bookmark whose file or folder is missing shows **greyed** with a **Remove** button. Restored from the bin: it is normal again.
+- **Git colours** show like in the file tree (Settings → Files → Git colours in the file tree).
+- **Kept per folder, in One's own data folder** (`bookmarks/` next to `settings.json`) — **never in your folder**. Desktop app and browser mode share them.
+- Keyboard in the panel: `↑` `↓` move, `Enter` opens, `→` / `←` unfold / fold, `Esc` back to the text.
 
 ### Sidebar styles
 
@@ -58,6 +115,22 @@
 Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at the top (or at the start of the tab strip when hidden) does the same. Classic: click the open panel's icon.
 
 **Hidden stays hidden.** The sidebar comes back the way you left it after a restart or refresh — shown or hidden, same width.
+
+### Sidebar menu (order, hide)
+
+**Arrange the panel pills / icons the way you work.** Default: Files · Search · Git · Bookmarks │ Outline · Backlinks · Tags.
+
+| Do this | How |
+|---|---|
+| **Hide one** | Right-click its pill or icon → **Hide …** |
+| **Reorder, show again** | Right-click → **Customize sidebar…** (or Settings → Appearance → **Sidebar menu**, palette: "Customize sidebar menu") |
+| In that list | Drag by **⠿** · the **↑ / ↓** buttons · `Alt+↑` / `Alt+↓` on a focused entry · the checkbox shows / hides |
+| **Back to the default** | **Reset to default** under the list (or its ↺) |
+
+- **A hidden panel still works**: its shortcut (`Ctrl+Shift+F`, `Ctrl+Alt+K`…) or the palette ("View: Show Files"…) opens it. While it is open its pill shows; it goes once you switch.
+- **At least one** entry stays: the last checkbox is locked.
+- **Panels added in a later version** appear at their default place, shown. Your order and hidden ones stay.
+- Both sidebar styles and the zen strip use the same order. It is there from the first frame: nothing jumps at startup.
 
 **A calmer tree** (Settings, both styles, combine freely):
 
@@ -104,7 +177,10 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 - **It follows you.** The section the cursor is in is highlighted, and the list updates while you type.
 - **Fold:** the arrow before a heading, or **1 / 2 / All** to show only the top levels.
 - **Keyboard:** `Tab` into a list, `↑` `↓` to move, `←` `→` to fold, `Enter` to jump.
-- **Tidy up:** click a section title to collapse it. Collapsed sections stay collapsed.
+- **Counts:** every list shows how many entries it has in its header, open or closed. `0` = empty.
+- **Opens by itself:** a section with entries starts open, an empty one starts closed. **Connections** starts closed (its count still shows).
+- **Your choice wins:** click a section title to open or close it. That choice is remembered and stays, even when the section fills up or empties.
+  Untouched sections keep following their content: a first task opens **Tasks**, deleting the last one closes it.
 - **Width:** drag its left edge. Double-click the edge to reset. Drag it to the window edge to hide it.
 - **Remembered:** shown or hidden, same width, after a restart or refresh.
 
@@ -141,6 +217,7 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 
 - Files go to the **Recycle Bin**, not gone forever.
 - If the bin is unavailable, One asks before deleting permanently.
+- **Several at once:** [select them](#select-several-files), then `Del`. One question covers them all; without a bin, One asks once for the rest.
 
 ### PDF files
 
@@ -319,7 +396,9 @@ done: false
 | **Shared tags** | This note's tags and how many other notes have them | Lists those notes |
 | **Related** | Notes that link to the same notes, are linked from the same notes, or share tags | Open it |
 
-- **Counts** are in each header. Collapsed parts stay collapsed.
+- **Closed at first.** The header counts the notes linked to or from this one. Click it to open; that is remembered.
+- **Counts** are in each part's header, also when it is closed. **Unlinked mentions** shows `…` while it searches your notes.
+- **Empty parts start closed**, parts with entries open — until you click one. Your choice is remembered.
 - **Live:** it follows the open note and your typing.
 - **Index built on demand?** You see this note's own links and tags, and a **Build now** button for the rest.
 
@@ -799,6 +878,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | **Appearance** | Theme | Dark |
 | | Accent colour | Blue |
 | | Sidebar style | Shelf |
+| | Sidebar menu (order, hidden panels) | Files · Search · Git · Bookmarks · Outline · Backlinks · Tags, all shown |
 | | Folder colours / Folder colour | Per top-level folder / Grey |
 | | Corners | Rounded |
 | | Density | Comfortable |
@@ -808,6 +888,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | Content width | Readable |
 | | Zoom (desktop only) | 100% |
 | | Window frame (desktop only) | Integrated (no title bar) |
+| | Back and forward buttons (start of the tab strip) | On |
 | | Zen mode: Full screen / Keep the status bar | On / Off |
 | **Editor** | View mode | Live |
 | | Formatting toolbar in live mode | On |
@@ -935,7 +1016,19 @@ Settings are **global**, not per folder.
 
 1. Settings → **MCP server** → pick your app under **Client setup** → switch it **on** (One asks once). Its setup, with a fresh **access token**, is now on the clipboard.
 2. Paste it where the table below says → **restart that app**.
-3. **Add folder…** → pick a notes folder. It is shared **Read-only**.
+3. **Add folders…** → pick a notes folder (or several: see below). It is shared **Read-only**.
+
+**Share several folders at once**
+
+1. **Add folders…** → **Ctrl+click** (macOS: **Cmd+click**) or **Shift+click** the folders → **Select Folder**.
+2. One asks once for the whole batch: **Read-only:** what it adds (its name for the AI: path), **Not added:** what it skips, with why.
+3. **Add N folders** → all are shared **Read-only**. **Cancel** adds nothing.
+
+- **Skipped, with a reason:** already shared, a whole drive, your home folder itself, One's own data folder, not a folder, over the limit of 32.
+- **Nothing left to add?** You only see the reasons and **OK**.
+- **Same folder name twice** (`a\notes`, `b\notes`): the AI sees `notes` and `notes-2`, numbered in path order.
+- **One folder** is added straight away, as before. **Read-write** stays a step per folder (One asks).
+- Running AI apps see the new folders within a second: restart nothing.
 
 **Updated One and an app stopped working?** Copy the setup again: **a token is now required** (see Access tokens).
 
@@ -1030,8 +1123,18 @@ Only in **Read-write** folders:
 | `append_file` | Adds text at the end, or at the start (after the frontmatter) |
 | `patch_file` | Changes one heading section, `^block` or frontmatter key: append · prepend · replace · delete |
 | `replace_text` | Replaces one exact piece of text (it must occur once) |
-| `move_file` | Renames / moves a file or folder, never overwrites; updates links to it (**Update links on rename**) |
-| `create_folder` · `delete_file` | New folder · a file to the **Recycle Bin**. Every delete also keeps an undo copy (even with undo copies off), or is refused |
+| `move` | Renames / moves a file or folder (with everything in it), never overwrites; updates links to it (**Update links on rename**) |
+| `create_folder` · `delete` | New folder · a file or folder to the **Recycle Bin**. A file delete also keeps an undo copy (even with undo copies off), or is refused |
+
+**Deleting a folder asks you first**
+
+1. The AI asks to delete a folder: **your AI app asks you to confirm**. One shows what it would delete: `Delete folder "old-project" and everything in it? 120 files, 14 folders (including hidden items such as .git, .env). It goes to the Recycle Bin.`
+2. **Yes** → the folder and everything in it go to the Recycle Bin, in one step. **No**, closing the question or no answer within 2 minutes → nothing happens.
+3. **Apps that can't ask** show you that summary in the chat first. The AI deletes only after **you** agree there (it then sends a one-time code: valid 5 minutes, for that folder as it was).
+
+- **Restore it from the Recycle Bin** (Trash on a Mac). A folder delete keeps no undo copy, so **Recent activity** lists it as `delete (folder)` without a Revert button.
+- **Never deleted for good:** no Recycle Bin for that folder → nothing is deleted. On Windows, if the bin is off or too small, Windows itself asks before deleting for good.
+- **Moving a folder** takes everything in it along, hidden items too (they stay hidden). Refused: links inside, a destination in a hidden or excluded place, and content your exclusions hide that would become visible.
 
 **Let it make changes (Read-write)**
 
@@ -1069,7 +1172,7 @@ Only in **Read-write** folders:
 - A reverted row says *reverted*. Revert of a new file moves it to the Recycle Bin.
 - **Revert works on a folder that is read-only again:** it only puts back what was there.
 - **Undo → Keep undo copies of AI edits** (Settings → MCP server, on by default): the old text of each change, in `mcp-history` in the app data folder, for **30 days** (1–365) and at most 100 MB.
-- **Switching it off asks first.** Changes from then on get no Revert. Deletes still keep a copy.
+- **Switching it off asks first.** Changes from then on get no Revert. File deletes still keep a copy (deleted folders: restore them from the Recycle Bin).
 - **An AI cannot flush your history:** copies from the last 24 hours and of the running connection are never dropped for space. Full? New AI changes are refused until older copies expire (64 MB per connection at most).
 - **Two very busy AI sessions** can fill the 100 MB with copies that are all protected. New AI changes then get "history is full" for up to 24 hours. Your files are safe (nothing is changed without a copy); edit in One meanwhile.
 

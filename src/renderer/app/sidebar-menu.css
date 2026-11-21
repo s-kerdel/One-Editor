@@ -1,0 +1,18 @@
+/* Settings → Appearance → Sidebar menu (SidebarMenuSetting.tsx, lazy Settings chunk). */
+.se-sbm { display: flex; flex-direction: column; gap: 8px; width: 100%; align-items: stretch; }
+.se-sbm-list { list-style: none; margin: 0; padding: 4px; display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-sunken); }
+.se-sbm-item { position: relative; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 4px 0 6px; border-radius: var(--radius); color: var(--text); cursor: grab; user-select: none; outline: none; }
+.se-sbm-item:hover { background: var(--bg-hover); }
+.se-sbm-item:focus-visible { box-shadow: inset 0 0 0 1.5px var(--focus-ring); }
+.se-sbm-item.dragging { opacity: 0.45; }
+.se-sbm-item.off .se-sbm-icon, .se-sbm-item.off .se-sbm-name { opacity: 0.5; }
+.se-sbm-item.drop-before::before, .se-sbm-item.drop-after::after { content: ''; position: absolute; left: 4px; right: 4px; height: 2px; border-radius: var(--radius-pill); background: var(--accent); pointer-events: none; }
+.se-sbm-item.drop-before::before { top: -2px; }
+.se-sbm-item.drop-after::after { bottom: -2px; }
+.se-sbm-grip { width: 12px; flex: none; color: var(--text-faint); font-size: 14px; line-height: 1; text-align: center; }
+.se-sbm-check { flex: none; margin: 0; accent-color: var(--accent); }
+.se-sbm-icon { display: grid; place-items: center; flex: none; color: var(--text-muted); }
+.se-sbm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.se-sbm-key { flex: none; }
+.se-sbm-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.se-sbm-note { font-size: 12px; color: var(--text-faint); }

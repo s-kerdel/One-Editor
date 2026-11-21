@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { McpService, folderProblem, mcpLaunch, registerMcpIpc, type McpDeps } from '../../../src/main/mcp';
+import { McpService, folderProblem, foldersConfirm, mcpLaunch, registerMcpIpc, type FolderBatch, type McpDeps } from '../../../src/main/mcp';
 import { MCP_CHANNELS, MCP_WRITES_ENABLED, TOKEN_ENV } from '../../../src/shared/mcp';
 import { hashToken, matchToken } from '../../../src/mcp/tokens';
 import { OneMcpServer } from '../../../src/mcp/server';
@@ -22,8 +22,9 @@ function setup(o: Partial<McpDeps> = {}) {
   const notes = path.join(home, 'notes');
   fs.mkdirSync(configDir, { recursive: true });
   fs.mkdirSync(notes, { recursive: true });
-  const answers = { enable: true, write: true, pick: notes as string | null, code: true, undoOff: true, token: true, keyring: true, copy: true };
+  const answers = { enable: true, write: true, pick: notes as string | string[] | null, folders: true, code: true, undoOff: true, token: true, keyring: true, copy: true };
   const changes: unknown[] = [];
+  const batches: FolderBatch[] = [];
   const asked: string[] = [];
   const clip: string[] = [];
   let id = 0;
@@ -34,7 +35,8 @@ function setup(o: Partial<McpDeps> = {}) {
     launch: () => ({ command: '/x/one', args: ['/x/cli.mjs', '--stdio'], env: { ELECTRON_RUN_AS_NODE: '1' } }),
     confirmEnable: async () => (asked.push('enable'), answers.enable),
     confirmWrite: async () => (asked.push('write'), answers.write),
-    pickFolder: async () => (asked.push('pick'), answers.pick),
+    pickFolders: async () => (asked.push('pick'), answers.pick === null ? [] : [answers.pick].flat()),
+    confirmFolders: async (q) => (asked.push('folders'), batches.push(q), answers.folders),
     realpath: (p) => fsp.realpath(p),
     isDirectory: (p) => fsp.stat(p).then((s) => s.isDirectory(), () => false),
     randomId: () => (++id).toString(16).padStart(16, '0'),
@@ -51,7 +53,7 @@ function setup(o: Partial<McpDeps> = {}) {
     ...o,
   });
   const file = () => JSON.parse(fs.readFileSync(path.join(configDir, 'mcp.json'), 'utf8'));
-  return { svc, answers, changes, asked, clip, file, configDir, home, notes, dir };
+  return { svc, answers, changes, asked, batches, clip, file, configDir, home, notes, dir };
 }
 
 describe('McpService', () => {
@@ -126,6 +128,124 @@ describe('McpService', () => {
     const rows = await t.svc.activity();
     expect(rows.map((r) => r.tool)).toEqual(['search_text', 'read_file']);
     expect(await t.svc.activity(1)).toHaveLength(1);
+  });
+});
+
+describe('several folders at once (one dialog, one confirm)', () => {
+  const mk = (...parts: string[]) => {
+    const d = path.join(...parts);
+    fs.mkdirSync(d, { recursive: true });
+    return d;
+  };
+  const aliasesOf = (folders: Array<{ alias: string; path: string }>) => Object.fromEntries(folders.map((f) => [f.path, f.alias]));
+
+  it('one confirm lists the batch; all added read-only; aliases unique and independent of the click order', async () => {
+    const t = setup();
+    await t.svc.addFolder(); // "notes", one folder: no confirm, as before
+    expect(t.asked).toEqual(['pick']);
+    const a = mk(t.home, 'a', 'notes');
+    const b = mk(t.home, 'b', 'notes');
+    const w = mk(t.home, 'Work Docs');
+    t.answers.pick = [b, w, a];
+    const s = await t.svc.addFolder();
+    expect(t.asked).toEqual(['pick', 'pick', 'folders']);
+    expect(t.batches).toEqual([{ add: [{ alias: 'work-docs', path: w }, { alias: 'notes-2', path: a }, { alias: 'notes-3', path: b }], refused: [] }]);
+    expect(s.folders.map((f) => [f.alias, f.mode])).toEqual([['notes', 'read'], ['work-docs', 'read'], ['notes-2', 'read'], ['notes-3', 'read']]);
+    expect(t.file().folders.map((f: { mode: string }) => f.mode)).toEqual(['read', 'read', 'read', 'read']);
+    expect(new Set(s.folders.map((f) => f.id)).size).toBe(4);
+    expect(t.changes).toHaveLength(2); // one write for the whole batch
+
+    // The same three, picked in another order: the same aliases.
+    const u = setup();
+    await u.svc.addFolder();
+    u.answers.pick = [mk(u.home, 'a', 'notes'), mk(u.home, 'Work Docs'), mk(u.home, 'b', 'notes')].reverse();
+    const again = aliasesOf((await u.svc.addFolder()).folders.map((f) => ({ ...f, path: path.relative(u.home, f.path) })));
+    expect(again).toEqual(aliasesOf(s.folders.map((f) => ({ ...f, path: path.relative(t.home, f.path) }))));
+  });
+
+  it('skips what is already shared and refuses what cannot be shared, a reason each; picked twice through a link = once', async () => {
+    const t = setup();
+    await t.svc.addFolder();
+    const x = mk(t.home, 'x');
+    fs.symlinkSync(x, path.join(t.home, 'link-to-x'));
+    t.answers.pick = [t.notes, t.home, t.configDir, path.join(t.dir, 'nope'), x, path.join(t.home, 'link-to-x')];
+    const s = await t.svc.addFolder();
+    const [q] = t.batches;
+    expect(q.add).toEqual([{ alias: 'x', path: x }]);
+    const why = Object.fromEntries(q.refused.map((r) => [r.path, r.why]));
+    expect(Object.keys(why)).toHaveLength(5);
+    expect(why[t.notes]).toBe('Already shared as “notes”');
+    expect(why[t.home]).toMatch(/home folder/);
+    expect(why[t.configDir]).toMatch(/own data/);
+    expect(why[path.join(t.dir, 'nope')]).toBe('Not a folder');
+    expect(why[x]).toBe('The same folder as “x”'); // sorted: the link came first; both lead to x
+    expect(s.folders.map((f) => f.alias)).toEqual(['notes', 'x']);
+  });
+
+  it('Cancel in the confirm adds nothing', async () => {
+    const t = setup();
+    t.answers.pick = [t.notes, mk(t.home, 'more')];
+    t.answers.folders = false;
+    expect((await t.svc.addFolder()).folders).toEqual([]);
+    expect(t.batches[0].add.map((f) => f.alias)).toEqual(['more', 'notes']);
+    expect(fs.existsSync(path.join(t.configDir, 'mcp.json'))).toBe(false);
+    expect(t.changes).toEqual([]);
+  });
+
+  it('all refused: only the reasons (no Add button), nothing written', async () => {
+    const t = setup();
+    t.answers.pick = [t.home, '/'];
+    expect((await t.svc.addFolder()).folders).toEqual([]);
+    expect(t.batches).toEqual([{ add: [], refused: [{ path: '/', why: expect.stringMatching(/drive/) }, { path: t.home, why: expect.stringMatching(/home folder/) }] }]);
+    expect(fs.existsSync(path.join(t.configDir, 'mcp.json'))).toBe(false);
+    const box = foldersConfirm(t.batches[0]);
+    expect(box.buttons).toEqual(['OK']);
+    expect(box.title).toBe('No folder added');
+    expect(box.detail).toContain(`• ${t.home}: Your whole home folder cannot be shared`);
+  });
+
+  it('the folder limit: the rest of a batch is refused with the reason', async () => {
+    const t = setup();
+    const folders = Array.from({ length: 31 }, (_, i) => ({ id: `${i + 1}`.padStart(8, 'f'), alias: `f${i}`, path: `/x/f${i}`, mode: 'read' }));
+    fs.writeFileSync(path.join(t.configDir, 'mcp.json'), JSON.stringify({ version: 1, enabled: false, folders }));
+    t.answers.pick = [mk(t.home, 'one'), mk(t.home, 'two')];
+    const s = await t.svc.addFolder();
+    expect(s.folders).toHaveLength(32);
+    expect(t.batches[0].add.map((f) => f.alias)).toEqual(['one']);
+    expect(t.batches[0].refused).toEqual([{ path: path.join(t.home, 'two'), why: 'At most 32 folders can be shared' }]);
+    await expect(t.svc.addFolder()).rejects.toMatchObject({ code: 'ELIMIT' }); // full: not even the dialog
+    expect(t.asked.filter((a) => a === 'pick')).toHaveLength(1);
+  });
+
+  it('the confirm text: every folder to add with its alias, the refused apart with why; Cancel is the default', () => {
+    const box = foldersConfirm({ add: [{ alias: 'notes', path: '/h/notes' }, { alias: 'notes-2', path: '/h/b/notes' }], refused: [{ path: '/h', why: 'Your whole home folder cannot be shared: pick a folder inside it.' }] });
+    expect(box).toMatchObject({ type: 'question', title: 'Share 2 folders?', message: 'Let MCP clients read these 2 folders?', buttons: ['Add 2 folders', 'Cancel'], defaultId: 1, cancelId: 1 });
+    expect(box.detail.split('\n\n')).toEqual([
+      'Read-only:\n• notes: /h/notes\n• notes-2: /h/b/notes',
+      'Not added:\n• /h: Your whole home folder cannot be shared: pick a folder inside it.',
+      'AI apps you set up can search and read them, not change them: you allow changes per folder. Hidden files, key files and excluded folders stay invisible.',
+    ]);
+    expect(foldersConfirm({ add: [{ alias: 'a', path: '/a' }], refused: [] })).toMatchObject({ title: 'Share this folder?', message: 'Let MCP clients read “a”?', buttons: ['Add folder', 'Cancel'] });
+    const many = foldersConfirm({ add: [{ alias: 'a', path: '/a' }], refused: Array.from({ length: 14 }, (_, i) => ({ path: `/r${i}`, why: 'Not a folder' })) });
+    expect(many.detail).toContain('• /r9: Not a folder\n…and 4 more');
+    expect(many.detail).not.toContain('/r10');
+  });
+
+  it('a running server serves every folder of the batch (mcp.json passes its grant checks)', async () => {
+    const t = setup();
+    t.answers.pick = [t.notes, mk(t.home, 'b', 'notes'), mk(t.home, 'Work Docs')];
+    await t.svc.addFolder();
+    const server = new OneMcpServer({ configDir: t.configDir, settings: { ...DEFAULT_SETTINGS }, transport: 'stdio', win: false, trash: async () => {} });
+    try {
+      expect(server.applyConfig(t.file())).toBe(true);
+      await server.protocol.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'lm' } } });
+      const r = (await server.protocol.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_folders', arguments: {} } })) as { result: { content: Array<{ text: string }> } };
+      const rows = r.result.content[0].text.split('\n');
+      expect(rows[0]).toBe('3 folders');
+      expect(rows.slice(1).map((x) => x.split(' ')[0]).sort()).toEqual(['notes', 'notes-2', 'work-docs']);
+    } finally {
+      await server.dispose();
+    }
   });
 });
 

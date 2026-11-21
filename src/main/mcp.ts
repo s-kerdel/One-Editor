@@ -1,8 +1,8 @@
 // Settings → MCP server (main process): owns <app data>/mcp.json, the file the MCP server program
 // (dist/mcp/cli.mjs, started by MCP clients over stdio) obeys. The page asks over mcp:* channels; main decides.
-//  - Off by default. Switching on, sharing a folder (only through the native folder dialog: the page
-//    never hands over a path) and allowing writes in a folder each need the user's OK in a native dialog.
-//    Narrowing (off, remove a folder, back to read-only) needs none.
+//  - Off by default. Switching on, sharing folders (only through the native folder dialog, several at once:
+//    the page never hands over a path; a batch gets one native confirm) and allowing writes in a folder each
+//    need the user's OK in a native dialog. Narrowing (off, remove a folder, back to read-only) needs none.
 //  - Refused folders: a drive / file-system root, the home folder itself, anything that contains or
 //    sits inside the app's data folder (settings, the vault, this file).
 //  - Running servers poll mcp.json: off → they exit; a removed folder is gone for them at once.
@@ -58,8 +58,10 @@ export interface McpDeps {
   launch(): McpLaunch | null;
   confirmEnable(): Promise<boolean>;
   confirmWrite(f: { alias: string; path: string }): Promise<boolean>;
-  /** The native folder dialog; null = cancelled. */
-  pickFolder(): Promise<string | null>;
+  /** The native folder dialog, several folders at once; [] = cancelled. */
+  pickFolders(): Promise<string[]>;
+  /** Several folders picked: one native confirm for the batch (see `foldersConfirm`). No `add` = only the reasons, answers false. */
+  confirmFolders(q: FolderBatch): Promise<boolean>;
   realpath(abs: string): Promise<string>;
   isDirectory(abs: string): Promise<boolean>;
   randomId(): string;
@@ -103,6 +105,37 @@ export class McpError extends Error {
 // The grant rules live with the server, which checks every mcp.json entry again.
 export { folderProblem } from '../mcp/grant';
 import { folderProblem } from '../mcp/grant';
+
+/** A batch of picked folders after the checks: what would be shared (real path) and what not, with why. */
+export interface FolderBatch {
+  add: Array<{ alias: string; path: string }>;
+  refused: Array<{ path: string; why: string }>;
+}
+/** A refused pick + the error code a single pick answers with. */
+type Refusal = FolderBatch['refused'][number] & { code: string };
+
+/** Refused rows shown at most (each widens nothing, so the rest is a count); every folder to add is listed. */
+const REFUSED_SHOWN = 10;
+
+/** The native confirm of a batch (main.ts shows it). Nothing to add → a notice with the reasons and only "OK". */
+export function foldersConfirm(q: FolderBatch): { type: 'question' | 'warning'; title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number } {
+  const n = q.add.length;
+  const refused = q.refused.slice(0, REFUSED_SHOWN).map((r) => `• ${r.path}: ${r.why}`);
+  if (q.refused.length > REFUSED_SHOWN) refused.push(`…and ${q.refused.length - REFUSED_SHOWN} more`);
+  if (!n) return { type: 'warning', title: 'No folder added', message: 'None of these folders can be shared', detail: refused.join('\n'), buttons: ['OK'], defaultId: 0, cancelId: 0 };
+  const parts = [`Read-only:\n${q.add.map((f) => `• ${f.alias}: ${f.path}`).join('\n')}`];
+  if (refused.length) parts.push(`Not added:\n${refused.join('\n')}`);
+  parts.push('AI apps you set up can search and read them, not change them: you allow changes per folder. Hidden files, key files and excluded folders stay invisible.');
+  return {
+    type: 'question',
+    title: n === 1 ? 'Share this folder?' : `Share ${n} folders?`,
+    message: n === 1 ? `Let MCP clients read “${q.add[0].alias}”?` : `Let MCP clients read these ${n} folders?`,
+    detail: parts.join('\n\n'),
+    buttons: [n === 1 ? 'Add folder' : `Add ${n} folders`, 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+  };
+}
 
 export class McpService {
   private chain: Promise<unknown> = Promise.resolve();
@@ -304,23 +337,57 @@ export class McpService {
     });
   }
 
-  /** Opens the native folder dialog; the picked folder is shared read-only. */
+  /** Opens the native folder dialog (several at once); every folder it adds is shared read-only.
+   *  One folder: added at once (picking it was the OK), a refusal is the error, as before. Several: each
+   *  passes the same checks, then one native confirm lists what is added and what is not (and why);
+   *  "Cancel" adds nothing, and with nothing left to add it only shows the reasons. */
   addFolder(): Promise<McpStatus> {
     return this.serial(async () => {
       const cfg = await this.read();
       if (cfg.folders.length >= MAX_MCP_FOLDERS) throw new McpError('ELIMIT', `At most ${MAX_MCP_FOLDERS} folders can be shared`);
-      const picked = await this.deps.pickFolder();
-      if (!picked) return this.statusOf(cfg);
-      if (!(await this.deps.isDirectory(picked))) throw new McpError('ENOENT', 'Not a folder');
-      const real = await this.deps.realpath(picked);
-      const why = folderProblem(real, { configDir: await this.deps.realpath(this.deps.configDir).catch(() => this.deps.configDir), homedir: this.deps.homedir, foldCase: this.foldCase });
-      if (why) throw new McpError('EACCES', why);
-      const same = (a: string) => (this.foldCase ? a.toLowerCase() === real.toLowerCase() : a === real);
-      const dup = cfg.folders.find((f) => same(f.path));
-      if (dup) throw new McpError('EEXIST', `Already shared as “${dup.alias}”`);
-      const alias = aliasFor(path.basename(real) || 'folder', cfg.folders.map((f) => f.alias));
-      return this.write({ ...cfg, folders: [...cfg.folders, { id: this.deps.randomId(), alias, path: real, mode: 'read', added: this.deps.now?.() ?? Date.now() }] });
+      const picked = await this.deps.pickFolders();
+      if (!picked.length) return this.statusOf(cfg);
+      const { add, refused } = await this.sortOut(cfg, picked);
+      if (picked.length === 1 && refused.length) throw new McpError(refused[0].code, refused[0].why);
+      if (picked.length > 1 && !(await this.deps.confirmFolders({ add, refused: refused.map(({ path, why }) => ({ path, why })) }))) return this.statusOf(cfg);
+      if (!add.length) return this.statusOf(cfg);
+      const added = this.deps.now?.() ?? Date.now();
+      return this.write({ ...cfg, folders: [...cfg.folders, ...add.map((f) => ({ id: this.deps.randomId(), alias: f.alias, path: f.path, mode: 'read' as const, added }))] });
     });
+  }
+
+  /** The grant checks for each picked folder, sorted by path so aliases do not depend on the click order
+   *  ("notes", "notes-2"…). Already shared, picked twice (through a link) or over the limit = refused too. */
+  private async sortOut(cfg: McpConfig, picked: string[]): Promise<{ add: FolderBatch['add']; refused: Refusal[] }> {
+    const key = (a: string) => (this.foldCase ? a.toLowerCase() : a);
+    const order = (a: string, b: string) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : a < b ? -1 : a > b ? 1 : 0);
+    const configDir = await this.deps.realpath(this.deps.configDir).catch(() => this.deps.configDir);
+    const shared = new Map(cfg.folders.map((f) => [key(f.path), `Already shared as “${f.alias}”`]));
+    const aliases = cfg.folders.map((f) => f.alias);
+    const add: FolderBatch['add'] = [];
+    const refused: Refusal[] = [];
+    for (const p of [...new Set(picked)].sort(order)) {
+      const real = (await this.deps.isDirectory(p)) ? await this.deps.realpath(p).catch(() => null) : null;
+      if (!real) {
+        refused.push({ path: p, code: 'ENOENT', why: 'Not a folder' });
+        continue;
+      }
+      const why = folderProblem(real, { configDir, homedir: this.deps.homedir, foldCase: this.foldCase });
+      const dup = shared.get(key(real));
+      if (why || dup) {
+        refused.push({ path: p, code: why ? 'EACCES' : 'EEXIST', why: why ?? dup! });
+        continue;
+      }
+      if (cfg.folders.length + add.length >= MAX_MCP_FOLDERS) {
+        refused.push({ path: p, code: 'ELIMIT', why: `At most ${MAX_MCP_FOLDERS} folders can be shared` });
+        continue;
+      }
+      const alias = aliasFor(path.basename(real) || 'folder', aliases);
+      aliases.push(alias);
+      shared.set(key(real), `The same folder as “${alias}”`);
+      add.push({ alias, path: real });
+    }
+    return { add, refused };
   }
 
   removeFolder(id: unknown): Promise<McpStatus> {

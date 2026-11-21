@@ -213,4 +213,14 @@ describe('MCP Recent activity list', () => {
     expect(rows()[0].querySelector('.se-mcp-app')!.textContent).toBe(HOSTILE);
     expect((globalThis as { __pwned?: number }).__pwned).toBeUndefined();
   });
+  it('a deleted folder (no undo copy) says "Recycle Bin" instead of Revert; the note is in the details and the filter', () => {
+    mount([call({ t: NOW - 1000, tool: 'delete', path: 'old', journal: null, note: 'restore from the Recycle Bin' })]);
+    const r = rows()[0];
+    expect(r.querySelector('[data-testid="mcp-revert"]')).toBeNull();
+    expect(r.querySelector('[data-testid="mcp-call-note"]')!.textContent).toBe('Recycle Bin');
+    act(() => (r.querySelector('[data-testid="mcp-call-open"]') as HTMLElement).click());
+    expect(r.querySelector('[data-testid="mcp-call-details"]')!.textContent).toContain('restore from the Recycle Bin');
+    type('recycle');
+    expect(rows()).toHaveLength(1);
+  });
 });

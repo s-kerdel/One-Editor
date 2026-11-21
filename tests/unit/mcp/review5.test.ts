@@ -165,7 +165,7 @@ describe('3. moves and deletes', () => {
       return realUnlink(p);
     });
     try {
-      expect((await t.call('move_file', { from: 'a.md', to: 'b.md', update_links: false })).isError).toBe(true);
+      expect((await t.call('move', { from: 'a.md', to: 'b.md', update_links: false })).isError).toBe(true);
     } finally {
       spy.mockRestore();
     }

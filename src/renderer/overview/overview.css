@@ -24,6 +24,8 @@
 .se-ov-sec-toggle:hover .se-ov-chev, .se-ov-sec-toggle:focus-visible .se-ov-chev, .se-ov-sec-toggle[aria-expanded='false'] .se-ov-chev { opacity: 1; }
 .se-ov-sec.open > .se-ov-sec-head .se-ov-chev, .se-ov-chev.open { transform: rotate(90deg); }
 .se-ov-count { flex: none; min-width: 18px; padding: 0 5px; border-radius: var(--radius-pill); font-size: 10.5px; line-height: 16px; text-align: center; font-weight: 500; color: var(--text-faint); background: var(--bg-shelf-inset); font-variant-numeric: tabular-nums; }
+/* Not counted yet (e.g. unlinked mentions while the scan runs): a fainter "…". */
+.se-ov-count.is-pending { opacity: 0.6; }
 .se-ov-sec-actions { display: flex; align-items: center; gap: 4px; flex: none; }
 .se-ov-hint { padding: 2px 14px 8px 12px; color: var(--text-faint); line-height: 1.5; font-size: 12px; }
 .se-ov-hint code { font-size: 11px; background: var(--code-bg); padding: 0 4px; border-radius: var(--radius-xs); color: var(--text-muted); }

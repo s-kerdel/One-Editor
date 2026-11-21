@@ -2,6 +2,7 @@
 // graph, incoming links with their line, outgoing links (missing ones can be created), unlinked
 // mentions (Link / Link all), shared tags and related notes. Lazy chunk, loaded by the overview.
 // Everything reads adjacency the knowledge index keeps patched: a note switch costs O(neighbourhood).
+// Collapsed (its default) it computes only the header count: no lists, graph, related notes or mention scan.
 import { Fragment, type ComponentChildren } from 'preact';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
@@ -12,10 +13,11 @@ import { addIcons, FileIcon, Icon } from '../app/icons';
 import { runCommand } from '../app/commands';
 import { indexDeferred } from '../search/demand';
 import { searchClient } from '../search/client';
-import { collapsedSections, setSectionCollapsed, useRoving } from '../overview/hooks';
+import { useRoving } from '../overview/hooks';
+import { isSectionOpen, setSectionCollapsed } from '../overview/sections';
 import { jumpTo } from '../overview/actions';
-import { Hint, Section } from '../overview/parts';
-import type { GraphNode } from '../../knowledge/graph';
+import { Count, Hint, Section, type HeaderCount } from '../overview/parts';
+import type { GraphData, GraphNode } from '../../knowledge/graph';
 import type { LinkRef, Mention, NoteInfo } from '../../knowledge/index';
 import { localGraph, notesSharingTag, relatedNotes, sharedTags } from '../../knowledge/connections';
 import { index, indexBusy, kv, linkMention, linkMentions, openLink, unlinkedMentionsOf } from './state';
@@ -30,6 +32,8 @@ addIcons({
 const MAX_BACK = 100;
 const MAX_OUT = 200;
 const MAX_MENTIONS = 100;
+/** The mention scan stops here; the count then reads "500+". */
+const MENTION_SCAN = 500;
 const GRAPH_CAP = { 1: 40, 2: 70 } as const;
 
 /** Cost of each render → commit and graph layout (ms): the E2E perf guard reads the last ones. */
@@ -69,20 +73,18 @@ function indexingText() {
 
 // ---------------------------------------------------------------- building blocks
 
-/** A collapsible sub-section; open/closed is remembered with the overview's sections. */
-function Sub(props: { id: string; title: string; count?: number | string | null; countTitle?: string; actions?: ComponentChildren; children: ComponentChildren }) {
-  const open = !collapsedSections.value[props.id];
+/** A collapsible sub-section, same rule as the overview's sections: starts open when it has
+ *  entries (`null` = not counted yet: closed), until the user toggles it (remembered). */
+function Sub(props: { id: string; title: string; count: HeaderCount; countTitle?: string; actions?: ComponentChildren; children: ComponentChildren }) {
+  const n = props.count;
+  const open = isSectionOpen(props.id, n !== null && n !== 0);
   return (
     <div class={`se-cn-sub${open ? ' open' : ''}`} data-sub={props.id}>
       <div class="se-cn-head">
         <button class="se-cn-toggle" aria-expanded={open} onClick={() => setSectionCollapsed(props.id, open)}>
           <Icon name="chevronRight" size={11} class="se-cn-chev" />
           <span class="se-cn-title">{props.title}</span>
-          {props.count != null && (
-            <span class="se-cn-n" title={props.countTitle}>
-              {props.count}
-            </span>
-          )}
+          <Count n={n} title={props.countTitle} class="se-cn-n" />
         </button>
         {open && props.actions}
       </div>
@@ -206,9 +208,7 @@ function OutgoingRows({ path, rows }: { path: string; rows: OutRow[] }) {
 
 // ---------------------------------------------------------------- local graph
 
-function MiniGraph({ path, version }: { path: string; version: number }) {
-  const depth = graphDepth.value;
-  const data = useMemo(() => localGraph(index, path, depth, GRAPH_CAP[depth]), [path, version, depth]);
+function MiniGraph({ path, data }: { path: string; data: GraphData }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const renderer = useRef<GraphRenderer | null>(null);
   const [hover, setHover] = useState<GraphNode | null>(null);
@@ -240,26 +240,24 @@ function MiniGraph({ path, version }: { path: string; version: number }) {
 // ---------------------------------------------------------------- mentions
 
 function useMentions(path: string, enabled: boolean, version: number) {
-  const [state, setState] = useState<{ path: string; list: Mention[] } | null>(null);
+  const [state, setState] = useState<{ path: string; list: Mention[]; seq: number } | null>(null);
+  const seq = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => () => void (mounted.current = false), []);
   const same = state?.path === path;
   useEffect(() => {
     if (!enabled) return;
-    let live = true;
     // Scans every note's text (in the search workers): never on the keystroke path.
-    const t = setTimeout(
-      () =>
-        void unlinkedMentionsOf(path).then(
-          (list) => live && setState({ path, list }),
-          () => live && setState({ path, list: [] }),
-        ),
-      same ? 500 : 0,
-    );
-    return () => {
-      live = false;
-      clearTimeout(t);
-    };
+    const t = setTimeout(() => {
+      const mine = ++seq.current;
+      // An index bump restarts the scan, but an older answer still lands until a newer one has:
+      // the count shows as soon as one scan finishes.
+      const land = (list: Mention[]) => mounted.current && setState((s) => (s && s.seq > mine ? s : { path, list, seq: mine }));
+      void unlinkedMentionsOf(path, MENTION_SCAN).then(land, () => land([]));
+    }, same ? 500 : 0);
+    return () => clearTimeout(t);
   }, [path, enabled, version]);
-  const drop = (gone: readonly Mention[]) => setState((s) => (s && s.path === path ? { path, list: s.list.filter((m) => !gone.includes(m)) } : s));
+  const drop = (gone: readonly Mention[]) => setState((s) => (s && s.path === path ? { ...s, list: s.list.filter((m) => !gone.includes(m)) } : s));
   return { list: same ? state!.list : null, drop };
 }
 
@@ -373,13 +371,24 @@ export interface ConnectionsProps {
   live: { readonly note: NoteInfo } | null;
 }
 
+const NO_SOURCES: readonly string[] = [];
+
+/** Notes linked to or from `path` — the Connections header. Same set as the depth-1 graph. */
+function linkedNotes(out: readonly OutRow[], sources: readonly string[]): Set<string> {
+  const s = new Set(sources);
+  for (const o of out) if (o.path && isMarkdown(o.path)) s.add(o.path);
+  return s;
+}
+
 export function Connections({ path, live }: ConnectionsProps) {
   const t0 = performance.now();
   const version = kv.value;
   const deferred = indexDeferred.value;
   const isBuilding = indexBusy.value;
-  const collapsed = collapsedSections.value;
   const files = app.files.value;
+  const depth = graphDepth.value;
+  // Collapsed by default: then only the header count below is computed.
+  const open = isSectionOpen('connections', false);
   const info = deferred ? undefined : index.note(path);
   const known = !!info;
 
@@ -392,8 +401,12 @@ export function Connections({ path, live }: ConnectionsProps) {
       links.map((link) => ({ link, path: deferred ? resolveCheap(path, link, files, fileSet!) : link.kind === 'wiki' ? index.resolve(link.target, path) : resolveCheap(path, link, files, fileSet!) })),
     );
   }, [path, version, info, live, deferred, files]);
+  // No context snippets: cheap enough for the header of a collapsed section.
+  const sources = useMemo(() => (deferred ? NO_SOURCES : index.backlinkSources(path)), [path, version, deferred]);
+  const linked = useMemo(() => linkedNotes(out, sources), [out, sources]);
+  // Open only: the lists, the graph, related notes and the mention scan.
   const back = useMemo(() => {
-    if (deferred) return [];
+    if (deferred || !open) return [];
     const groups = new Map<string, ReturnType<typeof index.backlinks>>();
     for (const b of index.backlinks(path)) {
       const g = groups.get(b.from);
@@ -401,24 +414,59 @@ export function Connections({ path, live }: ConnectionsProps) {
       else groups.set(b.from, [b]);
     }
     return [...groups];
-  }, [path, version, deferred]);
-  const related = useMemo(() => (known ? relatedNotes(index, path) : []), [path, version, known]);
-  const tags = useMemo(() => (known ? sharedTags(index, path) : (live?.note.tags ?? []).map((tag) => ({ tag, count: 0 }))), [path, version, known, live]);
-  const mentions = useMentions(path, !deferred && !collapsed['cn-mentions'], version);
+  }, [path, version, deferred, open]);
+  const related = useMemo(() => (known && open ? relatedNotes(index, path) : []), [path, version, known, open]);
+  const tags = useMemo(() => (!open ? [] : known ? sharedTags(index, path) : (live?.note.tags ?? []).map((tag) => ({ tag, count: 0 }))), [path, version, known, live, open]);
+  const graph = useMemo(() => (open && !deferred ? localGraph(index, path, depth, GRAPH_CAP[depth]) : null), [path, version, depth, open, deferred]);
+  const mentions = useMentions(path, open && !deferred, version);
 
   useLayoutEffect(() => record(connectionsPerf.render, performance.now() - t0));
 
-  const backCount = back.reduce((n, [, items]) => n + items.length, 0);
   const missing = out.filter((o) => !o.path).length;
-  const neighbours = new Set<string>();
-  for (const o of out) if (o.path && isMarkdown(o.path)) neighbours.add(o.path);
-  for (const [from] of back) neighbours.add(from);
+  const linksTo = `links to ${plural(out.length - missing, 'note')}${missing ? ` (+${missing} not created yet)` : ''}`;
+  const head = {
+    id: 'connections',
+    title: 'Connections',
+    count: linked.size,
+    countTitle: deferred ? `${plural(linked.size, 'linked note')}: this one ${linksTo} · incoming links need the search index` : `${plural(linked.size, 'linked note')}: ${sources.length} link here, this one ${linksTo}`,
+    defaultOpen: false,
+  };
+  if (!open) return <Section {...head}>{null}</Section>;
 
+  const outgoing = (
+    <Sub id="cn-out" title="Links to" count={out.length} countTitle={missing ? `${missing} not created yet` : undefined}>
+      <OutgoingRows path={path} rows={out} />
+    </Sub>
+  );
+  const tagsSub = (title: string, known: boolean) => (
+    <Sub id="cn-tags" title={title} count={tags.length} countTitle={known ? 'This note’s tags and how many other notes have them' : undefined}>
+      {tags.length ? <TagRows path={path} tags={tags} known={known} /> : <Hint>This note has no tags.</Hint>}
+    </Sub>
+  );
+
+  if (deferred)
+    return (
+      <Section {...head}>
+        {outgoing}
+        {tagsSub('Tags', false)}
+        <Hint>
+          Backlinks, mentions, related notes and the graph come from the search index, built on demand.{' '}
+          <button class="se-ov-lvl-btn se-cn-build" onClick={() => void searchClient.start()}>
+            Build now
+          </button>
+        </Hint>
+      </Section>
+    );
+
+  const backCount = back.reduce((n, [, items]) => n + items.length, 0);
+  const graphCount = graph ? graph.nodes.length - 1 : 0;
+  const mentionList = mentions.list;
+  const mentionCount: HeaderCount = !mentionList ? null : mentionList.length >= MENTION_SCAN ? `${MENTION_SCAN}+` : mentionList.length;
   const graphActions = (
     <div class="se-cn-actions">
       <div class="se-ov-levels" role="group" aria-label="Graph depth">
         {([1, 2] as const).map((d) => (
-          <button class={`se-ov-lvl-btn${graphDepth.value === d ? ' on' : ''}`} aria-pressed={graphDepth.value === d} title={d === 1 ? 'Direct links only' : 'Links of links too'} onClick={() => setDepth(d)}>
+          <button class={`se-ov-lvl-btn${depth === d ? ' on' : ''}`} aria-pressed={depth === d} title={d === 1 ? 'Direct links only' : 'Links of links too'} onClick={() => setDepth(d)}>
             {d}
           </button>
         ))}
@@ -429,37 +477,12 @@ export function Connections({ path, live }: ConnectionsProps) {
     </div>
   );
 
-  const outgoing = (
-    <Sub id="cn-out" title="Links to" count={out.length} countTitle={missing ? `${missing} not created yet` : undefined}>
-      <OutgoingRows path={path} rows={out} />
-    </Sub>
-  );
-
-  if (deferred)
-    return (
-      <Section id="connections" title="Connections" count={null}>
-        {outgoing}
-        {tags.length > 0 && (
-          <Sub id="cn-tags" title="Tags" count={tags.length}>
-            <TagRows path={path} tags={tags} known={false} />
-          </Sub>
-        )}
-        <Hint>
-          Backlinks, mentions, related notes and the graph come from the search index, built on demand.{' '}
-          <button class="se-ov-lvl-btn se-cn-build" onClick={() => void searchClient.start()}>
-            Build now
-          </button>
-        </Hint>
-      </Section>
-    );
-
-  const mentionList = mentions.list;
   return (
-    <Section id="connections" title="Connections" count={neighbours.size} countTitle={`${backCount} incoming · ${out.length} outgoing${missing ? ` (${missing} not created yet)` : ''}`}>
-      <Sub id="cn-graph" title="Local graph" actions={graphActions}>
-        <MiniGraph path={path} version={version} />
+    <Section {...head}>
+      <Sub id="cn-graph" title="Local graph" count={graphCount} countTitle={depth === 1 ? 'Notes in the graph: linked to or from this one' : 'Notes in the graph: links and links of links'} actions={graphActions}>
+        {graph && <MiniGraph path={path} data={graph} />}
       </Sub>
-      <Sub id="cn-in" title="Linked from" count={backCount}>
+      <Sub id="cn-in" title="Linked from" count={backCount} countTitle={`${plural(backCount, 'link')} from ${plural(back.length, 'note')}`}>
         {back.length === 0 ? (
           <Hint>{isBuilding ? indexingText() : 'No notes link here yet.'}</Hint>
         ) : (
@@ -490,7 +513,8 @@ export function Connections({ path, live }: ConnectionsProps) {
       <Sub
         id="cn-mentions"
         title="Unlinked mentions"
-        count={collapsed['cn-mentions'] ? null : mentionList ? mentionList.length : '…'}
+        count={mentionCount}
+        countTitle={`Plain-text mentions of “${stem(path)}” in other notes`}
         actions={
           mentionList && mentionList.length > 1 ? (
             <button
@@ -515,11 +539,7 @@ export function Connections({ path, live }: ConnectionsProps) {
           <MentionRows path={path} list={mentionList} drop={mentions.drop} />
         )}
       </Sub>
-      {tags.length > 0 && (
-        <Sub id="cn-tags" title="Shared tags" count={tags.length}>
-          <TagRows path={path} tags={tags} known />
-        </Sub>
-      )}
+      {tagsSub('Shared tags', true)}
       <Sub id="cn-related" title="Related" count={related.length} countTitle="Notes that link to the same notes, are linked from the same notes or share tags">
         {related.length === 0 ? (
           <Hint>{isBuilding ? indexingText() : 'Nothing related yet — notes that cite the same notes or share tags show up here.'}</Hint>

@@ -8,14 +8,14 @@ import { persistSession } from './documents';
 import { runCommand, prettyKey } from './commands';
 import { newNote, startCreate } from './fileops';
 import { collapseAll } from './FileTree';
-import { openWorkspaceMenu, ZenButton } from './Shelf';
-import { PANEL_KEYS } from './ui';
+import { openWorkspaceMenu, panelMenu, ZenButton } from './Shelf';
+import { PANEL_KEYS, menuPanels } from './ui';
 
 export function ActivityBar() {
   const current = app.sidebarPanel.value;
   return (
     <nav class="se-activity" aria-label="Sidebar panels">
-      {app.panels.value.map((p) => {
+      {menuPanels(app.panels.value, app.settings.value['sidebar.panels'], app.sidebarVisible.value && current).map((p) => {
         const active = app.sidebarVisible.value && p.id === current;
         const keys = PANEL_KEYS[p.id];
         return (
@@ -34,6 +34,7 @@ export function ActivityBar() {
               }
               persistSession();
             }}
+            onContextMenu={(e) => panelMenu(e, p.id)}
           >
             <PanelIcon icon={p.icon} size={20} />
           </button>

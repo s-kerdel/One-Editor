@@ -35,6 +35,9 @@ const PATHS: Record<string, string> = {
   lock: 'M5 11h14v10H5z|M8 11V7a4 4 0 0 1 8 0v4',
   // zen mode toggle (shelf foot, classic icon bar, zen strips): four corners = the screen
   zen: 'M3 8V3h5|M16 3h5v5|M21 16v5h-5|M8 21H3v-5',
+  bookmark: 'm19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z', // Bookmarks panel (pill / icon bar)
+  // go back (start of the tab strip, nav/buttons.tsx; forward draws it mirrored, app.css)
+  arrowLeft: 'M19 12H5|m12 19-7-7 7-7',
 };
 
 export type IconName = keyof typeof PATHS;
@@ -84,8 +87,6 @@ export function PanelIcon({ icon, size = 20 }: { icon: string; size?: number }) 
     const sized = icon.replace(/\swidth="\d+"/, ` width="${size}"`).replace(/\sheight="\d+"/, ` height="${size}"`);
     return <span class="se-icon-raw" dangerouslySetInnerHTML={{ __html: sized }} />;
   }
-  const legacy: Record<string, IconName> = { '🗀': 'files', '📁': 'files', '🔍': 'search', '🔎': 'search', '🔗': 'link', '☰': 'outline', '#': 'hash' };
-  if (legacy[icon]) return <Icon name={legacy[icon]} size={size} />;
   registered.value; // a name a lazy chunk registers later: redraw as an icon then
   return <span class="se-icon-text">{icon.slice(0, 2)}</span>;
 }

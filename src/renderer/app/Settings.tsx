@@ -6,13 +6,16 @@ import { app } from './app';
 import { addIcons, Icon } from './icons';
 import './icon-pack'; // shell icons the first screen doesn't draw (check, refresh, pencil, …)
 import { BuildFooter } from './build-info';
-import { listCommands, onCommandsChanged, prettyKey } from './commands';
+import { listCommands, onCommandsChanged, prettyKey, runCommand } from './commands';
 import { flushSettings, setViewMode, updateSettings, ZOOM_STEPS } from './settings';
 import { SECTIONS, SETTINGS, filterSettings, isChanged, parseList, parseNumber, resetPatch, shortcutRows, valueOf, type Choice, type SectionId, type SettingDef } from './settings-registry';
 import './overlays.css'; // steppers
 import './settings-ui.css';
 import { primeClassic } from './classic-loader';
 import { lazyComponent } from './lazy';
+import { SidebarMenuControl } from './SidebarMenuSetting';
+// The sidebar pills' right-click "Hide …" (Popups) loads this chunk for the write.
+export { setPanelHidden } from './panel-menu';
 
 // Settings → Browser mode: live server state + start / stop (the desktop-only web-server-ui chunk).
 const WebServerPanel = lazyComponent(() => import('../webserver/web-server-ui').then((m) => m.SettingsPanel));
@@ -24,8 +27,16 @@ const McpPanel = lazyComponent(() => import('../mcp/mcp-ui').then((m) => m.Setti
 const visibleSections = () => (app.backend.kind === 'electron' ? SECTIONS : SECTIONS.filter((sec) => !sec.desktopOnly));
 
 let pendingSection: SectionId | null = null;
-/** The next Settings open scrolls to this section (e.g. the web server dialog's "Port and access…"). */
-export const requestSection = (id: SectionId) => void (pendingSection = id);
+let pendingRow: string | null = null;
+/** The next Settings open scrolls to this section (e.g. the web server dialog's "Port and access…"); `row`: and to
+ *  that setting's row, focusing its control (the sidebar pills' "Customize sidebar…"). */
+export const requestSection = (id: SectionId, row?: string) => void ((pendingSection = id), (pendingRow = row ?? null));
+
+/** "Customize sidebar…" (the pills' / icon bar's right-click menu, the palette): Settings at the Sidebar menu row. */
+export function customizeSidebar() {
+  requestSection('appearance', 'sidebar.panels');
+  if (!app.overlay.value) void runCommand('app.settings');
+}
 
 // Icons only this lazily loaded chunk draws (see addIcons).
 addIcons({ shield: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z|M12 8v4|M12 16h.01', history: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8|M3 3v5h5|M12 7v5l4 2', monitor: 'M3 4h18v12H3z|M8 20h8|M12 16v4', keyboard: 'M2 6h20v12H2z|M6 10h.01|M10 10h.01|M14 10h.01|M18 10h.01|M7 14h10', printer: 'M6 9V3h12v6|M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2|M6 14h12v7H6z', globe: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z|M2 12h20|M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z' });
@@ -63,6 +74,7 @@ function choicesFor(def: SettingDef, current: unknown): Choice[] {
 function describeDefault(def: SettingDef): string {
   const d = def.default;
   if (def.control.type === 'toggle') return d ? 'on' : 'off';
+  if (def.control.type === 'panels') return 'every panel, default order';
   if (def.control.type === 'color') return def.control.swatches.find((o) => o.v === d)?.label ?? String(d);
   if (def.control.type === 'font') return def.control.presets.find((o) => o.v === d)?.label ?? String(d);
   if (def.control.type === 'select' || def.control.type === 'segmented') return choicesFor(def, d).find((o) => o.v === d)?.label ?? String(d);
@@ -179,6 +191,8 @@ function Control({ def, s, disabled }: { def: SettingDef; s: Values; disabled: b
     case 'list':
       // Keyed on the committed value: a reset (or an external change) replaces the draft.
       return <ListControl key={(value as string[]).join('\n')} def={def} value={Array.isArray(value) ? (value as string[]) : []} disabled={disabled} />;
+    case 'panels':
+      return <SidebarMenuControl id={def.id} />;
   }
 }
 
@@ -313,7 +327,7 @@ function SettingRow({ def, s }: { def: SettingDef; s: Values }) {
   const desktopOff = !!def.desktopOnly && !app.backend.setZoom;
   const disabled = desktopOff || (def.enabledWhen ? !def.enabledWhen(s) : false);
   const changed = isChanged(def, s);
-  const wide = def.control.type === 'list';
+  const wide = def.control.type === 'list' || def.control.type === 'panels';
   // The window keeps the frame it was created with until a restart.
   const restart = def.key === 'windowFrame' && !!app.backend.frame && !!app.backend.relaunch && valueOf(def, s) !== app.backend.frame;
   return (
@@ -462,8 +476,14 @@ export function SettingsOverlay() {
   }, [q]);
   useEffect(() => {
     const id = pendingSection;
-    pendingSection = null;
+    const row = pendingRow;
+    pendingSection = pendingRow = null;
     if (id) goto(id);
+    const el = row ? body.current?.querySelector<HTMLElement>(`[data-row="${row}"]`) : null;
+    if (el) {
+      el.scrollIntoView({ block: 'center' });
+      el.querySelector<HTMLElement>('.se-set-control [tabindex], .se-set-control input, .se-set-control button')?.focus({ preventScroll: true });
+    }
   }, []);
 
   return (

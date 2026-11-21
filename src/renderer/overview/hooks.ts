@@ -1,8 +1,8 @@
 // Overview panel plumbing: live document text (debounced), cursor-driven highlight without
-// re-rendering on every cursor move, roving keyboard focus for the lists, persisted section state.
+// re-rendering on every cursor move, roving keyboard focus for the lists. Section state: ./sections.
 import type { RefObject } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { signal, type ReadonlySignal } from '@preact/signals';
+import type { ReadonlySignal } from '@preact/signals';
 import type { KnowledgeApi } from '../../knowledge/index';
 import { app } from '../app/app';
 import * as ui from '../app/ui';
@@ -87,34 +87,6 @@ export function useKnowledge(): Knowledge | null {
   }, [!!k]);
   if (k) void k.changed.value; // subscribe
   return k ?? null;
-}
-
-// ---------------------------------------------------------------- section state
-
-const SECTIONS_KEY = 'sec-edit-overview-sections';
-
-function readCollapsed(): Record<string, boolean> {
-  try {
-    const v = JSON.parse(localStorage.getItem(SECTIONS_KEY) ?? '{}');
-    return v && typeof v === 'object' ? v : {};
-  } catch {
-    return {};
-  }
-}
-
-/** Collapsed sections (id → true), remembered across sessions. */
-export const collapsedSections = signal<Record<string, boolean>>(readCollapsed());
-
-export function setSectionCollapsed(id: string, collapsed: boolean) {
-  const next = { ...collapsedSections.value };
-  if (collapsed) next[id] = true;
-  else delete next[id];
-  collapsedSections.value = next;
-  try {
-    localStorage.setItem(SECTIONS_KEY, JSON.stringify(next));
-  } catch {
-    /* storage unavailable: keep it for this session */
-  }
 }
 
 // ---------------------------------------------------------------- keyboard: roving focus

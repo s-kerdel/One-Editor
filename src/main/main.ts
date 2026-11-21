@@ -28,7 +28,7 @@ import { WEB_SERVER_CHANNELS } from '../shared/web-server';
 import { UpdateCheckService, registerUpdateCheckIpc } from './update-check';
 import { UPDATE_CHECK_CHANNELS, UPDATE_ENDPOINTS, isAllowedUpdateUrl } from '../shared/update-check';
 import { NAV_CHANNEL, navFromAppCommand } from '../shared/nav';
-import { McpService, mcpLaunch, registerMcpIpc } from './mcp';
+import { McpService, foldersConfirm, mcpLaunch, registerMcpIpc } from './mcp';
 import { platformTrash } from '../backend/trash';
 import { MCP_CHANNELS } from '../shared/mcp';
 import os from 'node:os';
@@ -210,9 +210,13 @@ function main() {
   // Settings → MCP server: main owns mcp.json; nothing runs here (MCP clients start dist/mcp/cli.mjs
   // themselves). Turning it on, sharing a folder and allowing writes are native dialogs the page cannot answer.
   const mcpCli = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'mcp', 'cli.mjs') : path.join(__dirname, '../mcp/cli.mjs');
-  // Tests: SEC_EDIT_TEST_MCP_CONFIRM = allow | deny (default deny), SEC_EDIT_TEST_MCP_FOLDER = the folder the dialog "picks" (SEC_EDIT_TEST only).
+  // Tests: SEC_EDIT_TEST_MCP_CONFIRM = allow | deny (default deny; each box is logged as [sec-edit:mcp-confirm]),
+  // SEC_EDIT_TEST_MCP_FOLDER = the folders the dialog "picks" (path.delimiter-separated) or cancel (SEC_EDIT_TEST only).
   const mcpConfirm = async (o: Electron.MessageBoxOptions) => {
-    if (isTest) return process.env.SEC_EDIT_TEST_MCP_CONFIRM === 'allow';
+    if (isTest) {
+      console.log(`[sec-edit:mcp-confirm] ${JSON.stringify({ title: o.title, message: o.message, detail: o.detail, buttons: o.buttons })}`);
+      return process.env.SEC_EDIT_TEST_MCP_CONFIRM === 'allow';
+    }
     if (!win || win.isDestroyed()) return false;
     return (await dialog.showMessageBox(win, { type: 'question', defaultId: 1, cancelId: 1, noLink: true, ...o })).response === 0;
   };
@@ -235,11 +239,15 @@ function main() {
         message: `Let MCP clients change files in “${f.alias}”?`,
         detail: `${f.path}\n\nAn AI model can then create, edit and move text files there, and delete them to the ${process.platform === 'win32' ? 'Recycle Bin' : 'trash'} (never permanently). Each change can be reverted in Settings → MCP server. Hidden files, key files and excluded folders stay off limits.`,
       }),
-    pickFolder: async () => {
-      if (isTest) return process.env.SEC_EDIT_TEST_MCP_FOLDER && process.env.SEC_EDIT_TEST_MCP_FOLDER !== 'cancel' ? process.env.SEC_EDIT_TEST_MCP_FOLDER : null;
-      const r = await dialog.showOpenDialog(win!, { title: 'Share a folder with MCP clients', properties: ['openDirectory'] });
-      return r.canceled ? null : (r.filePaths[0] ?? null);
+    pickFolders: async () => {
+      const stub = isTest ? (process.env.SEC_EDIT_TEST_MCP_FOLDER ?? 'cancel') : null;
+      if (stub !== null) return stub === 'cancel' ? [] : stub.split(path.delimiter).filter(Boolean);
+      // Ctrl / Shift (macOS: Cmd / Shift) + click picks several; `message` is the macOS panel's only caption.
+      const r = await dialog.showOpenDialog(win!, { title: 'Share folders with MCP clients', message: 'Pick one or more folders to share read-only', properties: ['openDirectory', 'multiSelections'] });
+      return r.canceled ? [] : r.filePaths;
     },
+    // A one-button notice (nothing left to add) is never a yes.
+    confirmFolders: async (q) => (await mcpConfirm(foldersConfirm(q))) && q.add.length > 0,
     realpath: (abs) => fsp.realpath(abs),
     isDirectory: (abs) => fsp.stat(abs).then((st) => st.isDirectory(), () => false),
     randomId: () => crypto.randomBytes(8).toString('hex'),
@@ -259,7 +267,7 @@ function main() {
         buttons: ['Turn off', 'Cancel'],
         title: 'Turn off undo copies?',
         message: 'Stop keeping undo copies of AI changes?',
-        detail: 'Changes made from now on cannot be reverted in Settings → MCP server. Copies already kept stay until they expire. Deletes always keep a copy.',
+        detail: 'Changes made from now on cannot be reverted in Settings → MCP server. Copies already kept stay until they expire. File deletes still keep a copy; deleted folders are restored from the Recycle Bin.',
       }),
     confirmToken: (q) =>
       mcpConfirm(

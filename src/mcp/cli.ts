@@ -91,6 +91,7 @@ const server = new OneMcpServer({
   transport: 'stdio',
   token: { id: token.id, name: token.name },
   idleMs: Number(process.env.SEC_EDIT_MCP_IDLE_MS) || undefined,
+  elicitTimeoutMs: Number(process.env.SEC_EDIT_MCP_ELICIT_MS) || undefined, // tests (dead when packaged)
   indexWaitMs: Number(process.env.SEC_EDIT_MCP_INDEX_WAIT_MS) || undefined,
 });
 server.applyConfig(config);

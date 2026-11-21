@@ -10,7 +10,7 @@ test('shelf is the default: workspace card, jump pill, panel pills, footer, edit
   await expect(page.locator('.se-root.ui-shelf')).toBeVisible();
   await expect(page.locator('.se-activity')).toHaveCount(0);
   await expect(page.getByTestId('workspace-name')).toHaveText('workspace');
-  await expect(page.locator('.se-nav-btn')).toHaveCount(6); // files, search, git, outline, backlinks, tags
+  await expect(page.locator('.se-nav-btn')).toHaveCount(7); // files, search, git, bookmarks, outline, backlinks, tags
   await expect(page.locator('.se-nav-btn.active')).toHaveAttribute('data-panel', 'files');
   // The status bar lives inside the editor card.
   await expect(page.locator('.se-content .se-status')).toHaveCount(1);

@@ -223,6 +223,9 @@ html[data-theme='light'] .se-ws-avatar { color: hsl(var(--ws-hue) 55% 42%); }@me
 .se-shelf-reveal { flex: none; display: grid; place-items: center; width: 40px; height: var(--tab-h); padding: 0; border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); background: transparent; color: var(--text-faint); transition: background 0.1s, color 0.1s; }
 .se-shelf-reveal:hover { background: var(--bg-hover); color: var(--text); }
 .se-shelf-reveal:active { background: var(--bg-active); }
+/* Go back / forward (nav/buttons.tsx): one cell at the strip's start, ruled like a tab; right after "show sidebar" it joins that cell. */
+.se-navbtns { flex: none; display: flex; align-items: center; padding: 0 3px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.se-shelf-reveal:has(+ .se-navbtns) { width: 34px; border-right: 0; }
 
 .se-panel-head { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 8px 0 12px; flex: none; }
 .se-panel-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -265,8 +268,12 @@ html[data-theme='light'] .se-ws-avatar { color: hsl(var(--ws-hue) 55% 42%); }@me
 .se-tree-row.active { background: var(--bg-shelf-raised); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.16), inset 0 0 0 1px var(--border); }
 .se-tree-row.active .se-tree-name { font-weight: 600; }
 .ui-shelf .se-tree-row.active .se-ficon { color: var(--accent); }
-.se-tree:focus-visible .se-tree-row.selected { box-shadow: inset 0 0 0 1.5px var(--focus-ring); }
+.se-tree:focus-visible .se-tree-row.focused { box-shadow: inset 0 0 0 1.5px var(--focus-ring); }
 .se-tree-row.selected:not(.active) { background: var(--bg-hover); }
+/* Several rows selected: the selection tint (accent-derived, both themes); the focused row keeps a ring while the tree has focus. */
+.se-tree.multi .se-tree-row.selected { background: var(--selection); color: var(--text); }
+.se-tree.multi:focus .se-tree-row.focused { box-shadow: inset 0 0 0 1.5px var(--focus-ring); }
+.se-tree-sel { flex: none; padding: 4px 14px 6px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .se-tree-row.drop { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .se-tree-row.creating { cursor: default; background: transparent; box-shadow: none; }
 .se-tree-lead { position: relative; width: 16px; height: 16px; flex: none; display: grid; place-items: center; }
@@ -349,6 +356,9 @@ html[data-folders='one'] .se-root .se-ficon-folder { color: var(--folder-color, 
 .se-width-btn[data-width='wide'], .se-width-btn[data-width='full'] { color: var(--accent); }
 .se-tools-sep { width: 1px; height: 16px; margin: 0 2px; background: var(--border); }
 .se-ov-toggle.on { color: var(--accent); }
+.se-navbtn { width: 23px; }
+.se-navbtn + .se-navbtn .se-icon { transform: scaleX(-1); } /* forward: the back arrow, mirrored (one startup glyph) */
+.se-navbtn[aria-disabled='true'] { opacity: 0.4; background: none; color: var(--text-faint); cursor: default; }
 .se-modes { display: flex; gap: 2px; padding: 2px; border-radius: var(--radius); background: var(--bg-hover); }
 .se-mode { width: 28px; height: 24px; display: grid; place-items: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); transition: background 0.1s, color 0.1s; }
 .se-mode:hover { color: var(--text); }

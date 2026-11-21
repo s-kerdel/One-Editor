@@ -121,6 +121,39 @@ export class NavHistory {
     else this.index = Math.min(this.index, this.entries.length - 1);
   }
 
+  /**
+   * The places back (-1) or forward (1) of here, nearest first, as repeated step() calls would reach
+   * them (gone files and repeats of the place before skipped), without moving. `[0]` = where one step goes.
+   */
+  places(dir: 1 | -1, max: number, exists: (path: string) => boolean = () => true): NavEntry[] {
+    const out: NavEntry[] = [];
+    let last = this.current;
+    for (let i = this.index + dir; out.length < max && i >= 0 && i < this.entries.length; i += dir) {
+      const e = this.entries[i];
+      if (!exists(e.path) || (last && sameSpot(e, last))) continue;
+      out.push(e);
+      last = e;
+    }
+    return out;
+  }
+
+  /** Straight to `entry` (one of places()); the entries in between stay. False when it left the history meanwhile. */
+  goTo(entry: NavEntry): boolean {
+    const i = this.entries.indexOf(entry);
+    if (i < 0) return false;
+    this.index = i;
+    this.pushedAt = -Infinity;
+    return true;
+  }
+
+  /** The entry jumped to could not be shown: forget it and stand at `at` (where we were) again. */
+  forget(entry: NavEntry, at: NavEntry | null): void {
+    const i = this.entries.indexOf(entry);
+    if (i >= 0) this.entries.splice(i, 1);
+    const j = at ? this.entries.indexOf(at) : -1;
+    this.index = j >= 0 ? j : Math.min(this.index, this.entries.length - 1);
+  }
+
   /** A file or folder was renamed / moved: entries follow it. */
   rename(from: string, to: string): void {
     for (const e of this.entries) {

@@ -22,12 +22,17 @@ import { absolutePath, copyText, deletePaths, duplicate, errText, exists, expand
 import { RpcError } from '../platform';
 import { extname, join, stem } from '@shared/paths';
 import { filesUnder, findNode, insertNode, moveNode, removeNode } from './tree-model';
+import { OPEN_MAX, openPaths, topLevel } from './tree-select';
 import { discardDoc } from './documents';
 import { renameDocs } from './doc-save';
 import { batch } from '@preact/signals';
 import { collapseAll } from './FileTree';
 import { closeAll } from './Tabs';
 import { gitUi } from '../git/install';
+
+// Bookmarks: the panel's chunk (with its store) loads with this one: menu items, rename following, the list.
+let bm: typeof import('../bookmarks/Panel') | null = null;
+const bmLoad = import('../bookmarks/Panel').then((m) => (bm = m));
 
 import { installSettingsSync } from './settings-sync';
 
@@ -51,23 +56,36 @@ if ((globalThis as { secEditBridge?: { updates?: unknown } }).secEditBridge?.upd
 
 // ---- file actions behind a dialog / menu ----
 
-export async function deletePathsNow(paths: string[]) {
+export async function deletePathsNow(list: string[]) {
+  const paths = topLevel(list); // a folder takes its selected children along
   if (!paths.length) return;
-  const label = paths.length === 1 ? `“${basename(paths[0])}”` : `${paths.length} items`;
+  const one = paths.length === 1;
   if (app.settings.value.confirmDelete !== false) {
-    const isDir = paths.length === 1 && findNode(app.tree.value, paths[0])?.kind === 'dir';
-    const ok = await ui.confirmDialog(`Delete ${label}?`, `${isDir ? 'The folder and everything in it' : 'It'} will be moved to the ${trashName()}.`, `Move to ${trashName()}`, true);
-    if (!ok) return;
+    const dirs = paths.some((p) => findNode(app.tree.value, p)?.kind === 'dir');
+    const where = `will be moved to the ${trashName()}.`;
+    const r = await ui.ask({
+      title: `Delete ${one ? `“${basename(paths[0])}”` : `${paths.length} items`}?`,
+      message: one ? `${dirs ? 'The folder and everything in it' : 'It'} ${where}` : `They ${where}${dirs ? ' Folders go with everything in them.' : ''}`,
+      details: one ? undefined : paths, // the dialog lists the first few
+      cancelValue: 'cancel',
+      buttons: [
+        { label: 'Cancel', value: 'cancel' },
+        { label: `Move to ${trashName()}`, value: 'ok', kind: 'danger' },
+      ],
+    });
+    if (r.value !== 'ok') return;
   }
-  for (const p of paths) {
+  let permanentOk = false; // asked once for the whole list: no bin for one means no bin for the rest
+  for (const [i, p] of paths.entries()) {
     const node = findNode(app.tree.value, p);
     const files = node?.kind === 'dir' ? filesUnder(node) : [p];
     try {
       await app.backend.remove(p);
     } catch (err) {
       if (err instanceof RpcError && err.code === 'ETRASH') {
-        const really = await ui.confirmDialog(`The ${trashName()} is not available`, `Delete “${basename(p)}” permanently? This cannot be undone.`, 'Delete permanently', true);
-        if (!really) continue;
+        const rest = paths.length - i;
+        if (!permanentOk && !(await ui.confirmDialog(`The ${trashName()} is not available`, `Delete ${rest === 1 ? `“${basename(p)}”` : `the ${rest} remaining items`} permanently? This cannot be undone.`, 'Delete permanently', true))) return;
+        permanentOk = true;
         try {
           await app.backend.remove(p, { permanent: true });
         } catch (e2) {
@@ -178,16 +196,26 @@ async function movePath(from: string, to: string): Promise<string | null> {
     setTree((t) => moveNode(t, from, to));
     renameDocs(from, to, files);
   });
+  void bmLoad.then((m) => m.renamed(from, to, true)); // bookmarks on it or inside it follow (a folder too, even an empty one)
   return null;
 }
 
-export async function moveIntoNow(paths: string[], targetDir: string) {
+export async function moveIntoNow(list: string[], targetDir: string) {
+  const paths = topLevel(list); // a folder carries its selected children
+  if (paths.some((p) => targetDir === p || targetDir.startsWith(p + '/'))) return void app.toast('Cannot move a folder into itself', 'error');
+  const moved: string[] = [];
   for (const p of paths) {
     if (dirname(p) === targetDir) continue;
-    const err = await movePath(p, join(targetDir, basename(p)));
+    const to = join(targetDir, basename(p));
+    const err = await movePath(p, to);
     if (err) app.toast(`Move ${basename(p)}: ${err}`, 'error');
-    else expandTo(join(targetDir, basename(p)));
+    else {
+      expandTo(to);
+      moved.push(to);
+    }
   }
+  // Several moved: they stay selected where they landed.
+  if (moved.length > 1) ui.setTreeSel({ focus: moved[moved.length - 1], anchor: moved[0], paths: new Set(moved) });
 }
 
 // ---- paths handed to the app ----
@@ -314,12 +342,54 @@ function parentOfRoot(): string | null {
   return parent;
 }
 
-export function rowMenu(node: TreeNode | null): ui.MenuItem[] {
+/** "Bookmark" / "Remove bookmark" (the Bookmarks panel): all of them bookmarked → remove, else add the rest. */
+function bookmarkItem(paths: string[]): ui.MenuItem {
+  const add = paths.filter((p) => !bm?.isBookmarked(p)).length;
+  const n = add || paths.length;
+  return { label: add ? (n > 1 ? `Bookmark ${n} items` : 'Bookmark') : n > 1 ? `Remove ${n} bookmarks` : 'Remove bookmark', icon: 'bookmark', run: () => bmLoad.then((m) => m.toggleBookmarks(paths)) };
+}
+
+/** Right-click on a sidebar panel pill / classic icon (Shelf's panelMenu). */
+export function panelMenu(id: string): ui.MenuItem[] {
+  const p = app.panels.value.find((x) => x.id === id);
+  const hidden: unknown[] = [].concat((app.settings.value['sidebar.panels'] as { hidden?: never } | null)?.hidden ?? []);
+  const settings = () => import('./Settings'); // the writes live in its chunk (app/panel-menu.ts)
+  return [
+    // At least one entry stays in the menu.
+    ...(p ? [{ label: `Hide ${p.title}`, disabled: !app.panels.value.some((x) => x.id !== id && !hidden.includes(x.id)), run: () => settings().then((m) => m.setPanelHidden(id, true)) }, { separator: true }] : []),
+    { label: 'Customize sidebar…', icon: 'settings', run: () => settings().then((m) => m.customizeSidebar()) },
+  ];
+}
+
+/** Several rows selected: only what works on all of them. Rename, new note / folder here, duplicate, reveal,
+ *  export and diff are about one item, so they are not offered. */
+function selectionMenu(paths: string[]): ui.MenuItem[] {
+  const files = paths.filter((p) => findNode(app.tree.value, p)?.kind === 'file');
+  const top = topLevel(paths);
+  const n = paths.length;
+  return [
+    ...(files.length
+      ? [{ label: files.length === 1 ? 'Open' : files.length > OPEN_MAX ? `Open the first ${OPEN_MAX} files` : `Open ${files.length} files`, icon: 'file', keys: 'Enter', run: () => openPaths(files) }, { separator: true }]
+      : []),
+    bookmarkItem(top),
+    { separator: true },
+    { label: top.length === 1 ? 'Delete' : `Delete ${top.length} items`, icon: 'trash', keys: 'Del', danger: true, run: () => deletePathsNow(top) },
+    { separator: true },
+    { label: 'Copy paths', icon: 'copy', run: () => copyText(paths.map(absolutePath).join('\n'), `${n} paths`) },
+    { label: 'Copy relative paths', run: () => copyText(paths.join('\n'), `${n} relative paths`) },
+    ...(gitUi.value?.menuMany?.(paths) ?? []), // stage / unstage the files among them
+  ];
+}
+
+/** `sel`: the tree's selection in row order; several rows get the selection menu. */
+export function rowMenu(node: TreeNode | null, sel: string[] = []): ui.MenuItem[] {
+  if (sel.length > 1) return selectionMenu(sel);
   const isDir = node?.kind === 'dir';
   const folder = node ? (isDir ? node.path : dirname(node.path)) : '';
   const items: ui.MenuItem[] = [];
   if (node && !isDir) items.push({ label: 'Open', icon: 'file', run: () => app.openFile(node.path) });
-  if (node && isDir) items.push({ label: 'Open as project', icon: 'folderOpen', run: () => openAsProject(absolutePath(node.path)) }, { separator: true });
+  if (node && isDir) items.push({ label: 'Open as project', icon: 'folderOpen', run: () => openAsProject(absolutePath(node.path)) });
+  if (node) items.push(bookmarkItem([node.path]), { separator: true });
   items.push({ label: 'New note', icon: 'filePlus', keys: 'Ctrl+N', run: () => newNote(folder) }, { label: 'New folder', icon: 'folderPlus', run: () => startCreate('dir', folder) });
   if (node) {
     items.push(
@@ -355,6 +425,8 @@ export function tabMenu(path: string): ui.MenuItem[] {
     { label: 'Close others', run: () => closeOthers(path) },
     { label: 'Close to the right', run: () => closeRight(path) },
     { label: 'Close all', run: closeAll },
+    { separator: true },
+    bookmarkItem([path]),
     { separator: true },
     { label: 'Copy path', icon: 'copy', run: () => copyText(absolutePath(path)) },
     { label: 'Copy relative path', run: () => copyText(path, 'Relative path') },
@@ -461,8 +533,12 @@ export function ContextMenuHost() {
     const y = m.y + r.height > innerHeight - 4 ? Math.max(4, m.y - r.height) : m.y;
     setPos({ x, y });
     setSel(-1);
-    ref.current.focus();
   }, [m]);
+  // Focus once the menu is placed: it renders with visibility:hidden until then, and a hidden element can't
+  // take focus (↑ ↓ Enter in context menus silently didn't work before).
+  useLayoutEffect(() => {
+    if (m && pos) ref.current?.focus();
+  }, [m, pos]);
   useEffect(() => {
     if (!m) return;
     const close = () => (ui.contextMenu.value = null);

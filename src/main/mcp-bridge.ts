@@ -1,6 +1,6 @@
 // MCP part of the sandboxed preload bridge (`secEditBridge.mcp`). Imports nothing but constants;
 // coerces argument types only — main (src/main/mcp.ts) validates and decides (native dialogs included).
-// There is no way to pass a folder path: sharing one always goes through main's folder dialog.
+// There is no way to pass a folder path: sharing folders (one or several) always goes through main's folder dialog.
 import { MCP_CHANNELS as CH } from '../shared/mcp';
 
 interface IpcRendererLike {
@@ -13,7 +13,7 @@ export function mcpBridge(ipc: IpcRendererLike) {
   return {
     status: () => ipc.invoke(CH.status),
     setEnabled: (on: boolean, client?: string) => ipc.invoke(CH.setEnabled, on === true, String(client ?? '')),
-    addFolder: () => ipc.invoke(CH.addFolder),
+    addFolder: () => ipc.invoke(CH.addFolder), // no arguments: main's dialog picks, main's confirm decides
     removeFolder: (id: string) => ipc.invoke(CH.removeFolder, String(id)),
     setMode: (id: string, mode: string) => ipc.invoke(CH.setMode, String(id), String(mode)),
     activity: () => ipc.invoke(CH.activity),

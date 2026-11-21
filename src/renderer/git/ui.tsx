@@ -172,3 +172,21 @@ export function fileMenuItems(store: GitStore, path: string): ui.MenuItem[] {
   if (m?.staged && m.state !== 'conflicted') items.push({ label: 'Unstage', icon: 'minus', run: () => unstage(store, [path]) });
   return items.length ? [{ separator: true }, ...items] : [];
 }
+
+/** Tree menu for several selected rows: the same stage / unstage rules as one file, for the files among them. */
+export function manyMenuItems(store: GitStore, paths: string[]): ui.MenuItem[] {
+  if (!store.status.peek()?.ok) return [];
+  const marks = store.marks.peek();
+  const add = paths.filter((p) => {
+    const m = marks.file(p);
+    return m && m.state !== 'conflicted' && m.state !== 'ignored' && (m.unstaged || m.state === 'untracked') && !m.submodule;
+  });
+  const out = paths.filter((p) => {
+    const m = marks.file(p);
+    return m?.staged && m.state !== 'conflicted';
+  });
+  const items: ui.MenuItem[] = [];
+  if (add.length) items.push({ label: `Stage changes (${add.length})`, icon: 'plus', run: () => stage(store, add) });
+  if (out.length) items.push({ label: `Unstage (${out.length})`, icon: 'minus', run: () => unstage(store, out) });
+  return items.length ? [{ separator: true }, ...items] : [];
+}

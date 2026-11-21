@@ -27,6 +27,7 @@ export class StdioTransport {
     private readonly protocol: McpProtocol,
     private readonly o: StdioOptions,
   ) {
+    protocol.attach((m) => this.send(m)); // our own requests to the client (elicitation)
     o.input.setEncoding('utf8');
     o.input.on('data', (chunk: string) => this.data(chunk));
     // End of input (the client is done): finish what is in flight, then close. A broken pipe closes at once.
@@ -97,6 +98,7 @@ export class StdioTransport {
     this.ending = true;
     if (this.buf.trim() && !this.skipping) this.line(this.buf); // a last message without its newline
     this.buf = '';
+    this.protocol.endOfInput(); // questions to the user can no longer be answered
     if (this.pending) {
       let timer: NodeJS.Timeout | undefined;
       await new Promise<void>((r) => {

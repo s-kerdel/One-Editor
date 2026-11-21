@@ -105,7 +105,7 @@ afterAll(async () => {
 describe('scope', () => {
   it('write tools are listed only while a folder is read-write, and refuse read-only folders', async () => {
     const names = async () => ((await server.protocol.handle({ jsonrpc: '2.0', id: id++, method: 'tools/list' })) as any).result.tools.map((t: any) => t.name);
-    expect(await names()).toEqual(expect.arrayContaining(['write_file', 'append_file', 'patch_file', 'replace_text', 'move_file', 'create_folder', 'delete_file']));
+    expect(await names()).toEqual(expect.arrayContaining(['write_file', 'append_file', 'patch_file', 'replace_text', 'move', 'create_folder', 'delete']));
     server.applyConfig(cfg('read'));
     expect((await names()).some((n: string) => /write|append|patch|replace|move|create|delete/.test(n))).toBe(false);
     expect((await call('write_file', { path: 'x.md', content: 'x' })).rpc).toBe(-32602); // not even callable
@@ -207,43 +207,49 @@ describe('append, patch, replace', () => {
   });
 });
 
-describe('move_file, create_folder, delete_file', () => {
+describe('move, create_folder, delete', () => {
   it('moves a note and rewrites the links that need it; never overwrites', async () => {
-    const r = await ok('move_file', { from: 'a.md', to: 'archive/a.md' });
+    const r = await ok('move', { from: 'a.md', to: 'archive/a.md' });
     expect(fs.existsSync(abs('archive/a.md'))).toBe(true);
     expect(fs.existsSync(abs('a.md'))).toBe(false);
     expect(read('c.md')).toContain('[A](archive/a.md)');
     expect(read('b.md')).toContain('[[a]]'); // still resolves by name: untouched
     expect(r.text).toMatch(/^Moved a\.md → archive\/a\.md · etag \S+ · links updated: c\.md · undo: [a-f0-9]{8}$/);
-    expect(await err('move_file', { from: 'b.md', to: 'c.md' })).toMatch(/^EEXIST/);
-    expect(await err('move_file', { from: 'b.md', to: 'b.exe' })).toMatch(/never written/);
-    expect(await err('move_file', { from: 'b.md', to: '.secret/b.md' })).toMatch(/^EACCES/);
-    expect(await err('move_file', { from: 'b.md', to: 'link-dot/b.md' })).toBe('EACCES: Cannot change link-dot/b.md');
-    expect(await err('move_file', { from: '.secret/s.md', to: 'stolen.md' })).toMatch(/^EACCES/);
-    expect(await err('move_file', { from: 'withhidden', to: 'moved' })).toMatch(/hidden, excluded or linked/);
-    expect(await err('move_file', { from: 'sub', to: 'sub/inner' })).toMatch(/into itself/);
-    expect(await err('move_file', { from: 'bin.md', to: 'bin2.md' })).toMatch(/Binary/);
-    expect(await err('move_file', { from: 'image.png', to: 'img.png' })).toMatch(/only notes/);
+    expect(await err('move', { from: 'b.md', to: 'c.md' })).toMatch(/^EEXIST/);
+    expect(await err('move', { from: 'b.md', to: 'b.exe' })).toMatch(/never written/);
+    expect(await err('move', { from: 'b.md', to: '.secret/b.md' })).toMatch(/^EACCES/);
+    expect(await err('move', { from: 'b.md', to: 'link-dot/b.md' })).toBe('EACCES: Cannot change link-dot/b.md');
+    expect(await err('move', { from: '.secret/s.md', to: 'stolen.md' })).toMatch(/^EACCES/);
+    // A folder takes its hidden items along; they stay hidden by name.
+    expect((await ok('move', { from: 'withhidden', to: 'moved' })).text).toMatch(/^Moved withhidden → moved/);
+    expect(fs.readFileSync(abs('moved/.git/config'), 'utf8')).toBe('x');
+    expect(fs.existsSync(abs('withhidden'))).toBe(false);
+    expect(await err('move', { from: 'sub', to: 'sub/inner' })).toMatch(/into itself/);
+    expect(await err('move', { from: 'bin.md', to: 'bin2.md' })).toMatch(/Binary/);
+    expect(await err('move', { from: 'image.png', to: 'img.png' })).toMatch(/only notes/);
   });
 
-  it('create_folder; delete_file goes to the trash, never for folders, binaries or non-text files', async () => {
+  it('create_folder; delete: a file goes to the trash (folders ask first: confirm tests), never binaries or non-text files', async () => {
     expect((await ok('create_folder', { path: 'made/here' })).created).toBe(true);
     expect(fs.statSync(abs('made/here')).isDirectory()).toBe(true);
     expect(await err('create_folder', { path: 'made/here' })).toMatch(/^EEXIST/);
     w('trash-me.md', 'bye');
-    await ok('delete_file', { path: 'trash-me.md' });
+    await ok('delete', { path: 'trash-me.md' });
     expect(fs.existsSync(abs('trash-me.md'))).toBe(false);
     expect(fs.readdirSync(trashDir).some((n) => n.startsWith('trash-me.md'))).toBe(true);
-    expect(await err('delete_file', { path: 'sub' })).toMatch(/EISDIR|Not a file/);
-    expect(await err('delete_file', { path: 'image.png' })).toMatch(/only notes/);
-    expect(await err('delete_file', { path: 'bin.md' })).toMatch(/Binary/);
+    const asked = await call('delete', { path: 'sub' }); // no elicitation here: a summary and a code, nothing deleted
+    expect(asked.isError).toBe(false);
+    expect(asked.text).toMatch(/^Delete folder "sub" and everything in it\? .* · confirm: [0-9A-Z]{4}-[0-9A-Z]{4}$/);
+    expect(fs.existsSync(abs('sub'))).toBe(true);
+    expect(await err('delete', { path: 'image.png' })).toMatch(/only notes/);
+    expect(await err('delete', { path: 'bin.md' })).toMatch(/Binary/);
   });
 
   it('no Recycle Bin → ETRASH, and nothing is deleted', async () => {
     w('stays.md', 'stay');
     trashFails = true;
     try {
-      expect(await err('delete_file', { path: 'stays.md' })).toMatch(/^ETRASH: .*Nothing was deleted/);
+      expect(await err('delete', { path: 'stays.md' })).toMatch(/^ETRASH: .*Nothing was deleted/);
     } finally {
       trashFails = false;
     }
@@ -257,7 +263,7 @@ describe('move_file, create_folder, delete_file', () => {
     const s2 = new OneMcpServer({ configDir: config, settings, transport: 'stdio', win: false, trash: (p) => xdgTrash(p, xdg), writes: true });
     s2.applyConfig(cfg('write'));
     await s2.protocol.handle({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {} } });
-    const r = (await s2.protocol.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'delete_file', arguments: { path: name } } })) as any;
+    const r = (await s2.protocol.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'delete', arguments: { path: name } } })) as any;
     expect(r.result.isError).toBeFalsy();
     expect(fs.readFileSync(path.join(xdg, 'Trash/files', name), 'utf8')).toBe('to the xdg trash');
     expect(fs.readFileSync(path.join(xdg, 'Trash/info', `${name}.trashinfo`), 'utf8')).toContain('[Trash Info]');
@@ -289,10 +295,10 @@ describe('journal and revert', () => {
   it('reverts a move with its link rewrites (all of it), a delete (from the journal) and a create (to the trash)', async () => {
     const c = read('c.md');
     const b = read('b.md');
-    await ok('move_file', { from: 'archive/a.md', to: 'moved/a2.md' });
+    await ok('move', { from: 'archive/a.md', to: 'moved/a2.md' });
     expect(read('c.md')).toContain('[A](moved/a2.md)');
     expect(read('b.md')).toContain('[[a2]]'); // the name changed: [[a]] would no longer resolve
-    const mv = await lastRow('move_file');
+    const mv = await lastRow('move');
     expect(await revert(mv.journal)).toBe(3); // the move + two link rewrites
     expect(read('c.md')).toBe(c);
     expect(read('b.md')).toBe(b);
@@ -300,8 +306,8 @@ describe('journal and revert', () => {
     expect(fs.existsSync(abs('moved/a2.md'))).toBe(false);
 
     w('del.md', 'deleted text');
-    await ok('delete_file', { path: 'del.md' });
-    await revert((await lastRow('delete_file')).journal);
+    await ok('delete', { path: 'del.md' });
+    await revert((await lastRow('delete')).journal);
     expect(read('del.md')).toBe('deleted text');
 
     await ok('write_file', { path: 'created.md', content: 'new' });

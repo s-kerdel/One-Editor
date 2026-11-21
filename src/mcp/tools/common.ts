@@ -15,8 +15,10 @@ export interface ToolEnv {
   settings(): Settings;
   /** Undo history of writes (Settings → MCP server → Revert). */
   journal: Journal;
-  /** Moves a file to the Recycle Bin / trash; throws when there is none. */
-  trash(abs: string): Promise<void>;
+  /** Moves a file or folder to the Recycle Bin / trash; throws when there is none (never deletes for good). */
+  trash(abs: string, o?: import('../../backend/trash').TrashOptions): Promise<void>;
+  /** Two-step confirmations of folder deletes, for clients that cannot ask the user (elicitation). */
+  confirmCodes: import('../confirm').ConfirmCodes;
   /** Write calls of this session (count and rate). */
   quota: import('../writes').WriteQuota;
 }

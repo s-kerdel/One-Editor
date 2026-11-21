@@ -75,5 +75,20 @@ export function registerShellCommands() {
       },
     },
     { id: 'app.gpuStatus', title: 'Developer: Show GPU status', keywords: ['hardware acceleration', 'graphics'], run: () => void import('./gpu-status').then((m) => m.showGpuStatus()) },
+    { id: 'view.customizeSidebar', title: 'View: Customize sidebar menu…', keywords: ['panels', 'reorder', 'hide', 'pills', 'activity bar', 'icons'], run: () => void import('./Settings').then((m) => m.customizeSidebar()) },
+    // Every panel without a key of its own: reachable from the palette even while hidden from the sidebar menu.
+    ...app.panels.value
+      .filter((p) => !ui.PANEL_KEYS[p.id])
+      .map((p) => ({
+        id: `view.panel.${p.id}`,
+        title: `View: Show ${p.title}`,
+        keywords: ['sidebar', 'panel'],
+        run: () => {
+          app.sidebarPanel.value = p.id;
+          app.sidebarVisible.value = true;
+        },
+      })),
   ]);
+  // The Bookmarks commands come with the panel's chunk: the palette waits for it (this source's promise).
+  return import('../bookmarks/Panel').then((m) => m.registerBookmarkCommands());
 }

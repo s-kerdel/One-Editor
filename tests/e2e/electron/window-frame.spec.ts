@@ -234,7 +234,9 @@ test('many tabs: hidden tabs cut no holes into the drag areas (emulated region +
         }
         const tab = page.locator('.se-tab').nth(-3);
         const b = (await tab.boundingBox())!;
-        await x.click(b.x + b.width / 2, b.y + b.height / 2);
+        // Its visible part: in a narrow strip it can start under the strip's left edge (the back / forward cell).
+        const s = (await page.locator('.se-tabs').boundingBox())!;
+        await x.click((Math.max(b.x, s.x) + Math.min(b.x + b.width, s.x + s.width)) / 2, b.y + b.height / 2);
         await expect.poll(() => page.evaluate(() => (window as any).__secEdit.activePath.value)).toBe(await tab.getAttribute('data-path'));
         expect((await presses()).join()).toContain('se-tab');
       } finally {

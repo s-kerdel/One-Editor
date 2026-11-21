@@ -6,7 +6,7 @@ import { persistSession } from './documents';
 import { runCommand, prettyKey } from './commands';
 import { updateSettings } from './settings';
 import { newNote } from './fileops';
-import { PANEL_KEYS, zen } from './ui';
+import { PANEL_KEYS, menuPanels, openContextMenu, zen } from './ui';
 
 /** Stable hue per name, so a workspace / top-level folder always gets "its" colour. */
 export function hueOf(name: string): number {
@@ -21,13 +21,17 @@ export function showPanel(id: string) {
   persistSession();
 }
 
+/** Right-click on a panel pill / classic icon: Hide <panel>, Customize sidebar… (menu built in the lazy Popups chunk). */
+export const panelMenu = (e: MouseEvent, id: string) => openContextMenu(e, popups().then((m) => m.panelMenu(id)));
+
 export function hideShelf() {
   app.sidebarVisible.value = false;
 }
 
 /** Folder switcher (Open folder… + recent folders): the menu is built in the lazy Popups chunk. */
+const popups = () => import('./Popups'); // one call site: its preload list is in the bundle once
 export const openWorkspaceMenu = (anchor: HTMLElement, placement?: 'below' | 'right' | 'above', extra?: import('./ui').MenuItem[]) =>
-  void import('./Popups').then((m) => m.openWorkspaceMenu(anchor, placement, extra));
+  void popups().then((m) => m.openWorkspaceMenu(anchor, placement, extra));
 
 function ShelfHead() {
   const ws = app.workspace.value;
@@ -64,7 +68,7 @@ function PanelSwitcher() {
   const current = app.sidebarPanel.value;
   return (
     <nav class="se-nav" role="tablist" aria-label="Sidebar panels">
-      {app.panels.value.map((p) => {
+      {menuPanels(app.panels.value, app.settings.value['sidebar.panels'], current).map((p) => {
         const active = p.id === current;
         const keys = PANEL_KEYS[p.id];
         return (
@@ -76,6 +80,7 @@ function PanelSwitcher() {
             title={keys ? `${p.title} (${prettyKey(keys)})` : p.title}
             data-panel={p.id}
             onClick={() => showPanel(p.id)}
+            onContextMenu={(e) => panelMenu(e, p.id)}
           >
             <PanelIcon icon={p.icon} size={16} />
             {active && <span class="se-nav-label">{p.title}</span>}

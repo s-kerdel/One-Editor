@@ -30,6 +30,14 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await server?.close();
 });
+// The worst case, the way a user who opened it all has it: Connections and every part open
+// (they start collapsed / follow their counts; an explicit choice is remembered and wins).
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    const open = Object.fromEntries(['connections', 'cn-graph', 'cn-in', 'cn-out', 'cn-mentions', 'cn-tags', 'cn-related'].map((id) => [id, false]));
+    localStorage.setItem('sec-edit-overview-sections', JSON.stringify(open));
+  });
+});
 
 test(`switching notes with Connections open (${NOTES} notes) stays under ${FRAME_MS} ms of main thread`, async ({ page }) => {
   test.setTimeout(240_000);

@@ -240,7 +240,9 @@ export function applySessionLayout(s: SessionState | null) {
     if (typeof s.overviewVisible === 'boolean') ui.overviewVisible.value = s.overviewVisible;
     if (typeof s.processesHeight === 'number') ui.processesHeight.value = Math.max(120, s.processesHeight);
     if (typeof s.processesOpen === 'boolean') ui.processesOpen.value = s.processesOpen;
-    if (typeof s.sidebarPanel === 'string' && app.panels.value.some((p) => p.id === s.sidebarPanel)) app.sidebarPanel.value = s.sidebarPanel;
+    // Not checked against the registered panels: this runs before they exist, and the saved panel must be in the
+    // first frame (a hidden one shows in the bar while open). An unknown id draws the first panel (Layout).
+    if (typeof s.sidebarPanel === 'string') app.sidebarPanel.value = s.sidebarPanel;
     ui.zen.value = zenSaved(s.zen as ui.ZenSaved | undefined) ?? null;
     // Zen: a shown sidebar / overview is a peek, never restored (also an old zen's kept file tree).
     if (ui.zen.value) app.sidebarVisible.value = ui.overviewVisible.value = false;
@@ -270,6 +272,7 @@ export function installDocuments() {
   app.closeTab = closeTab;
   // Every way of showing / hiding the sidebar (shortcut, buttons, sash) is remembered across launches.
   app.sidebarVisible.subscribe(persistSession);
+  app.sidebarPanel.subscribe(persistSession); // also when a shortcut / command switches it (a hidden panel too)
   ui.overviewVisible.subscribe(persistSession);
   ui.processesOpen.subscribe(persistSession);
   // Reconciling external changes is not needed to paint: its code arrives with the first fs event.

@@ -23,7 +23,7 @@ import {
   startCreate,
 } from './fileops';
 import { persistSession, refreshTree } from './documents';
-import { runCommand } from './commands';
+import { isMac, runCommand } from './commands';
 import { holdKeys, lazyComponent } from './lazy';
 import { hueOf } from './Shelf';
 import { loadClassic } from './classic-loader';
@@ -40,6 +40,15 @@ const rowHeight = () => (ROW_HEIGHTS[app.settings.value.uiDensity ?? ''] ?? [28,
 const indentWidth = () => (classicUi() ? 12 : 14);
 const DRAG_MIME = 'application/x-sec-edit-paths';
 const dropTarget = signal<string | null>(null);
+/** Paths of the drag that started in this tree: lets a row refuse a folder dropped into itself. */
+let dragged: string[] | null = null;
+/** Rows as last rendered: selection ranges, Ctrl+A and actions follow what is on screen. */
+let shown: Row[] = [];
+const order = () => shown.filter((r) => !r.create).map((r) => r.node.path);
+/** The selection, top to bottom: what the tree's actions work on. */
+const selection = () => order().filter(ui.isTreeSelected);
+/** Selection steps are lazy (./tree-select). They run in order and read focus + `order` when they run. */
+const step = (fn: (m: typeof import('./tree-select'), order: string[]) => unknown) => void import('./tree-select').then((m) => fn(m, order()));
 
 function toggleDir(path: string, open?: boolean) {
   ui.setIn(ui.expanded, path, open ?? !ui.expanded.value.has(path));
@@ -60,7 +69,7 @@ function InlineName(props: InlineNameProps) {
 }
 
 // Menu definitions load with the popups chunk (first right-click / idle), not at launch.
-const rowMenu = (node: TreeNode | null) => import('./Popups').then((m) => m.rowMenu(node));
+const rowMenu = (node: TreeNode | null, sel?: string[]) => import('./Popups').then((m) => m.rowMenu(node, sel));
 
 function dragText(path: string) {
   // Dropping a tree item into a note inserts a link (the editor's default text drop).
@@ -84,7 +93,7 @@ function TreeRow({ row, index }: { row: Row; index: number }) {
   const { node, depth } = row;
   const isDir = node.kind === 'dir';
   const active = !isDir && app.activePath.value === node.path;
-  const selected = ui.treeSelection.value === node.path;
+  const selected = ui.isTreeSelected(node.path);
   const dirty = !isDir && app.docs.get(node.path)?.dirty.value;
   const g = gitUi.value; // git marks (lazy chunk): nothing until it has loaded
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -109,7 +118,7 @@ function TreeRow({ row, index }: { row: Row; index: number }) {
   const isDrop = dropTarget.value !== null && dropTarget.value === target;
   return (
     <div
-      class={`se-tree-row ${isDir ? 'dir' : 'file'}${active ? ' active' : ''}${selected ? ' selected' : ''}${isDrop ? ' drop' : ''}${dirty ? ' dirty' : ''}${g ? g.row(node.path, isDir) : ''}`}
+      class={`se-tree-row ${isDir ? 'dir' : 'file'}${active ? ' active' : ''}${selected ? ' selected' : ''}${ui.treeSelection.value === node.path ? ' focused' : ''}${isDrop ? ' drop' : ''}${dirty ? ' dirty' : ''}${g ? g.row(node.path, isDir) : ''}`}
       style={{ top: `${index * ROW_H}px`, paddingLeft: `${depth * INDENT + (classic ? 6 : 8)}px`, '--hue': String(hueOf(node.path.split('/')[0])) }}
       data-path={node.path}
       role="treeitem"
@@ -119,27 +128,34 @@ function TreeRow({ row, index }: { row: Row; index: number }) {
       title={node.path}
       draggable={ui.renaming.value !== node.path}
       onClick={(e) => {
-        ui.treeSelection.value = node.path;
+        (e.currentTarget as HTMLElement).closest<HTMLElement>('.se-tree')?.focus({ preventScroll: true });
+        const mod = isMac ? e.metaKey : e.ctrlKey;
+        if (mod || e.shiftKey) return step((m, o) => m.pick(o, node.path, e.shiftKey, mod));
+        ui.setTreeSel(null, node.path);
         if (isDir) toggleDir(node.path);
         else void app.openFile(node.path);
-        (e.currentTarget as HTMLElement).closest<HTMLElement>('.se-tree')?.focus({ preventScroll: true });
       }}
       onDblClick={() => {
         if (!isDir) app.editor?.focus();
       }}
       onContextMenu={(e) => {
-        ui.treeSelection.value = node.path;
-        ui.openContextMenu(e, rowMenu(node));
+        // Inside a multi-selection: its menu; elsewhere the row alone becomes the selection.
+        if (!(ui.treeMulti.value && selected)) ui.setTreeSel(null, node.path);
+        ui.openContextMenu(e, rowMenu(node, selection()));
       }}
       onDragStart={(e) => {
-        e.dataTransfer!.setData(DRAG_MIME, JSON.stringify([node.path]));
-        e.dataTransfer!.setData('text/plain', dragText(node.path));
+        // A selected row drags the whole selection.
+        dragged = selected ? selection() : [node.path];
+        e.dataTransfer!.setData(DRAG_MIME, JSON.stringify(dragged));
+        e.dataTransfer!.setData('text/plain', dragged.map(dragText).join('\n'));
         e.dataTransfer!.effectAllowed = 'copyMove';
       }}
       onDragOver={(e) => {
         if (!e.dataTransfer?.types.includes(DRAG_MIME)) return;
-        e.preventDefault();
         e.stopPropagation();
+        // A dragged folder into itself / its subfolder: refused (no preventDefault), the root zone must not take it either.
+        if (dragged?.some((p) => target === p || target.startsWith(p + '/'))) return void (dropTarget.value = null);
+        e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         if (dropTarget.value !== target) dropTarget.value = target;
         if (isDir && !row.expanded && !hoverTimer.current) hoverTimer.current = setTimeout(() => toggleDir(node.path, true), 650);
@@ -153,7 +169,7 @@ function TreeRow({ row, index }: { row: Row; index: number }) {
         if (!paths) return;
         e.preventDefault();
         e.stopPropagation();
-        dropTarget.value = null;
+        dropTarget.value = dragged = null;
         void moveInto(
           paths.filter((p) => target !== p && !target.startsWith(p + '/')),
           target,
@@ -210,9 +226,14 @@ function FileTree() {
   const g = gitUi.value;
   // Git "show changes": a reduced tree with its folders open (memoised by the git chunk).
   const v = tree && g?.view(tree);
-  const shown = v ? v.tree : tree;
+  const view = v ? v.tree : tree;
   const open = v ? v.expanded : ui.expanded.value;
-  const rows = useMemo(() => flattenTree(shown, open, ui.treeFilter.value, ui.creating.value), [shown, open, ui.treeFilter.value, ui.creating.value]);
+  const rows = useMemo(() => flattenTree(view, open, ui.treeFilter.value, ui.creating.value), [view, open, ui.treeFilter.value, ui.creating.value]);
+  shown = rows;
+  // Refreshes, watcher events, collapse, filter: rows that vanished leave a multi-selection.
+  useEffect(() => {
+    if (ui.treeMulti.peek()) step((m, o) => m.prune(o));
+  }, [rows]);
 
   const mounted = !!tree;
   useLayoutEffect(() => {
@@ -229,7 +250,7 @@ function FileTree() {
   useEffect(() => {
     if (!active || !findNode(app.tree.value, active)) return;
     expandTo(active);
-    if (!document.activeElement?.closest('.se-tree')) ui.treeSelection.value = active;
+    if (!document.activeElement?.closest('.se-tree') && !ui.isTreeSelected(active)) ui.treeSelection.value = active;
   }, [active]);
 
   const sel = ui.treeSelection.value;
@@ -252,6 +273,7 @@ function FileTree() {
     if (i >= 0 && el && (i * ROW_H < el.scrollTop || (i + 1) * ROW_H > el.scrollTop + el.clientHeight)) el.scrollTop = Math.max(0, i * ROW_H - el.clientHeight / 3);
   }, [ui.renaming.value, ui.creating.value, rows]);
 
+  const count = ui.treeMulti.value?.paths.size ?? 0;
   const first = Math.max(0, Math.floor(scrollTop / ROW_H) - 8);
   const last = Math.min(rows.length, Math.ceil((scrollTop + height) / ROW_H) + 8);
   const visible = rows.slice(first, last);
@@ -260,33 +282,40 @@ function FileTree() {
     if (ui.renaming.value || ui.creating.value) return;
     const i = rows.findIndex((r) => r.node.path === ui.treeSelection.value);
     const cur = rows[i]?.node;
-    const select = (j: number) => {
-      const r = rows[Math.max(0, Math.min(rows.length - 1, j))];
+    // `to` maps the focused index to the target; Shift extends from the focus as it is when the step runs.
+    const select = (to: (k: number) => number) => {
+      if (e.shiftKey) return step((m, o) => m.pick(o, o[Math.max(0, Math.min(o.length - 1, to(o.indexOf(ui.treeSelection.value!))))], true, false));
+      const r = rows[Math.max(0, Math.min(rows.length - 1, to(i)))];
       if (r && !r.create) ui.treeSelection.value = r.node.path;
     };
     const key = e.key;
+    const many = ui.treeMulti.value && selection();
     let handled = true;
-    if (key === 'ArrowDown') select(i + 1);
-    else if (key === 'ArrowUp') select(i < 0 ? 0 : i - 1);
-    else if (key === 'Home') select(0);
-    else if (key === 'End') select(rows.length - 1);
-    else if (key === 'PageDown') select(i + Math.floor(height / ROW_H));
-    else if (key === 'PageUp') select(i - Math.floor(height / ROW_H));
+    const page = Math.floor(height / ROW_H);
+    if (key === 'ArrowDown') select((k) => k + 1);
+    else if (key === 'ArrowUp') select((k) => (k < 0 ? 0 : k - 1));
+    else if (key === 'Home') select(() => 0);
+    else if (key === 'End') select(() => rows.length);
+    else if (key === 'PageDown') select((k) => k + page);
+    else if (key === 'PageUp') select((k) => k - page);
     else if (key === 'ArrowRight' && cur?.kind === 'dir') {
       if (!rows[i].expanded) toggleDir(cur.path, true);
-      else select(i + 1);
+      else select((k) => k + 1);
     } else if (key === 'ArrowLeft' && cur) {
       if (cur.kind === 'dir' && rows[i].expanded) toggleDir(cur.path, false);
       else if (dirname(cur.path) || cur.path.includes('/')) ui.treeSelection.value = dirname(cur.path);
-    } else if ((key === 'Enter' || key === ' ') && cur) {
+    } else if (key === 'Enter' && many) step((m) => m.openPaths(many).then(() => app.editor?.focus()));
+    else if ((key === 'Enter' || key === ' ') && cur) {
       if (cur.kind === 'dir') toggleDir(cur.path);
       else {
         void app.openFile(cur.path).then(() => key === 'Enter' && app.editor?.focus());
       }
-    } else if (key === 'F2' && cur) ui.renaming.value = cur.path;
-    else if ((key === 'Delete' || (key === 'Backspace' && e.metaKey)) && cur) void deletePaths([cur.path]);
+    } else if (key === 'F2' && cur) ui.setTreeSel(null, (ui.renaming.value = cur.path));
+    else if ((key === 'Delete' || (key === 'Backspace' && e.metaKey)) && cur) void deletePaths(many || [cur.path]);
+    else if (key.toLowerCase() === 'a' && (isMac ? e.metaKey : e.ctrlKey) && !e.altKey) step((m, o) => m.selectAll(o));
     else if (key === 'Escape') {
-      if (ui.treeFilter.value) ui.treeFilter.value = '';
+      if (ui.treeMulti.value) ui.treeMulti.value = null; // back to the focused row
+      else if (ui.treeFilter.value) ui.treeFilter.value = '';
       else app.editor?.focus();
     } else if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       // Type-ahead: jump to the next row starting with the typed prefix.
@@ -310,9 +339,10 @@ function FileTree() {
     {g && <g.Banner />}
     <div
       ref={scroller}
-      class="se-tree"
+      class={`se-tree${count > 1 ? ' multi' : ''}`}
       role="tree"
       aria-label="Files"
+      aria-multiselectable="true"
       tabIndex={0}
       onScroll={(e) => setScrollTop((e.currentTarget as HTMLElement).scrollTop)}
       onKeyDown={onKeyDown}
@@ -328,12 +358,12 @@ function FileTree() {
       }}
       onDrop={(e) => {
         const paths = readDragPaths(e.dataTransfer);
-        dropTarget.value = null;
+        dropTarget.value = dragged = null;
         if (!paths) return;
         e.preventDefault();
         void moveInto(paths, '');
       }}
-      onDragEnd={() => (dropTarget.value = null)}
+      onDragEnd={() => (dropTarget.value = dragged = null)}
     >
       <div class={`se-tree-inner${dropTarget.value === '' ? ' drop-root' : ''}`} style={{ height: `${Math.max(rows.length * ROW_H, 1)}px` }}>
         {visible.map((r, k) => (
@@ -350,6 +380,11 @@ function FileTree() {
       )}
       {!rows.length && ui.treeFilter.value && <div class="se-tree-empty">No files match “{ui.treeFilter.value}”.</div>}
     </div>
+    {count > 1 && (
+      <div class="se-tree-sel" role="status">
+        {count} selected
+      </div>
+    )}
     </>
   );
 }

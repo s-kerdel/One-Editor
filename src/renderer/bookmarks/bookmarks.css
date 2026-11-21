@@ -1,0 +1,29 @@
+/* Bookmarks panel (lazy chunk). Rows are the Files tree's (.se-tree-row: icons, hues, git colours), in flow here. */
+.se-bm { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.se-bm-head { display: flex; align-items: center; gap: 6px; padding: 8px 8px 4px 12px; flex: none; }
+.se-bm-title { flex: 1; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.se-bm-list { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 0 6px 24px; outline: none; }
+.se-bm .se-tree-row { position: relative; }
+.se-bm-list:focus-visible .se-tree-row.focused { box-shadow: inset 0 0 0 1.5px var(--focus-ring); }
+.se-bm-hint { flex: 0 1 auto; max-width: 45%; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--text-faint); }
+.se-bm .se-bm-x { visibility: hidden; flex: none; }
+.se-bm .se-tree-row:hover .se-bm-x, .se-bm-list:focus-visible .se-tree-row.focused .se-bm-x { visibility: visible; }
+/* Target gone (moved / deleted outside One): greyed, with its own Remove button. */
+.se-bm .se-tree-row.missing { cursor: default; }
+.se-bm .se-tree-row.missing > :not(.se-bm-remove) { opacity: 0.5; }
+.se-bm .se-tree-row.missing .se-tree-name { font-style: italic; }
+.se-bm .se-bm-remove { flex: none; height: 20px; padding: 0 8px; font-size: 11.5px; }
+.se-bm .se-tree-row.se-bm-more { color: var(--text-faint); font-size: 12px; }
+/* Drop position: a line in front of a bookmark, or after the last one. */
+.se-bm .se-tree-row.drop-before::before,
+.se-bm-list.drop-end::after { content: ''; position: absolute; left: 4px; right: 4px; height: 2px; border-radius: var(--radius-pill); background: var(--accent); pointer-events: none; }
+.se-bm .se-tree-row.drop-before::before { top: -1px; }
+.se-bm-list.drop-end::after { position: relative; display: block; margin-top: 1px; }
+.se-bm-list.dropping .se-bm-empty { box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft); }
+.se-bm-empty { margin: 8px 4px; padding: 22px 14px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; color: var(--text-muted); border-radius: var(--radius-md); }
+.se-bm-empty p { margin: 0; }
+.se-bm-empty .se-icon { color: var(--text-faint); }
+.se-bm-empty-hint { font-size: 12px; color: var(--text-faint); max-width: 220px; }
+.se-bm-empty .se-btn { margin-top: 6px; }
+/* Files-tree rows / a tab dragged over the Bookmarks pill or icon (Panel.tsx installPillDrop). */
+button.se-bm-pill-drop { box-shadow: inset 0 0 0 1.5px var(--accent); background: var(--accent-soft); color: var(--text); }

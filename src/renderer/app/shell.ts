@@ -11,6 +11,8 @@ import { installZen, toggleZen } from './zen';
 
 // Settings UI loads on first open (one stable component, so the Mod-, toggle keeps working).
 const SettingsOverlay = lazyComponent(() => import('./Settings').then((m) => m.SettingsOverlay));
+// Bookmarks panel (../bookmarks): 4th by default (Files · Search · Git · Bookmarks); list, UI and menu items are lazy.
+const BookmarksPanel = lazyComponent(() => import('../bookmarks/Panel').then((m) => m.BookmarksPanel));
 
 const hasActive = () => !!app.activePath.value;
 const INTERNAL_DRAG = ['application/x-sec-edit-paths', 'application/x-sec-edit-tab'];
@@ -114,6 +116,7 @@ export function installShell() {
   app.backend.onOpenRequest((paths) => void openAbsolutePaths(paths));
 
   const isElectron = app.backend.kind === 'electron';
+  app.registerPanel({ id: 'bookmarks', title: 'Bookmarks', icon: 'bookmark', order: 20, component: BookmarksPanel });
   registerCommands([
     { id: 'file.save', title: 'File: Save', keys: ['Mod-s'], run: () => void app.saveFile() },
     { id: 'file.close', title: 'Tabs: Close tab', keys: ['Mod-w'], when: hasActive, run: () => void app.closeTab(app.activePath.value!) },
@@ -126,6 +129,15 @@ export function installShell() {
       keys: ['Mod-Shift-b'],
       run: () => {
         app.sidebarVisible.value = !app.sidebarVisible.value;
+      },
+    },
+    {
+      id: 'view.bookmarks',
+      title: 'View: Show bookmarks',
+      keys: ['Mod-Alt-k'],
+      run: () => {
+        app.sidebarPanel.value = 'bookmarks';
+        app.sidebarVisible.value = true;
       },
     },
     { id: 'view.toggleZen', title: 'View: Toggle zen mode', keys: ['Mod-Alt-z'], keywords: ['distraction free', 'focus', 'writing'], run: toggleZen },

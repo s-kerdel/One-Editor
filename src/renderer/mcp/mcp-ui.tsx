@@ -136,6 +136,13 @@ function Setup({ s }: { s: McpStatus }) {
 }
 
 const day = (t: number | null) => (t ? new Date(t).toLocaleDateString(undefined, { dateStyle: 'medium' }) : 'never');
+/** "today 14:03" / "21 Nov 2026, 14:03" / "never": last use needs the time, a day alone says too little. */
+function when(t: number | null): string {
+  if (!t) return 'never';
+  const d = new Date(t);
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? `today ${time}` : `${day(t)}, ${time}`;
+}
 
 /** Access tokens: one per app. The page sees names and dates only; copying runs in main. */
 function Tokens({ s }: { s: McpStatus }) {
@@ -159,23 +166,32 @@ function Tokens({ s }: { s: McpStatus }) {
       {s.tokens.length > 0 && (
         <ul class="se-mcp-folders">
           {s.tokens.map((t) => (
-            <li class="se-mcp-folder" data-testid="mcp-token" data-name={t.name}>
-              <div class="se-mcp-folder-what">
+            <li class="se-mcp-token" data-testid="mcp-token" data-name={t.name}>
+              {/* Line 1: who + actions (wraps below the name on a narrow panel). Line 2: the dates, never cut off. */}
+              <div class="se-mcp-token-head">
                 <span class="se-mcp-alias">{t.name}</span>
-                <span class="se-mcp-path">
-                  one_{t.hint}… · made {day(t.created)} · last used {day(t.lastUsed)}
-                </span>
+                <code class="se-mcp-token-hint" title="The first characters of the token, to tell tokens apart">
+                  one_{t.hint}…
+                </code>
               </div>
-              <button class="se-btn small" data-testid="mcp-token-copy" disabled={!t.copyable} title={t.copyable ? 'Copy the setup for the app chosen above, with this token' : 'Only copyable when made: regenerate it'} onClick={() => void copy(t.id)}>
-                <Icon name="copy" size={13} />
-                Copy setup
-              </button>
-              <button class="se-btn small" data-testid="mcp-token-regenerate" onClick={() => void change((b) => b.regenerateToken(t.id, client.value))}>
-                Regenerate
-              </button>
-              <button class="se-btn small" data-testid="mcp-token-revoke" onClick={() => void change((b) => b.revokeToken(t.id))}>
-                Revoke
-              </button>
+              <div class="se-mcp-token-actions">
+                <button class="se-btn small" data-testid="mcp-token-copy" disabled={!t.copyable} title={t.copyable ? 'Copy the setup for the app chosen above, with this token' : 'Only copyable when made: regenerate it'} onClick={() => void copy(t.id)}>
+                  <Icon name="copy" size={13} />
+                  Copy setup
+                </button>
+                <button class="se-btn small" data-testid="mcp-token-regenerate" onClick={() => void change((b) => b.regenerateToken(t.id, client.value))}>
+                  Regenerate
+                </button>
+                <button class="se-btn small" data-testid="mcp-token-revoke" onClick={() => void change((b) => b.revokeToken(t.id))}>
+                  Revoke
+                </button>
+              </div>
+              <div class="se-mcp-token-meta" data-testid="mcp-token-meta">
+                <span>
+                  Last used <strong title={t.lastUsed ? new Date(t.lastUsed).toLocaleString() : undefined}>{when(t.lastUsed)}</strong>
+                </span>
+                <span>Made {day(t.created)}</span>
+              </div>
             </li>
           ))}
         </ul>
@@ -287,9 +303,14 @@ export function SettingsPanel() {
         </p>
       )}
       <div class="se-mcp-row">
-        <button class="se-btn small" data-testid="mcp-add-folder" onClick={() => void change((b) => b.addFolder())}>
+        <button
+          class="se-btn small"
+          data-testid="mcp-add-folder"
+          title={`Pick one or more folders (${s.platform === 'darwin' ? 'Cmd' : 'Ctrl'}+click for several). They are shared read-only; several at once are listed for your OK first.`}
+          onClick={() => void change((b) => b.addFolder())}
+        >
           <Icon name="plus" size={13} />
-          Add folder…
+          Add folders…
         </button>
         <span class="se-mcp-note" data-testid="mcp-folders-note">
           {s.writes

@@ -213,9 +213,9 @@ function applyNotes(e: NotesEvent) {
 }
 
 /** Unlinked mentions of a note in other notes (scanned by the search workers, which hold the text). */
-export async function unlinkedMentionsOf(path: string): Promise<Mention[]> {
+export async function unlinkedMentionsOf(path: string, limit?: number): Promise<Mention[]> {
   const names = index.mentionNames(path);
-  return names.length ? searchClient.mentions(names, path) : [];
+  return names.length ? searchClient.mentions(names, path, limit) : [];
 }
 
 /** First line where `tag` occurs in a note (its live text, or read from disk). */

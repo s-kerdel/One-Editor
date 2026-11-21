@@ -21,6 +21,14 @@ const openFile = (page: Page, p: string) => page.evaluate((f) => (window as any)
 const active = (page: Page) => page.evaluate(() => (window as any).__secEdit.activePath.value);
 const overview = (page: Page) => page.locator('aside.se-overview');
 const count = (page: Page, sub: string) => overview(page).locator(`[data-sub="${sub}"] .se-cn-n`);
+const subToggle = (page: Page, sub: string) => overview(page).locator(`[data-sub="${sub}"] .se-cn-toggle`);
+/** Connections starts collapsed: open it like a user would (remembered from then on). */
+async function openConnections(page: Page) {
+  const t = overview(page).locator('[data-section="connections"] .se-ov-sec-toggle');
+  await expect(t).toBeVisible();
+  if ((await t.getAttribute('aria-expanded')) !== 'true') await t.click();
+  await expect(t).toHaveAttribute('aria-expanded', 'true');
+}
 async function setMode(page: Page, mode: 'live' | 'source' | 'preview') {
   await page.evaluate(async (m) => {
     const app = (window as any).__secEdit;
@@ -51,7 +59,7 @@ test('Connections: incoming links with their line, Link turns a mention into a l
   await page.keyboard.press('Control+Alt+b');
   const col = overview(page);
   const sec = col.locator('[data-section="connections"]');
-  await expect(sec).toBeVisible();
+  await openConnections(page);
 
   // Incoming: README links here — with the line it appears in.
   await expect(col.locator('[data-sub="cn-in"] .se-ov-back .se-ov-name')).toHaveText(['README']);
@@ -90,6 +98,7 @@ test('Connections: Link all, local graph click opens a note, sub-sections rememb
   await openFile(page, 'notes/kubernetes.md');
   await page.keyboard.press('Control+Alt+b');
   const col = overview(page);
+  await openConnections(page);
   await expect(count(page, 'cn-mentions')).toHaveText('3');
   await col.getByRole('button', { name: 'Link all' }).click();
   await expect.poll(() => ws.read('notes/a.md')).toBe('# A\n\n[[kubernetes]] is great. Also [[kubernetes|Kubernetes]] again.\n');
@@ -114,7 +123,7 @@ test('Connections: Link all, local graph click opens a note, sub-sections rememb
   await expect.poll(() => active(page)).toBe('deep/nested/folder/Deep note.md');
   await expect(col.locator('.se-cn-graph')).toHaveAttribute('data-nodes', '2');
 
-  // Folding a sub-section survives a reload.
+  // Folding a sub-section survives a reload (and so does opening Connections).
   await col.locator('[data-sub="cn-related"] .se-cn-toggle').click();
   await expect(col.locator('[data-sub="cn-related"] .se-cn-toggle')).toHaveAttribute('aria-expanded', 'false');
   await page.reload();
@@ -122,6 +131,57 @@ test('Connections: Link all, local graph click opens a note, sub-sections rememb
   await openFile(page, 'notes/kubernetes.md');
   await expect(overview(page).locator('[data-sub="cn-related"] .se-cn-toggle')).toHaveAttribute('aria-expanded', 'false');
   await expect(overview(page).locator('[data-sub="cn-in"] .se-cn-toggle')).toHaveAttribute('aria-expanded', 'true');
+});
+
+test('Connections starts collapsed with its count; opened, every part counts — empty ones start folded, mentions count while folded', async ({ page, ws }) => {
+  await ws.write('notes/mention.md', '# Mention\n\nI should read the daily notes more often. See [[kubernetes]] and #journal.\n');
+  await boot(page, ws);
+  await openFile(page, 'notes/Daily notes.md');
+  await page.keyboard.press('Control+Alt+b');
+  const col = overview(page);
+  const sec = col.locator('[data-section="connections"]');
+  const head = sec.locator('.se-ov-sec-head .se-ov-count');
+  await expect(sec.locator('.se-ov-sec-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expect(head).toHaveText('1'); // README: links here and is linked from here
+  // Collapsed: header only — no parts, no graph laid out.
+  await expect(col.locator('[data-sub]')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__secEditConnectionsPerf.graph.length)).toBe(0);
+
+  await openConnections(page);
+  for (const [sub, n] of [
+    ['cn-graph', '1'],
+    ['cn-in', '1'],
+    ['cn-out', '1'],
+    ['cn-mentions', '1'],
+    ['cn-tags', '2'],
+  ] as const) {
+    await expect(count(page, sub), sub).toHaveText(n);
+    await expect(subToggle(page, sub), sub).toHaveAttribute('aria-expanded', 'true');
+  }
+  await expect(count(page, 'cn-related')).not.toHaveText(/^(0|…)$/);
+  await expect(col.locator('.se-cn-graph')).toHaveAttribute('data-nodes', '2');
+  // One look for every count: a part's pill matches the section's.
+  const pill = (sel: string) => col.locator(sel).first().evaluate((el) => ['backgroundColor', 'color', 'fontSize', 'lineHeight', 'borderRadius', 'letterSpacing'].map((k) => getComputedStyle(el)[k as any]).join(' | '));
+  expect(await pill('[data-sub="cn-in"] .se-cn-n')).toBe(await pill('[data-section="connections"] .se-ov-sec-head .se-ov-count'));
+
+  // Folded by the user, the mention count still follows the notes.
+  await subToggle(page, 'cn-mentions').click();
+  await ws.write('notes/mention2.md', '# Two\n\nThe daily notes again.\n');
+  await expect(count(page, 'cn-mentions')).toHaveText('2');
+  await expect(subToggle(page, 'cn-mentions')).toHaveAttribute('aria-expanded', 'false');
+
+  // A note with nothing: every part reads 0 and starts folded — no canvas.
+  await openFile(page, 'notes/windows-crlf.md');
+  await expect(head).toHaveText('0');
+  for (const sub of ['cn-graph', 'cn-in', 'cn-out', 'cn-mentions', 'cn-tags', 'cn-related']) {
+    await expect(count(page, sub), sub).toHaveText('0');
+    await expect(subToggle(page, sub), sub).toHaveAttribute('aria-expanded', 'false');
+  }
+  await expect(col.locator('canvas.se-cn-canvas')).toHaveCount(0);
+  for (const id of ['outline', 'code', 'tasks']) {
+    await expect(col.locator(`[data-section="${id}"] .se-ov-sec-toggle`), id).toHaveAttribute('aria-expanded', 'false');
+    await expect(col.locator(`[data-section="${id}"] .se-ov-sec-head .se-ov-count`), id).toHaveText('0');
+  }
 });
 
 test('Ctrl+hover previews a linked note — its #heading section — in the editor and the reading view', async ({ page, ws }) => {
@@ -240,6 +300,7 @@ test('on-demand index: Connections shows the note’s own links, then everything
   await openFile(page, 'notes/Daily notes.md');
   await page.keyboard.press('Control+Alt+b');
   const col = overview(page);
+  await openConnections(page);
   await expect(col.locator('[data-section="connections"] .se-cn-build')).toBeVisible();
   await expect(col.locator('[data-sub="cn-out"] .se-ov-link .se-ov-text')).toHaveText(['README']);
   await expect(col.locator('[data-sub="cn-tags"] .se-cn-pill')).toHaveText(['#journal', '#daily']);
@@ -295,6 +356,7 @@ test('classic sidebar style, both themes (screenshots)', async ({ page, ws }) =>
   await boot(page, ws);
   await openFile(page, 'notes/Daily notes.md');
   await page.keyboard.press('Control+Alt+b');
+  await openConnections(page);
   await expect(overview(page).locator('[data-sub="cn-mentions"] .se-cn-mention')).toHaveCount(1);
   await page.waitForTimeout(300);
   await shot(page, 'connections-classic-dark');

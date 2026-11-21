@@ -23,6 +23,8 @@ export interface GitUi {
   view(tree: TreeNode): { tree: TreeNode; expanded: ReadonlySet<string> } | null;
   /** Tree / tab context-menu items for a file. */
   menu(path: string): MenuItem[];
+  /** Tree menu for several selected rows (stage / unstage the files among them). */
+  menuMany?(paths: string[]): MenuItem[];
   gutter: GitGutterSource;
 }
 

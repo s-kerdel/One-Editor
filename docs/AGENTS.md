@@ -28,7 +28,8 @@ browser mode served by a local Node server. Both share one renderer.
 | `src/renderer/whitespace/` (trailing whitespace: paste trim via CodeMirror's `clipboardInputFilter`, trim on save through format's `beforeSave` hook in `src/format/install.ts`, the `editor.trimWhitespace` command; editor chunk only) | **variables** |
 | `src/renderer/pdf/` (PDF viewer: lazy chunk `PdfView` on pdf.js's `PDFViewer`; `engine.ts` is the only place documents are opened — security options live there; `model.ts` pure helpers; pdf.js data assets copied by `vite.config.ts` → `pdfjs/`; the worker gets `PDF_WORKER_CSP` from `src/shared/pdf.ts` in `main.ts` / `server.ts`) | **pdf** |
 | `src/mcp/`, `src/main/mcp*.ts`, `src/shared/mcp.ts`, `src/renderer/mcp/`, `build/windows/One MCP.cmd`, `build/linux/one-mcp.sh` (MCP server: a separate Node program, `dist/mcp/cli.mjs`, that MCP clients — LM Studio, Codex CLI, Claude — start over **stdio** with the app's executable in Node mode; one lazy `Workspace` + on-demand search / link indexes per shared folder; main owns `<app data>/mcp.json`; Settings → MCP server is the lazy `mcp-ui` chunk, zero startup bytes. `src/knowledge/sections.ts` (document map for `read_file` parts / `get_outline`) stays **knowledge**'s) | **mcp** |
-| `src/renderer/nav/`, `src/shared/nav.ts` (Go back / forward: `nav/install.ts` is the startup stub — two key bindings, mouse side buttons, ~0.4 kB gzip; `nav/impl.ts` = recorder + restore, lazy on idle; `nav/history.ts` = the pure stack) | **nav** |
+| `src/renderer/nav/`, `src/shared/nav.ts` (Go back / forward: `nav/install.ts` is the startup stub — two key bindings, mouse side buttons, the buttons' state `navCan`, ~0.4 kB gzip; `nav/buttons.tsx` = the tab strip's ← → (startup; with the stub's part ~0.4 kB gzip; shell's `Layout` renders them; → is the ← glyph mirrored in CSS); `nav/impl.ts` = recorder + restore + recent-places list, lazy on idle; `nav/places.ts` = list labels, lazy on first list; `nav/history.ts` = the pure stack) | **nav** |
+| `src/renderer/bookmarks/`, `src/shared/bookmarks.ts` (Bookmarks panel: one lazy chunk `bookmarks/Panel.tsx` = UI + its store `store.ts` (re-exported) + `bookmarks.css`; startup = the panel registration and its `Mod-Alt-k` command in `app/shell.ts`, the glyph in `icons.tsx`. Storage = `BackendService.bookmarks(op?)` → `<app data>/bookmarks/<folder id>.json`, see Extension points) | **shell** |
 | `tests/unit/<area>/`, `tests/e2e/<area>*.spec.ts` | the area's owner |
 
 ### Shared files (integration points)
@@ -65,7 +66,10 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   `src/knowledge/connections.ts` (`relatedNotes` = co-citation + coupling + shared tags with a work budget, `localGraph`
   capped, `orphanNotes`, `notesWithoutIncoming`): never scan all notes on a note switch (perf guard:
   `tests/e2e/knowledge-connections-perf.spec.ts`, < 16 ms at 10k notes). The overview's **Connections** section is the
-  lazy chunk `knowledge/Connections.tsx` (reuses `overview/parts.tsx` + overview row classes); `knowledge/graph-canvas.ts`
+  lazy chunk `knowledge/Connections.tsx` (reuses `overview/parts.tsx` + overview row classes); collapsed (its default)
+  it computes only its header count — no lists, graph, related notes or mention scan. Section / sub-section open state
+  is `overview/sections.ts`: the user's toggle wins (remembered), else the default (entries → open, 0 → closed; give a
+  new list a `count`, `null` = "…" while unknown); `knowledge/graph-canvas.ts`
   is the canvas renderer shared with the graph view. Keyless knowledge commands register from the chunk
   (`addCommandSource`, `registerKnowledgeCommands` in `knowledge/impl.tsx`): only key-bound ones live in the stub.
 - Link hover preview (knowledge, `knowledge/link-preview.ts`, setting `links.hoverPreview`): one popup for every surface.
@@ -91,6 +95,12 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   arrives as a DOM mouse event **and** a BrowserWindow `app-command` (main → `app:navigate` → `backend.onNavCommand`).
   The history is per window (sessionStorage `sec-edit-nav:<root>`, 50 entries), not in the session file.
   E2E handle: `window.__secEditNav` = `{ history, go }`.
+  **Buttons** (`nav/buttons.tsx`, setting `nav.buttons`, default on): `Layout` puts them first in `.se-topline` in every
+  layout (after `ShelfReveal` when the shelf is hidden; classic; zen). Greyed out = `aria-disabled` (stays focusable),
+  from the stub's `navCan` signals, which `impl.ts` `sync()`s only when the stack changes (never per keystroke).
+  Right-click / long press / `Shift+F10` → `openPlaces` → `history.places(dir)` labelled by `describePlace`, in the
+  shared context menu; a pick is `jump(entry)` (`history.goTo`, the places in between stay). The cell is `.se-no-drag` as a
+  whole: with the integrated frame its padding would otherwise cover the sidebar sash's edge.
 - Terminal (desktop only): `app.runInTerminal?.(code, { lang })` pastes a shell code block into the terminal
   (never presses Enter by default) — feature-detect it, it is unset in the browser. `isRunnableFence(lang)` from
   `src/renderer/terminal/run.ts` (dependency-free) says which fences get a "Run in terminal" button.
@@ -168,7 +178,13 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   toggle's gesture + `navigator.keyboard.lock(['Escape'])`. Leaving full screen from outside does **not** end zen.
   `zen.keepFileTree` is retired: a stored value is ignored. **Import `app/zen.tsx` only from startup modules no lazy
   chunk reaches** (Layout, shell, main.tsx), and add no new import to `Shelf.tsx` / `Tabs.tsx` for zen: either made
-  rolldown split startup code into an extra chunk (a few hundred bytes more, measured). **Contract:** a panel that opens *itself* (not on a
+  rolldown split startup code into an extra chunk (a few hundred bytes more, measured). **Bundler, two more rules
+  (measured with bookmarks):** a lazy chunk must not statically import `app/Shelf.tsx` (only classic.tsx does,
+  grandfathered): the Bookmarks panel doing so split commands / fileops / settings into three extra startup chunks
+  (+2.5 kB gzip). And every lazy chunk a startup module's `import()` reaches, **with its own static deps**, is a
+  file name in the entry's preload table and an index on every such call site (`import('./Popups')` has 11): keep a
+  feature in **one** chunk (the bookmarks store is re-exported by `bookmarks/Panel.tsx`, the sidebar-menu writes
+  live in the Settings chunk) instead of a small shared one (~20–30 B gzip each). **Contract:** a panel that opens *itself* (not on a
   user action: auto-open on an event, a restored flag) must not while `ui.zen.value` is set; a user action may open
   it (a peek; leaving zen still restores the pre-zen layout). Saved in the session (`SessionState.zen`) and in the
   skeleton cache (`sec-edit-layout` `z` → `<html data-zen="on[ status][ ov]">` by theme-boot.js), so the first
@@ -177,6 +193,44 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   and `tree.folderColors` (`hue` | `one` → `<html data-folders="one">`) + `tree.folderColor` (→ token
   **`--folder-color`**, derived per theme by `app/accent.ts` like the accent, cached as `sec-edit-folder` for
   theme-boot.js; unset = `--ft-folder`). Draw folder icons with `.se-ficon-folder` and they follow both.
+- File tree selection (shell): **`ui.treeSelection` stays the focused row**; alone it is the selection, so callers
+  that set it (reveal, new note, rename) keep working and simply drop a multi-selection. Several rows =
+  **`ui.treeMulti`** `{ focus, anchor, paths }`, valid only while `focus === treeSelection` (a subscription in
+  `ui.ts` clears it otherwise; the focus may be unselected after a Ctrl+click). Read with `ui.isTreeSelected(p)`,
+  write with `ui.setTreeSel(sel | null, focus)`. The steps (toggle, range, prune of vanished rows, select all,
+  open several, `topLevel()`) are the lazy `app/tree-select.ts`: FileTree `import()`s it, so startup pays only for
+  drawing (`.selected` / `.focused`, `.se-tree.multi`, the "N selected" foot). Actions on several rows:
+  `rowMenu(node, selection)` → `selectionMenu` in Popups (only multi-item actions; one-item ones are left out);
+  `deletePaths` / `moveInto` take lists and reduce them with `topLevel()` themselves. A new multi-item tree action
+  goes into `selectionMenu`; git adds its own through the optional `GitUi.menuMany(paths)`.
+- **Sidebar panels and the sidebar menu** (shell): `app.registerPanel({ id, title, icon, order, component })` before the
+  first render (an `installX()` in main.tsx; the glyph at startup: `icons.tsx` or the stub's `addIcons`, else the pill
+  draws an empty box). Default places by `order`: Files 0 · Search 10 · Git 12 · **Bookmarks 20** │ Outline 30 ·
+  Backlinks 31 · Tags 32. **Every bar is `ui.menuPanels(app.panels, settings['sidebar.panels'], open)`** (shelf pills,
+  classic icon bar, zen strip; never map `app.panels` yourself). Setting `sidebar.panels` = `{ order, hidden }` (null =
+  default), written only by `app/panel-menu.ts` (Settings → Appearance → Sidebar menu, `SidebarMenuSetting.tsx`; the
+  pills' right-click "Hide …" reaches it through Settings' re-export, so it stays in the Settings chunk). **Merge rule**
+  (pure, `tests/unit/app/panel-menu.test.ts`): stored order over the registered panels; a panel the order lacks (new
+  in a later version) goes right after its default predecessor and is never hidden; stored ids nobody registers are
+  skipped but kept in the setting (another build's panel keeps its place); the open panel shows while hidden; at
+  least one entry stays; the default arrangement stores null. It runs in the first render (settings come with
+  `bootstrap`; `applySessionLayout` restores `sidebarPanel` unchecked before the panels exist, so a hidden saved panel
+  is in the first frame too): nothing jumps. A hidden panel must stay reachable: a key in `ui.PANEL_KEYS` (register
+  that command yourself) or, without one, the generic palette command "View: Show <title>" (`shell-commands.ts`).
+  Right-click menu: `Popups.panelMenu(id)` (Shelf's `panelMenu`, also used by classic).
+- **Bookmarks** (shell, `src/renderer/bookmarks/`): workspace-relative POSIX paths + an optional label, **data only**
+  (nothing in the backend touches a bookmarked path). One RPC, `bookmarks(op?)`: no argument reads; an op
+  (`shared/bookmarks.ts` `BookmarkOp`: add / remove / move with `before`, label, rename) is validated by `cleanOp` /
+  `cleanPath` (relative, `/` only, no `.` / `..` / empty segments, no drive / UNC / backslash / control characters;
+  attack table in `tests/unit/bookmarks/model.test.ts`) and applied to the file **as it is on disk** under the file
+  lock (desktop and browser mode share `<app data>/bookmarks/<folder id>.json`; never in the folder). The renderer
+  applies the same op at once and takes the answer. Following renames: Popups' `movePath` reports every move made in
+  One (`renamed(from, to, true)`: folders too, even empty ones), `file:renamed` per file, and outside renames are
+  guessed from one watcher batch (`fsMoves`: same name elsewhere, or the only same-kind add in the same folder; never
+  when ambiguous or re-added in place). A new way to rename / move in One calls `renamed(from, to, true)` from the
+  bookmarks chunk. Missing targets (not in `app.tree`) are drawn greyed with Remove. Menu items: `bookmarkItem()` in
+  Popups (tree row, selection via `topLevel()`, tab). Drops on the Bookmarks pill are delegated from the chunk
+  (document listeners on `button[data-panel="bookmarks"]`): no startup code.
 - MCP server (mcp, desktop: Settings → MCP server): `src/mcp/server.ts` puts the folder pool, the tools and the
   resources behind one `McpProtocol` (`protocol.ts`: JSON-RPC, dual-era — legacy `initialize` and the stateless
   2026-07-28 per-request `_meta`). The transport is separate: `stdio.ts` today; an HTTPS transport goes next to it as
@@ -207,14 +261,14 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
 ### Global keybinding allocation (avoid conflicts)
 | Owner | Keys |
 |---|---|
-| shell | `Mod-s` save, `Mod-w` close tab, `Mod-n` new note, `Mod-Shift-b` sidebar, `Mod-Alt-z` zen mode (also in `APP_KEYS_IN_TERMINAL`), `Mod-e` toggle edit/preview, `Mod-\` split, `Ctrl-Tab`/`Ctrl-Shift-Tab` tabs, `Mod-,` settings, `Mod-=`/`Mod--`/`Mod-0` zoom |
+| shell | `Mod-s` save, `Mod-w` close tab, `Mod-n` new note, `Mod-Shift-b` sidebar, `Mod-Alt-k` Bookmarks panel, `Mod-Alt-z` zen mode (also in `APP_KEYS_IN_TERMINAL`), `Mod-e` toggle edit/preview, `Mod-\` split, `Ctrl-Tab`/`Ctrl-Shift-Tab` tabs, `Mod-,` settings, `Mod-=`/`Mod--`/`Mod-0` zoom |
 | search | `Mod-p`/`Mod-o` quick open, `Mod-Shift-p`/`F1` palette, `Mod-Shift-f` find in files, `Mod-Shift-h` replace in files, `Mod-Shift-o` go to heading, `Mod-t` workspace symbol/heading |
 | format | `Shift-Alt-f` format document, `Mod-Alt-f` format selection/code block |
 | editor (CM-local, not global) | `Mod-b` bold, `Mod-i` italic, `Mod-k` link, `Mod-f`/`Mod-h` in-file find/replace, `Mod-d`, `Mod-/`, `Mod-Enter` toggle checkbox, `Alt-Up/Down` move line, `Mod-Shift-v` paste exactly as copied (plain text, no trailing-whitespace trim, no smart paste), `/` slash menu, `Alt-F10` focus formatting toolbar, … |
 | knowledge | `Mod-Alt-o` outline, `Mod-Alt-l` backlinks, `Mod-Alt-g` graph |
 | git | `Mod-Shift-g` Source control panel, `Alt-F5` / `Shift-Alt-F5` next / previous change; pane-local `Mod-Enter` commit; diff view `F7` / `Shift-F7`, `Esc`, editable diff: `Mod-F7` revert the block at the cursor (compare: apply it to the right side), compare: `Mod-Shift-F7` apply the block at the cursor to the left side, `Mod-s` saves the diff's file(s) (key filter while it is open), `Mod-z` / `Mod-y` / `Mod-Shift-z` reach the diff's own undo when no editor in it has focus (window capture, only while a diff with an editable side is open) |
 | overview | `Mod-Alt-b` toggle file overview (right sidebar) |
-| nav | `Alt-ArrowLeft` / `Alt-ArrowRight` go back / forward (macOS: `Mod-[` / `Mod-]`); mouse side buttons (`button` 3 / 4, window capture, not a key). **Precedence:** global, so they beat CodeMirror's default `Alt-ArrowLeft/Right` (`cursorSyntaxLeft/Right`; on macOS `Mod-[` / `Mod-]` = indent less / more) as in VS Code — those stay in the palette ("Editor: Move cursor to syntax node start / end") and on `Tab` / `Shift-Tab`; `Shift-Alt-ArrowLeft/Right` (select syntax) is untouched. Not in `APP_KEYS_IN_TERMINAL`: in a focused terminal `Alt-←/→` stays readline's word move (the side buttons work there) |
+| nav | `Alt-ArrowLeft` / `Alt-ArrowRight` go back / forward (macOS: `Mod-[` / `Mod-]`); mouse side buttons (`button` 3 / 4, window capture, not a key). **Precedence:** global, so they beat CodeMirror's default `Alt-ArrowLeft/Right` (`cursorSyntaxLeft/Right`; on macOS `Mod-[` / `Mod-]` = indent less / more) as in VS Code — those stay in the palette ("Editor: Move cursor to syntax node start / end") and on `Tab` / `Shift-Tab`; `Shift-Alt-ArrowLeft/Right` (select syntax) is untouched. Not in `APP_KEYS_IN_TERMINAL`: in a focused terminal `Alt-←/→` stays readline's word move (the side buttons work there). On a focused ← → button (local, the browser's own context-menu keys): `Shift-F10` / `ContextMenu` open its recent-places list |
 | pdf (viewer-local, focus inside `.se-pdf` only; beats shell's UI zoom via `addGlobalKeyFilter`) | `Mod-f` find, `Mod-=`/`Mod--`/`Mod-0` + `Ctrl`-wheel zoom, `Mod-g` page box |
 | terminal | ``Mod-` `` toggle / focus / hide panel, ``Mod-Shift-` `` (+ `Mod-Shift-~`) new terminal |
 | terminal (xterm-local, focused terminal only) | `Mod-Shift-c`/`Mod-Shift-v` copy/paste, `Mod-f` find, `Shift-Insert`/`Ctrl-Insert`; Windows also `Ctrl-c` (with a selection) / `Ctrl-v`; macOS `Cmd-c/v/f/a/k` |
@@ -278,9 +332,12 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
 - **Outbound requests: one feature, two hosts** (`main/update-check.ts`, "Security updates"). Two triggers, one boolean from the page (`check(manual)`, never a URL or host): **"Check now"** (`manual: true`) always goes — the user clicked, no confirm dialog; the **automatic** check (once after launch when visible, 7-day rule) needs the setting `updates.check` ("Check automatically every week", off by default), which main reads itself and refuses without. Accepted residual: a hijacked page could trigger a manual check; it sends only names + versions to the same two hosts, like any check. `UPDATE_HOSTS` = `endoflife.date` + `api.osv.dev`, checked in the service before every fetch (`isAllowedUpdateUrl`: https, exact host, default port) and again by `webRequest` on its own in-memory session (`update-check` partition: no cookies, no cache, `User-Agent: update-check`, redirects are errors). Sent: a GET with nothing, and names + versions from `shipped-deps.json` — never an id, a path, a setting. **Don't add a host**, a header or a field: every extra host learns the user's IP and what they run; a new source needs the user's decision first (ask the lead). No timer: the renderer asks once after launch when visible (main applies the 7-day rule) and on "Check now"; failures stay quiet (`lastError` in Settings). Advisory text is untrusted: rendered as text, links rebuilt from the id (`vulnUrl`) or built from the version (`releases.electronjs.org`); the summary (`UpdateStatus.summary`: Electron line, every package checked + its advisory count, timing, per-source error) is local only, cached in `update-check.json`, re-validated on read (`parseSummary`) and dropped when the build changes (`sameBuild`); its only links are the two fixed source pages (`EOL_PAGE`, `OSV_PAGE`). Tests never use the real hosts: `SEC_EDIT_TEST_UPDATE_API=http://127.0.0.1:<port>` (test builds only; dropped when packaged) points both services at a local stub.
 - **Inbound access for AI clients: one feature** (`src/mcp`, Settings → MCP server). Off by default. Main owns
   `<app data>/mcp.json` (on/off, the folder allow-list, per-folder mode and `allowCode`, `undo`, token hashes; read-only
-  by default); every widening step is a **native dialog** in main — turning on, sharing a folder (only through main's
-  folder dialog: the page never passes a path), allowing writes, code files in a folder, undo copies off, creating /
-  regenerating / revoking a token; narrowing needs none. Grants never live in settings.json: `BackendService.saveSettings`
+  by default); every widening step is a **native dialog** in main — turning on, sharing folders (only through main's
+  folder dialog, `multiSelections`: the page never passes a path, `mcp:addFolder` takes no argument; one folder is added
+  at once, several get **one** native confirm (`foldersConfirm`) listing each alias + real path and, apart, every refused
+  one with its reason — `folderProblem`, already shared, picked twice, over the limit; nothing to add = reasons + "OK"
+  only; aliases in sorted path order, so they do not depend on the click order), allowing writes, code files in a
+  folder, undo copies off, creating / regenerating / revoking a token; narrowing needs none. Grants never live in settings.json: `BackendService.saveSettings`
   drops every `mcp.*` key but the two result limits (`isMainOwnedKey`), and the server reads none from there.
   **Residual:** `excludeGlobs` is still a page setting, so a page can narrow the exclusions without a dialog
   (main-owned MCP excludes are a later item).
@@ -315,9 +372,9 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
   once; JSON-RPC batches are refused. Never imports `src/main/vault*`, never reads `vault.json`, never resolves
   `{{variables}}`; no git, terminal, settings writes, network (stdio only) or processes of its own (only the shared
   watcher's fixed `wsl.exe inotifywait` backend for `\\wsl.localhost` roots, and `backend/trash.ts`'s fixed Recycle Bin
-  call for `delete_file`) — `tests/unit/mcp/isolation.test.ts` checks the esbuild metafile of `cli.ts`;
+  call for `delete`) — `tests/unit/mcp/isolation.test.ts` checks the esbuild metafile of `cli.ts`;
   `tests/unit/mcp/paths.test.ts`, `review*.test.ts` and `tokens.test.ts` have a case per attack. Test hooks `SEC_EDIT_TEST_MCP_CONFIRM` /
-  `SEC_EDIT_TEST_MCP_FOLDER` exist in main only; the Node-mode server applies env-guard's scrub itself when it runs from
+  `SEC_EDIT_TEST_MCP_FOLDER` (`path.delimiter`-separated = several picks; each confirm is logged as `[sec-edit:mcp-confirm]`) exist in main only; the Node-mode server applies env-guard's scrub itself when it runs from
   `app.asar.unpacked` (`src/mcp/env-boot.ts`), so `SEC_EDIT_CONFIG_DIR`, `SEC_EDIT_TRASH_DIR` and the `SEC_EDIT_MCP_*`
   knobs work in dev and tests only.
   **One switch for writes:** `MCP_WRITES_ENABLED` (`src/shared/mcp.ts`, now `true`). `false` ships a read-only build:
@@ -354,18 +411,32 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
   (`src/shared/md-block-rules.ts`: frontmatter, `%%`, `$$`, `\pagebreak`; the preview registers the same module, so a
   new preview block rule goes there). Residual (later item: a One-side warning on Run for AI-written blocks): a new
   block without placeholders may still use a shell variable a frozen secret block exported. No variables file between note and share root → every non-built-in name is secret. Moves check
-  both places; the server never resolves a value. Binary files are never
-  written, moved or deleted; deletes go to the Recycle Bin only (`ETRASH`, nothing deleted, when there is none) and always
-  keep a journal copy, even with undo off (or are refused); a folder move is refused if it holds anything hidden,
-  excluded or linked, or if any destination pair lands somewhere hidden. **Journal** (`src/mcp/journal.ts`,
-  `<app data>/mcp-history/<group>/`, mcp.json `undo { on, days }`, 100 MB cap, 64 MB per session): old bytes per change;
-  groups of the running session and of the last 24 h are never evicted (new writes get `EQUOTA` instead; two busy
+  both places; the server never resolves a value. **Folder deletes ask the user through MCP, never an OS dialog**
+  (`delete` on a folder, `tools/write.ts` `deleteFolder`, `confirm.ts`): the question is built by the server only (a
+  sanitized folder-relative path — no control / bidi / zero-width characters, quotes replaced, parts cut at 40, the
+  whole at 120 — counts, at most 3 hidden names; no other argument text). Legacy clients that declared form
+  elicitation (2025-06-18+) get an `elicitation/create` request (our ids `one-ask-N`, 120 s, then
+  `notifications/cancelled`); 2026-07-28 clients that declared it get `resultType: "input_required"` (MRTR) with an
+  HMAC-sealed, expiring, single-use `requestState` bound to tool + folder + path + a fingerprint of every entry; a
+  changed folder is asked again. Others: two steps — a summary plus a one-time code (random, 5 min, bound to the same,
+  spent on use). Only `accept` with `confirm: true` deletes; the folder is surveyed again first. Then one trash call
+  (`noPermanent`: Windows `AllDialogs` via env so the shell itself asks before deleting for good; macOS only on the home
+  volume; Linux same-device XDG trash) — no bin → refused. No journal copy (hidden contents are never read): the audit
+  row is `delete (folder)`, note "restore from the Recycle Bin", no Revert. One quota unit, after the OK; no size cap
+  but a 1,000,000-entry survey limit. Folder `move` takes hidden items along (walked, never read); refused: links /
+  special files inside, any entry whose visibility would change (excluded by a rooted rule → visible, or visible →
+  hidden), hidden files when the nearest variables file differs; caps 10,000 visible files (link rewriting), 200,000
+  entries. Binary files are never
+  written, moved or deleted; deletes go to the Recycle Bin only (`ETRASH`, nothing deleted, when there is none); a file delete always
+  keeps a journal copy, even with undo off (or is refused); folder deletes and moves: see above. **Journal**
+  (`src/mcp/journal.ts`, `<app data>/mcp-history/<group>/`, mcp.json `undo { on, days }`, 100 MB cap, 64 MB per
+  session): old bytes per change; groups of the running session and of the last 24 h are never evicted (new writes get `EQUOTA` instead; two busy
   sessions can thus block MCP writes for up to 24 h — fails closed, by design). Revert runs in
   **main** (`McpService.revert`, `mcp:revert`) only while the folder is still shared, through the same resolver and guard,
   all or nothing, only onto files still as MCP left them; it is restorative, so it also works once the folder is
   read-only again. MCP-written notes get no special trust: they render through the normal sanitizer like any outside edit. Tests
   never use the real trash: injected trash or `XDG_DATA_HOME` / `HOME` under `.tmp/` (`tests/unit/mcp/writes.test.ts`).
-- **One's own data folder is never served** (settings, mcp.json, the vault, git trust, the text cache): `BackendService`
+- **One's own data folder is never served** (settings, mcp.json, the vault, git trust, the text cache, bookmarks): `BackendService`
   opens every workspace with `deny: [configDir, cacheDir]`, and `Workspace.real()` refuses (`EACCES`) any path inside a
   denied folder — as written or where it really is — and the walk leaves it out. It matters when the open folder
   contains it (the home folder on Windows: `AppData` is no dot name): a page taken over cannot rewrite `mcp.json`.

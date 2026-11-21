@@ -243,6 +243,9 @@ export interface BackendApi {
   saveSettings(patch: Partial<Settings>): Promise<Settings>;
   getSession(): Promise<SessionState>;
   saveSession(s: SessionState): Promise<void>;
+  /** Bookmarks of the open folder (One's app data, shared by desktop and browser mode): no argument reads, an op
+   *  changes the list as it is on disk and returns the new one (shared/bookmarks.ts). */
+  bookmarks(op?: import('./bookmarks').BookmarkOp): Promise<import('./bookmarks').Bookmark[]>;
 
   /** Batched filesystem change notifications (debounced by the backend). External changes only. */
   onFsEvents(cb: (events: FsEvent[]) => void): () => void;
@@ -323,6 +326,7 @@ export const RPC_METHODS = [
   'saveSettings',
   'getSession',
   'saveSession',
+  'bookmarks',
   'openExternal',
   'exportPdf',
   'showExportedFile',

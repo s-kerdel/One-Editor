@@ -142,6 +142,51 @@ test('a "no" in the native dialog changes nothing, and the page cannot name a fo
   expect(err).toContain('switched off');
 });
 
+test('several folders at once: one native confirm lists them and the refused ones; the panel shows all; the page cannot pass paths', async ({ el }) => {
+  const a = path.join(el.tmp, 'a', 'notes');
+  const b = path.join(el.tmp, 'b', 'notes');
+  const w = path.join(el.tmp, 'Work Docs');
+  for (const d of [a, b, w]) fs.mkdirSync(d, { recursive: true });
+  const gone = path.join(el.tmp, 'gone');
+  // The stubbed dialog "picks" five (b before a: aliases follow the paths, not the click order); One's own data folder is refused.
+  const picks = [b, w, a, el.userData, gone].join(path.delimiter);
+  const { page, stdout } = await el.launch([el.ws], { env: { SEC_EDIT_TEST_MCP_CONFIRM: 'allow', SEC_EDIT_TEST_MCP_FOLDER: picks } });
+  await openMcpSettings(page);
+  const file = () => JSON.parse(fs.readFileSync(path.join(el.userData, 'mcp.json'), 'utf8'));
+  const PREFIX = '[sec-edit:mcp-confirm] ';
+  const boxes = () => stdout.join('').split('\n').filter((l) => l.startsWith(PREFIX)).map((l) => JSON.parse(l.slice(PREFIX.length)) as { title: string; message: string; detail: string; buttons: string[] });
+
+  await expect(page.locator('[data-testid="mcp-add-folder"]')).toHaveText('Add folders…');
+  await page.locator('[data-testid="mcp-add-folder"]').click();
+  const rows = page.locator('[data-testid="mcp-folder"]');
+  await expect(rows).toHaveCount(3);
+  expect(await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-alias')))).toEqual(['work-docs', 'notes', 'notes-2']);
+  await expect(rows.locator('[data-testid="mcp-mode-read"][aria-checked="true"]')).toHaveCount(3);
+  expect(file().folders.map((f: { alias: string; path: string; mode: string }) => [f.alias, f.path, f.mode])).toEqual([
+    ['work-docs', fs.realpathSync(w), 'read'],
+    ['notes', fs.realpathSync(a), 'read'],
+    ['notes-2', fs.realpathSync(b), 'read'],
+  ]);
+  // One confirm for the batch: what is added (alias: real path), the refused apart, a reason each.
+  await expect.poll(() => boxes().length).toBe(1);
+  const [box] = boxes();
+  expect(box).toMatchObject({ title: 'Share 3 folders?', message: 'Let MCP clients read these 3 folders?', buttons: ['Add 3 folders', 'Cancel'] });
+  expect(box.detail).toContain(`Read-only:\n• work-docs: ${fs.realpathSync(w)}\n• notes: ${fs.realpathSync(a)}\n• notes-2: ${fs.realpathSync(b)}`);
+  expect(box.detail).toContain(`Not added:\n• ${gone}: Not a folder\n• ${el.userData}: This folder holds One’s own data`);
+
+  // Straight through the bridge with paths: ignored, main opens its own dialog (the same five, now all
+  // shared or refused) → only the reasons, an "OK" and no Add; nothing changes.
+  const r = await page.evaluate(() => (window as any).secEditBridge.mcp.addFolder('/etc', ['/tmp'], { path: '/' }));
+  expect(r.ok).toBe(true);
+  expect(r.result.folders.map((f: { alias: string }) => f.alias)).toEqual(['work-docs', 'notes', 'notes-2']);
+  await expect.poll(() => boxes().length).toBe(2);
+  expect(boxes()[1]).toMatchObject({ title: 'No folder added', buttons: ['OK'] });
+  expect(boxes()[1].detail).toContain(`• ${a}: Already shared as “notes”`);
+  expect(JSON.stringify(file())).not.toContain('/etc');
+  expect(file().folders).toHaveLength(3);
+  await expect(rows).toHaveCount(3);
+});
+
 test('Recent activity: Revert undoes an AI edit; with undo copies switched off a new edit has no Revert', async ({ el }) => {
   test.skip(!MCP_WRITES_ENABLED, 'writes are switched off in this build (MCP_WRITES_ENABLED)');
   const shared = path.join(el.tmp, 'notes');

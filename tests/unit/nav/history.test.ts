@@ -226,6 +226,76 @@ describe('NavHistory', () => {
     expect(bad.index).toBe(1);
   });
 
+  it('places(): what the buttons offer — nearest first, gone files and repeats left out, nothing moves', () => {
+    const h = new NavHistory();
+    const go = walker(h);
+    go('a.md', 3);
+    go('b.md', 0);
+    go('a.md', 3); // the same spot as the first entry: listed once
+    go('a.md', 200);
+    go('c.ts', 9);
+    go('d.md', 0);
+    for (let i = 0; i < 3; i++) h.step(-1); // at a.md:3 (the second one)
+    const at = () => `${h.current?.path}:${h.current?.line}`;
+    expect(at()).toBe('a.md:3');
+    const list = (dir: 1 | -1, max = 10, exists?: (p: string) => boolean) => h.places(dir, max, exists).map((e) => `${e.path}:${e.line}`);
+    expect(list(-1)).toEqual(['b.md:0', 'a.md:3']);
+    expect(list(1)).toEqual(['a.md:200', 'c.ts:9', 'd.md:0']);
+    expect(list(1, 2)).toEqual(['a.md:200', 'c.ts:9']);
+    expect(list(1, 10, (p) => p !== 'c.ts')).toEqual(['a.md:200', 'd.md:0']);
+    expect(at()).toBe('a.md:3');
+    // [0] is exactly where one step goes
+    expect(h.places(-1, 1)[0]).toBe(h.entries[h.index - 1]);
+  });
+
+  it('button state: greyed out at either end, live as the stack changes (= places(dir, 1) is empty)', () => {
+    const h = new NavHistory();
+    const go = walker(h);
+    const state = (exists?: (p: string) => boolean) => ({ back: h.places(-1, 1, exists).length > 0, forward: h.places(1, 1, exists).length > 0 });
+    expect(state()).toEqual({ back: false, forward: false }); // empty
+    go('a.md', 0);
+    expect(state()).toEqual({ back: false, forward: false }); // one place: nowhere to go
+    go('b.md', 0);
+    expect(state()).toEqual({ back: true, forward: false });
+    h.step(-1);
+    expect(state()).toEqual({ back: false, forward: true });
+    h.step(1);
+    expect(state()).toEqual({ back: true, forward: false });
+    expect(state((p) => p !== 'a.md')).toEqual({ back: false, forward: false }); // the only place back was deleted
+    h.step(-1);
+    go('c.md', 0); // a new navigation drops the forward entries
+    expect(state()).toEqual({ back: true, forward: false });
+    h.clear();
+    expect(state()).toEqual({ back: false, forward: false });
+  });
+
+  it('goTo jumps straight to a listed place and keeps the ones in between; forget undoes a failed jump', () => {
+    const h = new NavHistory();
+    const go = walker(h);
+    for (const p of ['a.md', 'b.md', 'c.md', 'd.md']) go(p, 0);
+    const [, , a] = h.places(-1, 10);
+    expect(a.path).toBe('a.md');
+    expect(h.goTo(a)).toBe(true);
+    expect(h.current?.path).toBe('a.md');
+    expect(h.places(1, 10).map((e) => e.path)).toEqual(['b.md', 'c.md', 'd.md']);
+    expect(h.places(-1, 10)).toEqual([]);
+    // A jump is a fresh start: the next navigation pushes (it is never coalesced into an old run).
+    h.visit({ path: 'a.md', line: 90 }, { now: 4000.1 });
+    expect(paths(h)).toEqual(['a.md:0', 'a.md:90']);
+
+    const g = new NavHistory();
+    const go2 = walker(g);
+    for (const p of ['a.md', 'b.md', 'c.md', 'd.md']) go2(p, 0);
+    const from = g.current;
+    const b = g.places(-1, 10)[1];
+    g.goTo(b);
+    g.forget(b, from); // b.md could not be opened
+    expect(paths(g)).toEqual(['a.md:0', 'c.md:0', 'd.md:0']);
+    expect(g.current?.path).toBe('d.md');
+    expect(g.goTo(b)).toBe(false); // no longer in the history (a stale menu row)
+    expect(g.current?.path).toBe('d.md');
+  });
+
   it('clear empties everything', () => {
     const h = new NavHistory();
     h.visit({ path: 'a.md' }, { now: 0 });

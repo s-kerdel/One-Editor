@@ -10,7 +10,8 @@
 .se-cn-chev { flex: none; color: var(--text-faint); }
 .se-cn-sub.open > .se-cn-head .se-cn-chev { transform: rotate(90deg); }
 .se-cn-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.se-cn-n { flex: none; font-weight: 500; font-variant-numeric: tabular-nums; }
+/* counts: the overview's own .se-ov-count pill (one look for every header) */
+.se-cn-n { margin-left: 1px; letter-spacing: normal; }
 .se-cn-actions { display: flex; align-items: center; gap: 4px; flex: none; }
 .se-cn-actions .se-ov-lvl-btn { min-width: 18px; height: 16px; }
 .se-cn-icon { display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); }

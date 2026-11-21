@@ -12,6 +12,7 @@ import { loadClassic, setClassicPrimer } from './classic-loader';
 import { panelOpen as terminalOpen, TerminalPanelSlot } from '../terminal/install';
 import { OverviewPanelLazy as OverviewPanel } from '../overview';
 import { ZenStrip, zenKeepsStatus } from './zen';
+import { NavButtons } from '../nav/buttons';
 
 const ActivityBar = lazyComponent(() => loadClassic().then((m) => m.ActivityBar));
 
@@ -134,6 +135,8 @@ export function Layout() {
         <section class="se-content">
           <div class="se-topline">
             {!sidebar && !classic && !zen && <ShelfReveal />}
+            {/* Go back / forward: the strip's start in every layout (zen too); Settings → Appearance hides them. */}
+            {app.settings.value['nav.buttons'] !== false && <NavButtons />}
             {/* Zen: leave it from the top right too (full screen has no window controls there). */}
             <TabBar end={zen && <ZenButton cls="se-width-btn" />} />
           </div>

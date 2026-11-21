@@ -49,7 +49,7 @@ const clock = (t: number, now: number) =>
     ? new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     : new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 /** What the filter matches: tool, path, folder, app, result code (+ its short line), "reverted". */
-const haystack = (r: McpActivity) => [r.tool, r.path, r.folder, r.client, r.ok ? 'ok' : result(r), r.reverted ? 'reverted' : ''].join(' ').toLowerCase();
+const haystack = (r: McpActivity) => [r.tool, r.path, r.folder, r.client, r.ok ? 'ok' : result(r), r.reverted ? 'reverted' : '', r.note ?? ''].join(' ').toLowerCase();
 
 /** Stable keys while new calls arrive on top (a row's open details stay with that row). */
 function keyed(rows: McpActivity[]) {
@@ -72,6 +72,7 @@ function CallRow({ r, now, revert }: { r: McpActivity; now: number; revert: (r: 
     `Answer ${size(r.bytes)}`,
     new Date(r.t).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' }),
     r.journal && !r.reverted && 'Undo copy kept',
+    r.note,
   ].filter(Boolean);
   return (
     <li class="se-mcp-call" data-mark={mark} data-testid="mcp-call">
@@ -102,6 +103,11 @@ function CallRow({ r, now, revert }: { r: McpActivity; now: number; revert: (r: 
           <button class="se-link-btn" data-testid="mcp-revert" title="Undo this change (only if the file was not changed since)" onClick={() => revert(r)}>
             Revert
           </button>
+        </span>
+      ) : r.ok && r.note ? (
+        // No undo copy (a deleted folder): say where it can come back from instead of a Revert button.
+        <span class="se-mcp-undo se-mcp-reverted" data-testid="mcp-call-note" title={r.note}>
+          Recycle Bin
         </span>
       ) : null}
       {open && (

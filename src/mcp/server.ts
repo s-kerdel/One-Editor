@@ -3,7 +3,8 @@
 import path from 'node:path';
 import type { Settings } from '../shared/api';
 import { MCP_AUDIT_FILE, MCP_WRITES_ENABLED, UNDO_DAYS, limitsFromSettings, type McpConfig, type McpUndo } from '../shared/mcp';
-import { platformTrash } from '../backend/trash';
+import { platformTrash, type TrashOptions } from '../backend/trash';
+import { ConfirmCodes } from './confirm';
 import { JOURNAL_DIR, Journal } from './journal';
 import { WriteQuota } from './writes';
 import { AuditLog } from './audit';
@@ -39,8 +40,12 @@ export interface ServerOptions {
   idleMs?: number;
   indexWaitMs?: number;
   win?: boolean;
-  /** Moves a file to the Recycle Bin / trash (tests: a folder under .tmp/). Default: the platform's. */
-  trash?: (abs: string) => Promise<void>;
+  /** Moves a file or folder to the Recycle Bin / trash (tests: a folder under .tmp/). Default: the platform's. */
+  trash?: (abs: string, o?: TrashOptions) => Promise<void>;
+  /** Tests: how long a question to the user (elicitation) stays open. */
+  elicitTimeoutMs?: number;
+  /** Tests: the two-step confirmation codes (a clock of their own). */
+  confirmCodes?: ConfirmCodes;
   /** Tests: other write limits. */
   quota?: WriteQuota;
   /** Tests: the home folder for the grant rules (default os.homedir()). */
@@ -71,7 +76,7 @@ export class OneMcpServer {
     this.audit = new AuditLog(path.join(o.configDir, MCP_AUDIT_FILE));
     this.journal = new Journal(path.join(o.configDir, JOURNAL_DIR), { enabled: () => this.undo.on, maxAgeMs: () => this.undo.days * 24 * 3600_000 });
     void this.journal.prune(true).catch(() => {}); // copies past their age go, even while new ones are off
-    const env: ToolEnv = { pool: this.pool, limits: () => limitsFromSettings(this.settings), indexWaitMs: o.indexWaitMs ?? 8000, settings: () => this.settings, journal: this.journal, trash: o.trash ?? platformTrash, quota: o.quota ?? new WriteQuota() };
+    const env: ToolEnv = { pool: this.pool, limits: () => limitsFromSettings(this.settings), indexWaitMs: o.indexWaitMs ?? 8000, settings: () => this.settings, journal: this.journal, trash: o.trash ?? platformTrash, quota: o.quota ?? new WriteQuota(), confirmCodes: o.confirmCodes ?? new ConfirmCodes() };
     // Stable order (clients cache the list). Write tools (`write: true`) are listed only while some folder may be written.
     this.tools = [...readTools(env), ...searchTools(env), ...linkTools(env), ...writeTools(env)];
     this.protocol = new McpProtocol({
@@ -81,13 +86,14 @@ export class OneMcpServer {
       // One folder shared: `folder` is left out of every schema (still accepted), it can only be that one.
       hiddenParams: () => (this.pool.list().length <= 1 ? ['folder'] : []),
       resources: new Resources(this.pool, env.limits),
+      elicitTimeoutMs: o.elicitTimeoutMs,
       onCall: (r) => {
         let folder: string | null = typeof r.args.folder === 'string' ? r.args.folder.slice(0, 40) : null;
         if (!folder && this.pool.list().length === 1) folder = this.pool.list()[0].alias;
         const p = typeof r.args.path === 'string' ? r.args.path : typeof r.args.uri === 'string' ? r.args.uri : null;
         const p2 = p ?? (typeof r.args.from === 'string' ? r.args.from : null);
         // The token's name is the user's own label for the app: shown rather than the name the client claims.
-        void this.audit.record({ client: o.token?.name ?? r.client, transport: o.transport, tool: r.tool, folder, path: p2 ? p2.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 300) : null, ok: r.ok, code: r.code, ms: r.ms, bytes: r.bytes, journal: r.journal ?? null, token: o.token?.id ?? null });
+        void this.audit.record({ client: o.token?.name ?? r.client, transport: o.transport, tool: r.tool, folder, path: p2 ? p2.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 300) : null, ok: r.ok, code: r.code, ms: r.ms, bytes: r.bytes, journal: r.journal ?? null, token: o.token?.id ?? null, note: r.note ?? null });
       },
     });
   }

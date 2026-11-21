@@ -9,6 +9,8 @@ const overview = (page: Page) => page.locator('aside.se-overview');
 async function toggleWithKeys(page: Page) {
   await page.keyboard.press('Control+Alt+b');
 }
+const toggleOf = (page: Page, id: string) => overview(page).locator(`[data-section="${id}"] .se-ov-sec-toggle`);
+const countOf = (page: Page, id: string) => overview(page).locator(`[data-section="${id}"] .se-ov-sec-head .se-ov-count`);
 
 test('toggle button + Ctrl+Alt+B + palette command show and hide the column', async ({ page, ws }) => {
   await ws.open(page);
@@ -49,7 +51,11 @@ test('shows outline, code blocks, links and info for the active note; follows ed
   await expect(col.locator('.se-ov-ol .se-ov-text')).toHaveText(['Welcome', 'Commands']);
   await expect(col.locator('.se-ov-code .se-ov-cmd')).toHaveText(['git push --force-with-lease origin main']);
   await expect(col.locator('.se-ov-code .se-ov-lang')).toHaveText(['bash']);
-  // Knowledge index (loads on idle): outgoing link + the note linking here.
+  // Knowledge index (loads on idle): Connections starts collapsed with its count; opened, the
+  // outgoing link + the note linking here.
+  await expect(toggleOf(page, 'connections')).toHaveAttribute('aria-expanded', 'false');
+  await expect(countOf(page, 'connections')).toHaveText('1');
+  await toggleOf(page, 'connections').click();
   await expect(col.locator('.se-ov-link .se-ov-text')).toContainText(['Daily notes']);
   await expect(col.locator('.se-ov-back .se-ov-name')).toContainText(['Daily notes']);
   await expect(col.locator('.se-ov-pill')).toContainText(['#tag/project', '#idea']);
@@ -157,6 +163,12 @@ test('classic style: flat panel with the strip rule continued, same behaviour', 
   expect(look.bg).not.toBe('rgba(0, 0, 0, 0)');
   expect(look.headBottom).toBe(look.barBottom); // the head's rule lines up with the tab strip's
   await expect(col.locator('.se-ov-ol .se-ov-text')).toHaveText(['Welcome', 'Commands']);
+  // Counts: one look for sections and Connections' parts in this style too.
+  await toggleOf(page, 'connections').click();
+  await expect(countOf(page, 'connections')).toHaveText('1');
+  await expect(col.locator('[data-sub="cn-in"] .se-cn-n')).toHaveText('1');
+  const pill = (sel: string) => col.locator(sel).first().evaluate((el) => ['backgroundColor', 'color', 'fontSize', 'lineHeight', 'borderRadius', 'letterSpacing'].map((k) => getComputedStyle(el)[k as any]).join(' | '));
+  expect(await pill('[data-sub="cn-in"] .se-cn-n')).toBe(await pill('[data-section="outline"] .se-ov-sec-head .se-ov-count'));
 });
 
 test('keyboard: Tab into the outline, arrows + Enter jump', async ({ page, ws }) => {
@@ -170,4 +182,53 @@ test('keyboard: Tab into the outline, arrows + Enter jump', async ({ page, ws })
   await page.keyboard.press('Enter');
   await expect(page.locator('.se-status')).toContainText('Ln 8, Col 1');
   await expect(page.locator('.cm-content')).toBeFocused();
+});
+
+test('empty sections start collapsed with 0 and open when they get entries; a toggle wins and survives a reload', async ({ page, ws }) => {
+  await ws.open(page);
+  await open(page, 'README.md');
+  await toggleWithKeys(page);
+  const col = overview(page);
+  // Never touched: open with entries, collapsed without; Info (no count) open; Connections collapsed.
+  for (const [id, expanded, n] of [
+    ['outline', 'true', '2'],
+    ['code', 'true', '1'],
+    ['tasks', 'false', '0'],
+    ['connections', 'false', '1'],
+  ] as const) {
+    await expect(toggleOf(page, id), id).toHaveAttribute('aria-expanded', expanded);
+    await expect(countOf(page, id), id).toHaveText(n);
+  }
+  await expect(toggleOf(page, 'info')).toHaveAttribute('aria-expanded', 'true');
+  await expect(countOf(page, 'info')).toHaveCount(0);
+  await expect(col.locator('[data-section="tasks"] .se-ov-hint')).toHaveCount(0);
+  await expect(col.locator('[data-sub], canvas')).toHaveCount(0); // collapsed Connections: header only
+
+  // Live: a task appears → Tasks opens; undone → it collapses again.
+  const content = () => page.evaluate(() => (window as any).__secEdit.editor.getContent());
+  const before = await content();
+  await page.locator('.cm-content').click();
+  await page.keyboard.press('Control+End');
+  await page.keyboard.type('\n- [ ] Ship it');
+  await expect(toggleOf(page, 'tasks')).toHaveAttribute('aria-expanded', 'true');
+  await expect(countOf(page, 'tasks')).toHaveText('0/1');
+  await expect(col.locator('.se-ov-task .se-ov-text')).toHaveText(['Ship it']);
+  await page.keyboard.press('Control+z');
+  await expect.poll(content).toBe(before);
+  await expect(toggleOf(page, 'tasks')).toHaveAttribute('aria-expanded', 'false');
+  await expect(countOf(page, 'tasks')).toHaveText('0');
+
+  // The user decides: Tasks open while empty, Code collapsed while full. Remembered after a reload.
+  await toggleOf(page, 'tasks').click();
+  await expect(col.locator('[data-section="tasks"] .se-ov-hint')).toContainText('No tasks');
+  await toggleOf(page, 'code').click();
+  await expect(toggleOf(page, 'code')).toHaveAttribute('aria-expanded', 'false');
+  await page.waitForTimeout(400); // session save (overview shown) is debounced
+  await page.reload();
+  await page.waitForSelector('html[data-ready="true"]');
+  await open(page, 'README.md');
+  await expect(toggleOf(page, 'tasks')).toHaveAttribute('aria-expanded', 'true');
+  await expect(toggleOf(page, 'code')).toHaveAttribute('aria-expanded', 'false');
+  await expect(countOf(page, 'code')).toHaveText('1');
+  await expect(toggleOf(page, 'outline')).toHaveAttribute('aria-expanded', 'true');
 });

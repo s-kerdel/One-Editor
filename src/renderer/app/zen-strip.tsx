@@ -31,7 +31,7 @@ export function ZenStrip({ right, children }: { right?: boolean; children?: Comp
   const open = app.sidebarVisible.value && app.sidebarPanel.value;
   return (
     <nav class="se-zen-strip left" aria-label="Sidebar strip">
-      {app.panels.value.map((p) => {
+      {ui.menuPanels(app.panels.value, app.settings.value['sidebar.panels'], open).map((p) => {
         const on = open === p.id;
         const keys = ui.PANEL_KEYS[p.id];
         return (

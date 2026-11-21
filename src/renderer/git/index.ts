@@ -11,7 +11,7 @@ import { GitStore, type GitBackend } from './store';
 import { diffUnavailable, openFileDiff } from './diff-open';
 import { gitUi, type GitUi } from './install';
 import { changesTree, rowClass } from './marks';
-import { ChangesBanner, GitBranchItem, GitTreeMark, fileMenuItems } from './ui';
+import { ChangesBanner, GitBranchItem, GitTreeMark, fileMenuItems, manyMenuItems } from './ui';
 import type { GitGutterSource } from './gutter';
 import { compareEnabled, editorSource, hasComparePick } from './compare-menu';
 
@@ -139,6 +139,7 @@ export function installGit(): GitStore | null {
       return memo.out;
     },
     menu: (p) => fileMenuItems(s, p),
+    menuMany: (ps) => manyMenuItems(s, ps),
     gutter: gutterSource(s),
   };
   gitUi.value = ui;

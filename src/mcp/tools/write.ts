@@ -8,10 +8,12 @@ import { toLf } from '../../backend/textcodec';
 import { isMarkdown } from '../../shared/paths';
 import { applyEdits, createRenameRewriter } from '../../knowledge/rename';
 import { appendText, patchText, replaceUnique, type PatchTarget } from '../edits';
-import type { Folder } from '../folders';
+import type { Folder, Target } from '../folders';
 import { checkPlaceholderPolicy, isVarsFile } from '../placeholders';
-import { ToolError, type ToolAnnotations, type ToolDef, type ToolResult } from '../protocol';
-import { MAX_EDIT_BYTES, MAX_MOVE_ENTRIES, MAX_WRITE_BYTES, checkEtag, checkSize, create, etagOf, makeDir, move, overwrite, parseEtag, scopeAt, trashFile, writeError, type WriteCtx } from '../writes';
+import { ToolError, type CallContext, type ToolAnnotations, type ToolDef, type ToolResult } from '../protocol';
+import { MAX_EDIT_BYTES, MAX_MOVE_ENTRIES, MAX_MOVE_WALK, MAX_WRITE_BYTES, checkEtag, checkSize, create, etagOf, makeDir, move, overwrite, parseEtag, scopeAt, trashFile, trashFolder, varsFileFor, writeError, type WriteCtx } from '../writes';
+import { binWord, count as many, folderSummary, surveyFolder } from '../confirm';
+import { dirname } from '../../shared/paths';
 import type { ToolEnv } from './common';
 import { P, etagPart, line } from './format';
 import { readyIndex } from './search';
@@ -24,10 +26,10 @@ const done = (what: string, etag?: string | null, journal?: string, ...more: str
   journal,
 });
 
-async function inWritable<T>(env: ToolEnv, args: Record<string, unknown>, client: string, tool: string, fn: (f: Folder, c: WriteCtx) => Promise<T>): Promise<T> {
+async function inWritable<T>(env: ToolEnv, args: Record<string, unknown>, client: string, tool: string, fn: (f: Folder, c: WriteCtx) => Promise<T>, o: { quota?: boolean } = {}): Promise<T> {
   const f = env.pool.get(args.folder);
   f.checkWritable(); // and again inside the Workspace slot right before the disk changes (Folder.guard)
-  env.quota.take();
+  if (o.quota !== false) env.quota.take(); // delete takes it itself: asking the user is not a change
   const varsFile = String(env.settings()['variables.fileName'] ?? '').trim() || 'variables.md';
   return f.use(() => fn(f, { folder: f, journal: env.journal, client, tool, trash: env.trash, varsFile }));
 }
@@ -182,9 +184,9 @@ export function writeTools(env: ToolEnv): ToolDef[] {
         }),
     },
     {
-      name: 'move_file',
+      name: 'move',
       title: 'Move or rename',
-      description: 'Rename or move a file or folder; never overwrites. Links to it are updated.',
+      description: 'Rename or move a file or folder (with its contents); never overwrites. Links to it are updated.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -199,7 +201,7 @@ export function writeTools(env: ToolEnv): ToolDef[] {
       annotations: ann(false),
       write: true,
       run: (a, ctx) =>
-        inWritable(env, a, ctx.client, 'move_file', async (f, c) => {
+        inWritable(env, a, ctx.client, 'move', async (f, c) => {
           const from = await f.resolveTarget(a.from, { kind: 'any', exists: 'must' });
           const isDir = !!from.st?.isDirectory();
           if (!isDir && (await f.readText(from.key)).binary) throw new ToolError('EINVAL', `Binary file: ${from.key} cannot be moved here`);
@@ -207,24 +209,37 @@ export function writeTools(env: ToolEnv): ToolDef[] {
           const to = await f.resolveTarget(a.to, { kind: isDir ? 'dir' : 'file', exists: 'mustNot', sameAs: from.st ?? undefined });
           if (to.key.toLowerCase().startsWith(`${from.key.toLowerCase()}/`)) throw new ToolError('EINVAL', 'A folder cannot be moved into itself');
           const ws = await f.workspace();
-          // Every file that moves, old → new. A folder must hold nothing hidden, excluded or linked, and nothing
-          // of it may land somewhere hidden or excluded (`docs/private` excluded: moving src → docs is refused
-          // when src/private exists).
+          // Visible files, old → new (link rewrites, placeholder checks). A folder takes everything along: items
+          // hidden by name (.git, .env, key files) stay hidden by name. Every entry keeps its visibility: nothing
+          // may land in a hidden or excluded place, nothing excluded by a rooted rule may come out of it.
           const pairs = new Map<string, string>();
+          let hiddenFiles = 0;
           if (isDir) {
-            const inside = await scan(f, from.key, await fs.promises.realpath(from.abs));
+            const inside = await scan(from.key, await fs.promises.realpath(from.abs));
             for (const rel of inside.all) {
               const dest = to.key + rel.slice(from.key.length);
-              if (f.hidden(dest)) throw new ToolError('EACCES', `Cannot move ${from.key} to ${to.key}`);
-              if (!inside.dirs.has(rel)) pairs.set(rel, dest);
+              const was = f.hidden(rel);
+              if (was !== f.hidden(dest)) {
+                throw new ToolError('EACCES', was ? `Cannot move ${from.key} to ${to.key}: items your exclusions hide there would become visible. Move it in One instead.` : `Cannot move ${from.key} to ${to.key}`);
+              }
+              if (inside.dirs.has(rel)) continue;
+              if (isVarsFile(rel, c.varsFile)) throw new ToolError('ESECRET', `AI apps cannot move variables files (${c.varsFile}).`);
+              if (was) hiddenFiles++;
+              else pairs.set(rel, dest);
             }
+            if (pairs.size > MAX_MOVE_ENTRIES) throw new ToolError('ETOOBIG', `${from.key} holds more than ${MAX_MOVE_ENTRIES.toLocaleString('en')} files: move it in One instead`);
           } else pairs.set(from.key, to.key);
-          // Placeholders: no variables file moves, and no note lands under a variables file that makes one of
-          // its code blocks secret.
-          for (const [o, n] of pairs) {
-            if (isVarsFile(o, c.varsFile) || isVarsFile(n, c.varsFile)) throw new ToolError('ESECRET', `AI apps cannot move variables files (${c.varsFile}).`);
-            const text = (await f.readText(o)).content;
-            await checkPlaceholderPolicy({ path: o, newPath: n, before: text, after: text, scopeBefore: await scopeAt(c, o, text), scopeAfter: await scopeAt(c, n, text), fileName: c.varsFile });
+          // Placeholders: no variables file moves; a note may only come under other definitions if the rules
+          // allow it there (hidden files are never read: under other definitions, the move is refused).
+          if (pairs.has(from.key) && isVarsFile(from.key, c.varsFile)) throw new ToolError('ESECRET', `AI apps cannot move variables files (${c.varsFile}).`);
+          if (isVarsFile(to.key, c.varsFile)) throw new ToolError('ESECRET', `AI apps cannot move variables files (${c.varsFile}).`);
+          const sameDefs = (await varsFileFor(c, dirname(from.key))) === (await varsFileFor(c, dirname(to.key)));
+          if (!sameDefs) {
+            if (hiddenFiles) throw new ToolError('ESECRET', `Cannot move ${from.key} to ${to.key}: it holds hidden files that would come under other {{variables}} definitions. Move it in One instead.`);
+            for (const [o, n] of pairs) {
+              const text = (await f.readText(o)).content;
+              await checkPlaceholderPolicy({ path: o, newPath: n, before: text, after: text, scopeBefore: await scopeAt(c, o, text), scopeAfter: await scopeAt(c, n, text), fileName: c.varsFile });
+            }
           }
           const update = typeof a.update_links === 'boolean' ? a.update_links : env.settings()['links.updateOnRename'] !== false;
           let rewrite: ((p: string, text: string) => string | null) | null = null;
@@ -286,39 +301,52 @@ export function writeTools(env: ToolEnv): ToolDef[] {
         }),
     },
     {
-      name: 'delete_file',
-      title: 'Delete a file',
-      description: 'Move one file to the Recycle Bin (never permanent; folders not supported).',
-      inputSchema: { type: 'object', properties: { folder: P.folder, path: P.path('File path'), if_match: etagParam }, required: ['path'], additionalProperties: false },
+      name: 'delete',
+      title: 'Delete',
+      description: "Move a file or folder to the Recycle Bin. A folder (all it holds) needs the user's OK: show them the summary; only if they agree, call again with confirm.",
+      inputSchema: {
+        type: 'object',
+        properties: { folder: P.folder, path: P.path('File or folder'), if_match: etagParam, confirm: { type: 'string', description: 'Code from the summary, once the user agreed.', maxLength: 20 } },
+        required: ['path'],
+        additionalProperties: false,
+      },
       annotations: ann(true),
       write: true,
       run: (a, ctx) =>
-        inWritable(env, a, ctx.client, 'delete_file', async (f, c) => {
-          const t = await f.resolveTarget(a.path, { kind: 'file', exists: 'must' });
-          if (isVarsFile(t.key, c.varsFile)) throw new ToolError('ESECRET', `AI apps cannot delete variables files (${c.varsFile}).`);
-          const read = await f.readText(t.key);
-          if (read.binary) throw new ToolError('EINVAL', `Binary file: ${t.key} cannot be deleted here`);
-          const stamp = { mtime: read.mtime, size: read.size };
-          checkEtag(t.key, { mtimeMs: stamp.mtime, size: stamp.size }, parseEtag(a.if_match));
-          const r = await trashFile(c, t, stamp);
-          return done(`Deleted ${t.key} (Recycle Bin)`, null, r.journal);
-        }),
+        inWritable(
+          env,
+          a,
+          ctx.client,
+          'delete',
+          async (f, c) => {
+            const t = await f.resolveTarget(a.path, { kind: 'any', exists: 'must' });
+            if (t.st?.isDirectory()) return deleteFolder(env, f, c, t, typeof a.confirm === 'string' ? a.confirm : null, ctx);
+            env.quota.take();
+            if (isVarsFile(t.key, c.varsFile)) throw new ToolError('ESECRET', `AI apps cannot delete variables files (${c.varsFile}).`);
+            const read = await f.readText(t.key);
+            if (read.binary) throw new ToolError('EINVAL', `Binary file: ${t.key} cannot be deleted here`);
+            const stamp = { mtime: read.mtime, size: read.size };
+            checkEtag(t.key, { mtimeMs: stamp.mtime, size: stamp.size }, parseEtag(a.if_match));
+            const r = await trashFile(c, t, stamp);
+            return done(`Deleted ${t.key} (${binWord()})`, null, r.journal);
+          },
+          { quota: false },
+        ),
     },
   ];
 }
 
-/** Everything in a folder about to move (files and sub-folders); refuses hidden, excluded or linked entries
- *  and very large folders. */
-async function scan(f: Folder, key: string, realDir: string): Promise<{ all: string[]; dirs: Set<string> }> {
+/** Everything in a folder about to move (files and sub-folders, hidden ones included: walked, never read).
+ *  Refuses links (they stay where they are) and special files, and very large folders. */
+async function scan(key: string, realDir: string): Promise<{ all: string[]; dirs: Set<string> }> {
   const all: string[] = [];
   const dirs = new Set<string>();
-  // Which entry is not said (a client could probe the exclusions name by name).
-  const cannot = () => new ToolError('EACCES', `Cannot move ${key}: it holds entries AI apps cannot change (hidden, excluded or linked)`);
+  const cannot = () => new ToolError('EACCES', `Cannot move ${key}: it holds links or special files. Move it in One instead.`);
   const walk = async (dir: string, rel: string) => {
     for (const e of await fs.promises.readdir(dir, { withFileTypes: true })) {
       const r = `${rel}/${e.name}`;
-      if (all.length >= MAX_MOVE_ENTRIES) throw new ToolError('ETOOBIG', `${key} holds more than ${MAX_MOVE_ENTRIES} entries: move it in One instead`);
-      if (f.hidden(r) || e.isSymbolicLink()) throw cannot();
+      if (all.length >= MAX_MOVE_WALK) throw new ToolError('ETOOBIG', `${key} holds more than ${MAX_MOVE_WALK.toLocaleString('en')} entries: move it in One instead`);
+      if (e.isSymbolicLink()) throw cannot();
       if (e.isDirectory()) {
         all.push(r);
         dirs.add(r);
@@ -333,4 +361,54 @@ async function scan(f: Folder, key: string, realDir: string): Promise<{ all: str
     throw err instanceof ToolError ? err : writeError(err, key);
   }
   return { all, dirs };
+}
+
+/**
+ * A folder and everything in it (hidden items too) to the Recycle Bin, after the user's OK: asked through
+ * the client when it can (elicitation), else in two steps (a summary and a one-time code, confirm.ts). No
+ * undo copy (hidden contents are never read): restored from the bin. One change in the quota, no size cap.
+ */
+async function deleteFolder(env: ToolEnv, f: Folder, c: WriteCtx, t: Target, code: string | null, ctx: CallContext): Promise<ToolResult> {
+  const realDir = await fs.promises.realpath(t.abs).catch((err) => {
+    throw writeError(err, t.key);
+  });
+  const survey = () =>
+    surveyFolder(realDir, t.key, (r) => f.hidden(r)).catch((err) => {
+      throw err instanceof ToolError ? err : writeError(err, t.key);
+    });
+  const s = await survey();
+  const summary = folderSummary(t.key, s);
+  const target = `${f.alias}\0${t.key}`;
+  const asked = (await ctx.confirm?.({ message: summary, bind: `delete\0${target}\0${s.fingerprint}` })) ?? 'unsupported';
+  const audit = { tool: 'delete (folder)' };
+  if (asked === 'unsupported') {
+    if (code === null || !code.trim()) {
+      const fresh = env.confirmCodes.mint(target, s.fingerprint);
+      return { content: [{ type: 'text', text: `${summary} Show this to the user; only if they agree, call delete again with confirm. · confirm: ${fresh}` }], audit: { ...audit, ok: false, code: 'ASKED', note: 'waiting for the user' } };
+    }
+    const k = env.confirmCodes.take(code, target, s.fingerprint);
+    if (k !== 'ok') {
+      const why = { unknown: 'that confirm code is not valid', expired: 'that confirm code expired', used: 'that confirm code was used already', other: 'that confirm code is for another folder', changed: 'the folder changed since the summary' }[k];
+      const fresh = env.confirmCodes.mint(target, s.fingerprint);
+      throw new ToolError('ECONFIRM', `Not deleted: ${why}. ${summary} Ask the user again; only if they agree, call delete with confirm. · confirm: ${fresh}`);
+    }
+  } else if (asked !== 'yes') {
+    throw new ToolError('ECANCELED', asked === 'no' ? 'Not deleted: the user declined' : 'Not deleted: the user did not answer');
+  } else if ((await survey()).fingerprint !== s.fingerprint) {
+    throw new ToolError('EXTERNAL_CHANGE', 'Not deleted: the folder changed while the user was asked. Try again.');
+  }
+  env.quota.take();
+  try {
+    await trashFolder(c, t);
+  } catch (err) {
+    // A trash call that failed after starting (killed, cancelled at Windows' own prompt) may have moved part of
+    // the folder: say what is left instead of "nothing was deleted" (there is no undo copy for folders).
+    const left = await surveyFolder(realDir, t.key, (r) => f.hidden(r)).catch(() => null);
+    const before = s.files + s.folders;
+    if (!left) throw new ToolError('EPARTIAL', `${t.key} is no longer there, but the ${binWord()} reported an error: check the ${binWord()}.`);
+    const now = left.files + left.folders;
+    if (now < before) throw new ToolError('EPARTIAL', `Partly deleted: ${many(before - now, 'item')} of ${before} went to the ${binWord()}; ${many(now, 'item')} are still in ${t.key}.`);
+    throw err;
+  }
+  return { content: [{ type: 'text', text: `Deleted folder ${t.key} (${many(s.files, 'file')}, ${many(s.folders, 'folder')}) to the ${binWord()}: restore it from there (no undo copy)` }], audit: { ...audit, note: `restore from the ${binWord()}` } };
 }

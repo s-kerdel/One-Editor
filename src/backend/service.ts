@@ -33,6 +33,7 @@ import { ProcessExplorer, registerProcessSource } from './processes';
 import type { ProcRequest, ProcSnapshot } from '../shared/processes';
 import { winSystemExe } from './winsys';
 import { isMainOwnedKey } from '../shared/mcp';
+import { applyOp, cleanList, cleanOp, type Bookmark } from '../shared/bookmarks';
 
 // Moved to ./appdata (dependency-light, shared with the MCP server); re-exported for existing callers.
 export { defaultConfigDir, defaultCacheDir, indexOptionsFrom } from './appdata';
@@ -519,6 +520,33 @@ export class BackendService {
     if (!ws) return;
     this.sessionCache.set(ws.root, s); // synchronously, before the write: see sessionCache
     await writeJson(this.sessionFile(ws.root), s);
+  }
+
+  /** In-process order of bookmark reads / changes (the file lock covers other processes). */
+  private bookmarkChain: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Bookmarks of the open folder (renderer/bookmarks): `<app data>/bookmarks/<folder id>.json`, never in the folder,
+   * shared by desktop and browser mode. No argument reads; a change (shared/bookmarks.ts `BookmarkOp`, validated
+   * by `cleanOp`) is applied to the list as it is on disk, under the file lock, and the new list is returned.
+   * Bookmarks are data only: nothing here touches a bookmarked path.
+   */
+  async bookmarks(op?: unknown): Promise<Bookmark[]> {
+    const file = path.join(this.configDir, 'bookmarks', `${rootId(this.ws().root)}.json`);
+    const change = op === undefined || op === null ? null : cleanOp(op);
+    if (op != null && !change) throw new BackendFailure('EINVAL', 'Invalid bookmark change');
+    const read = async () => cleanList((await readJson<{ items?: unknown } | null>(file, null))?.items);
+    const run = this.bookmarkChain.then(() =>
+      change
+        ? withFileLock(file, async () => {
+            const list = applyOp(await read(), change);
+            await writeJson(file, { version: 1, items: list });
+            return list;
+          })
+        : read(),
+    );
+    this.bookmarkChain = run.catch(() => {});
+    return run;
   }
 
   async openExternal(url: string) {

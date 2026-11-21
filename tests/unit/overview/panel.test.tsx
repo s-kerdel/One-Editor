@@ -7,7 +7,9 @@ import { act } from 'preact/test-utils';
 import { app, type DocState } from '../../../src/renderer/app/app';
 import * as ui from '../../../src/renderer/app/ui';
 import { mountOverview } from '../../../src/renderer/overview/OverviewPanel';
-import { collapsedSections } from '../../../src/renderer/overview/hooks';
+import { collapsedSections } from '../../../src/renderer/overview/sections';
+import { searchClient } from '../../../src/renderer/search/client';
+import type { Mention } from '../../../src/knowledge/index';
 
 const NOTE = `---
 tags: [ops]
@@ -246,8 +248,9 @@ describe('overview panel', () => {
     };
     index.setFiles(Object.keys(notes));
     for (const [p, t] of Object.entries(notes)) index.update(p, t);
-    // No canvas / search workers in happy-dom: the graph and mention scan stay folded.
-    collapsedSections.value = { 'cn-graph': true, 'cn-mentions': true };
+    // Opened by the user (it starts collapsed); no canvas in happy-dom: the graph stays folded.
+    collapsedSections.value = { connections: false, 'cn-graph': true, 'cn-mentions': true };
+    const scan = vi.spyOn(searchClient, 'mentions').mockResolvedValue([]); // no search workers here
     mount();
     await vi.waitFor(() => expect($$('.se-ov-link')).toHaveLength(2));
     const links = $$('.se-ov-link');
@@ -273,12 +276,17 @@ describe('overview panel', () => {
     expect(count('cn-in')).toBe('2');
     expect(count('cn-out')).toBe('2');
     expect($('[data-section="connections"] .se-ov-count')!.textContent).toBe('2'); // Deploy checklist + Incident log
+    // Folded sub-sections still count: the graph, and the mentions (the scan runs while Connections is open).
+    expect(count('cn-graph')).toBe('2');
+    await vi.waitFor(() => expect(count('cn-mentions')).toBe('0'));
+    expect(scan).toHaveBeenCalledWith(['Runbook'], 'notes/Runbook.md', 500);
     // Postmortem cites Deploy checklist too (bibliographic coupling).
     expect($$('.se-cn-rel .se-ov-name').map((n) => n.textContent)).toEqual(['Postmortem']);
     // Sub-sections fold and stay folded.
     click($('[data-sub="cn-in"] .se-cn-toggle'));
     expect($$('.se-ov-back')).toHaveLength(0);
     expect(JSON.parse(localStorage.getItem('sec-edit-overview-sections')!)['cn-in']).toBe(true);
+    scan.mockRestore();
     index.clear();
   });
 
@@ -346,5 +354,161 @@ describe('overview panel', () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(el.textContent).toContain('2.0 KB');
+  });
+});
+
+// ---------------------------------------------------------------- default open / closed + counts
+
+const PLAIN = '# Plain\nsome text\n## Two\n';
+const FENCE = '```';
+const sec = (id: string) => $(`[data-section="${id}"]`);
+const isOpen = (id: string) => sec(id)!.querySelector('.se-ov-sec-toggle')!.getAttribute('aria-expanded') === 'true';
+const headCount = (id: string) => sec(id)!.querySelector('.se-ov-sec-head .se-ov-count')?.textContent ?? null;
+const sub = (id: string) => $(`[data-sub="${id}"]`);
+const subOpen = (id: string) => sub(id)!.querySelector('.se-cn-toggle')!.getAttribute('aria-expanded') === 'true';
+const subCount = (id: string) => sub(id)!.querySelector('.se-cn-n')!.textContent;
+const edit = (path: string, content: string) =>
+  act(() => {
+    app.docs.get(path)!.content = content;
+    app.events.emit('doc:changed', path, content);
+  });
+/** The mention scan held open; `answer` settles every pending call (an index bump restarts the scan). */
+function pendingScans() {
+  const pending: Array<(m: Mention[]) => void> = [];
+  const scan = vi.spyOn(searchClient, 'mentions').mockImplementation(() => new Promise((r) => pending.push(r)));
+  return { scan, answer: (m: Mention[]) => pending.splice(0).forEach((r) => r(m)) };
+}
+const mention = (from: string, line: number): Mention => ({ from, line, col: 0, length: 7, text: 'Runbook', context: { text: 'Runbook here', start: 0, end: 7 } });
+
+describe('overview sections: default open / closed, counts', () => {
+  it('never touched: lists with entries start open, empty ones collapsed with 0; Info open (no count); Connections collapsed', () => {
+    setDoc('notes/Plain.md', PLAIN);
+    app.activePath.value = 'notes/Plain.md';
+    mount();
+    expect([isOpen('outline'), headCount('outline')]).toEqual([true, '2']);
+    expect([isOpen('code'), headCount('code')]).toEqual([false, '0']);
+    expect([isOpen('tasks'), headCount('tasks')]).toEqual([false, '0']);
+    expect(sec('code')!.querySelector('.se-ov-hint')).toBeNull(); // the body (hint) is not rendered
+    expect([isOpen('info'), headCount('info')]).toEqual([true, null]);
+    expect(isOpen('connections')).toBe(false);
+    expect(headCount('connections')).not.toBeNull(); // "…" until its chunk counts
+    expect(localStorage.getItem('sec-edit-overview-sections')).toBeNull(); // defaults are not choices
+  });
+
+  it('live: an untouched section opens when it gets entries and collapses when it loses them', () => {
+    vi.useFakeTimers();
+    setDoc('notes/Plain.md', PLAIN);
+    app.activePath.value = 'notes/Plain.md';
+    mount();
+    edit('notes/Plain.md', `${PLAIN}- [ ] Ship it\n${FENCE}sh\nls\n${FENCE}\n`);
+    act(() => void vi.advanceTimersByTime(160));
+    expect([isOpen('tasks'), headCount('tasks')]).toEqual([true, '0/1']);
+    expect([isOpen('code'), headCount('code')]).toEqual([true, '1']);
+    expect(rowTexts('.se-ov-task')).toEqual(['Ship it']);
+    edit('notes/Plain.md', '');
+    act(() => void vi.advanceTimersByTime(160));
+    expect([isOpen('tasks'), isOpen('code'), isOpen('outline')]).toEqual([false, false, false]);
+    expect([headCount('tasks'), headCount('code'), headCount('outline')]).toEqual(['0', '0', '0']);
+  });
+
+  it('an explicit toggle wins — open while empty, collapsed while full — and is remembered', () => {
+    vi.useFakeTimers();
+    setDoc('notes/Plain.md', PLAIN);
+    app.activePath.value = 'notes/Plain.md';
+    mount();
+    click(sec('tasks')!.querySelector('.se-ov-sec-toggle'));
+    click(sec('outline')!.querySelector('.se-ov-sec-toggle'));
+    expect(isOpen('tasks')).toBe(true);
+    expect(sec('tasks')!.textContent).toContain('No tasks');
+    expect(isOpen('outline')).toBe(false);
+    expect(JSON.parse(localStorage.getItem('sec-edit-overview-sections')!)).toEqual({ tasks: false, outline: true });
+    // Content changes no longer move them.
+    edit('notes/Plain.md', `${PLAIN}## Three\n`);
+    act(() => void vi.advanceTimersByTime(160));
+    expect([isOpen('outline'), headCount('outline')]).toEqual([false, '3']);
+    expect(isOpen('tasks')).toBe(true);
+    // Another file, and a fresh mount: same choices.
+    act(() => unmount!());
+    app.activePath.value = 'notes/Runbook.md';
+    mount();
+    expect([isOpen('outline'), isOpen('tasks'), isOpen('code')]).toEqual([false, true, true]);
+  });
+
+  it('Connections: collapsed by default with its count — no lists, graph or mention scan until opened', async () => {
+    const { index } = await import('../../../src/renderer/knowledge/state');
+    const { connectionsPerf } = await import('../../../src/renderer/knowledge/Connections');
+    index.clear();
+    const notes: Record<string, string> = {
+      'notes/Runbook.md': NOTE,
+      'notes/Deploy checklist.md': '# Deploy checklist\n#ops',
+      'notes/Incident log.md': '# Incident\n\nsee [[Runbook]] for the fix\n',
+      'notes/Postmortem.md': '# Postmortem\n[[Deploy checklist]]',
+    };
+    index.setFiles(Object.keys(notes));
+    for (const [p, t] of Object.entries(notes)) index.update(p, t);
+    const { scan, answer } = pendingScans();
+    const graphs = connectionsPerf.graph.length;
+    mount();
+    await vi.waitFor(() => expect(headCount('connections')).toBe('2')); // Deploy checklist + Incident log
+    await act(async () => void (await new Promise((r) => setTimeout(r, 20))));
+    expect(isOpen('connections')).toBe(false);
+    expect($$('[data-sub]')).toHaveLength(0);
+    expect($('.se-cn-graph')).toBeNull();
+    expect(scan).not.toHaveBeenCalled();
+    expect(connectionsPerf.graph.length).toBe(graphs);
+
+    click(sec('connections')!.querySelector('.se-ov-sec-toggle'));
+    expect($$('[data-sub]').map((d) => d.dataset.sub)).toEqual(['cn-graph', 'cn-in', 'cn-out', 'cn-mentions', 'cn-tags', 'cn-related']);
+    // Counted ones with entries start open; the mention scan is still running: "…", folded.
+    expect([subCount('cn-graph'), subOpen('cn-graph')]).toEqual(['2', true]);
+    expect([subCount('cn-in'), subOpen('cn-in')]).toEqual(['1', true]);
+    expect([subCount('cn-out'), subOpen('cn-out')]).toEqual(['2', true]);
+    expect([subCount('cn-tags'), subOpen('cn-tags')]).toEqual(['1', true]); // #ops
+    expect([subCount('cn-related'), subOpen('cn-related')]).toEqual(['1', true]); // Postmortem cites Deploy checklist too
+    expect([subCount('cn-mentions'), subOpen('cn-mentions')]).toEqual(['…', false]);
+    expect(sub('cn-mentions')!.querySelector('.se-cn-n')!.classList.contains('is-pending')).toBe(true);
+    await vi.waitFor(() => expect(scan).toHaveBeenCalled());
+    await act(async () => answer([mention('notes/Incident log.md', 0), mention('notes/Deploy checklist.md', 0)]));
+    // Known: the count, and (never touched) it opens.
+    await vi.waitFor(() => expect([subCount('cn-mentions'), subOpen('cn-mentions')]).toEqual(['2', true]));
+    expect($$('.se-cn-mention')).toHaveLength(2);
+    // Collapsed again by the user: the count stays.
+    click(sub('cn-mentions')!.querySelector('.se-cn-toggle'));
+    expect([subCount('cn-mentions'), subOpen('cn-mentions')]).toEqual(['2', false]);
+    expect(JSON.parse(localStorage.getItem('sec-edit-overview-sections')!)).toEqual({ connections: false, 'cn-mentions': true });
+    scan.mockRestore();
+    index.clear();
+  });
+
+  it('Connections sub-sections: every one shows a count; empty ones start collapsed; a full scan reads "500+"', async () => {
+    const { index } = await import('../../../src/renderer/knowledge/state');
+    index.clear();
+    setDoc('notes/Lonely.md', '# Lonely\nno links\n');
+    index.setFiles(['notes/Lonely.md', 'notes/Runbook.md']);
+    index.update('notes/Lonely.md', '# Lonely\nno links\n');
+    app.activePath.value = 'notes/Lonely.md';
+    const { scan, answer } = pendingScans();
+    collapsedSections.value = { connections: false };
+    mount();
+    await vi.waitFor(() => expect(sub('cn-in')).toBeTruthy());
+    await vi.waitFor(() => expect(scan).toHaveBeenCalled());
+    await act(async () => answer([]));
+    await vi.waitFor(() => expect(subCount('cn-mentions')).toBe('0'));
+    expect(headCount('connections')).toBe('0');
+    for (const id of ['cn-graph', 'cn-in', 'cn-out', 'cn-mentions', 'cn-tags', 'cn-related']) expect([id, subCount(id), subOpen(id)]).toEqual([id, '0', false]);
+    expect($('.se-cn-graph')).toBeNull(); // folded: no canvas
+    // Opened by hand: the hint explains the empty list.
+    click(sub('cn-tags')!.querySelector('.se-cn-toggle'));
+    expect(sub('cn-tags')!.textContent).toContain('This note has no tags.');
+
+    // Another note whose scan hits the cap.
+    scan.mockResolvedValue(Array.from({ length: 500 }, (_, i) => mention('notes/Other.md', i)));
+    index.update('notes/Runbook.md', NOTE);
+    act(() => void (app.activePath.value = 'notes/Runbook.md'));
+    await vi.waitFor(() => expect(subCount('cn-mentions')).toBe('500+'));
+    expect(subOpen('cn-mentions')).toBe(true);
+    expect($$('.se-cn-mention')).toHaveLength(100); // the list stays short
+    scan.mockRestore();
+    index.clear();
   });
 });

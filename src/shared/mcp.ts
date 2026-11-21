@@ -251,6 +251,8 @@ export interface McpActivity {
   reverted?: boolean;
   /** The access token the call came with (its id; "last used" in Settings). */
   token?: string | null;
+  /** A short note for the row, e.g. "restore from the Recycle Bin" (a folder delete keeps no undo copy). */
+  note?: string | null;
 }
 
 const short = (v: unknown, max: number): string | null => (typeof v === 'string' && v ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max) : null);
@@ -266,7 +268,7 @@ export function parseActivityLine(line: string): McpActivity | null {
   if (!o || typeof o !== 'object') return null;
   const r = o as Record<string, unknown>;
   const tool = short(r.tool, 64);
-  if (typeof r.t !== 'number' || !Number.isFinite(r.t) || !tool || !/^[\w./-]+$/.test(tool)) return null;
+  if (typeof r.t !== 'number' || !Number.isFinite(r.t) || !tool || !/^[\w./-]+(?: \([a-z ]{1,20}\))?$/.test(tool)) return null;
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : 0);
   return {
     t: r.t,
@@ -281,6 +283,7 @@ export function parseActivityLine(line: string): McpActivity | null {
     bytes: num(r.bytes),
     journal: typeof r.journal === 'string' && JOURNAL_GROUP_RE.test(r.journal) ? r.journal : null,
     token: typeof r.token === 'string' && /^[a-f0-9]{8,32}$/.test(r.token) ? r.token : null,
+    note: short(r.note, 80),
   };
 }
 

@@ -207,10 +207,10 @@ describe('1. {{placeholders}}: definitions off limits, secret names frozen, fail
 
   it('definitions: the variables file (any folder, any case), frontmatter vars / target / env, fence {…} attributes', async () => {
     expect((await t.call('replace_text', { path: 'variables.md', old: 'example.org', new: 'evil.example' })).text).toMatch(/^ESECRET: .*variables files/);
-    expect((await t.call('delete_file', { path: 'variables.md' })).text).toMatch(/^ESECRET/);
-    expect((await t.call('move_file', { from: 'variables.md', to: 'old-vars.md' })).text).toMatch(/^ESECRET/);
+    expect((await t.call('delete', { path: 'variables.md' })).text).toMatch(/^ESECRET/);
+    expect((await t.call('move', { from: 'variables.md', to: 'old-vars.md' })).text).toMatch(/^ESECRET/);
     expect((await t.call('write_file', { path: 'sub/Variables.MD', content: 'vars:\n  host: evil\n' })).text).toMatch(/^ESECRET/);
-    expect((await t.call('move_file', { from: 'ops/fm.md', to: 'sub/variables.md' })).text).toMatch(/^ESECRET/);
+    expect((await t.call('move', { from: 'ops/fm.md', to: 'sub/variables.md' })).text).toMatch(/^ESECRET/);
     expect(get(root, 'variables.md')).toBe(VARS);
     expect((await t.call('patch_file', { path: 'ops/fm.md', frontmatter_key: 'vars', operation: 'replace', content: '{ host: evil }' })).text).toMatch(/^ESECRET: .*vars, target, env or secrets/);
     expect((await t.call('patch_file', { path: 'ops/fm.md', frontmatter_key: 'target', operation: 'replace', content: 'DC01', create_target: true })).text).toMatch(/^ESECRET/);
@@ -235,11 +235,11 @@ describe('1. {{placeholders}}: definitions off limits, secret names frozen, fail
   it('a move re-checks under the destination: a note lands under a stricter variables file', async () => {
     put(root, 'strict/variables.md', '```yaml\nsecrets: [host]\n```\n');
     put(root, 'ops/hosty.md', `${fence('ssh {{host}}')}\n`);
-    expect((await t.call('move_file', { from: 'ops/hosty.md', to: 'strict/hosty.md' })).text).toMatch(/^ESECRET/);
+    expect((await t.call('move', { from: 'ops/hosty.md', to: 'strict/hosty.md' })).text).toMatch(/^ESECRET/);
     expect(fs.existsSync(path.join(root, 'ops/hosty.md'))).toBe(true);
     // A folder move: every note inside is checked.
     put(root, 'box/inner.md', `${fence('ssh {{host}}')}\n`);
-    expect((await t.call('move_file', { from: 'box', to: 'strict/box' })).text).toMatch(/^ESECRET/);
+    expect((await t.call('move', { from: 'box', to: 'strict/box' })).text).toMatch(/^ESECRET/);
     expect(fs.existsSync(path.join(root, 'box/inner.md'))).toBe(true);
   });
 });
@@ -272,11 +272,11 @@ describe('3. deletes always keep an undo copy', () => {
     const root = fresh('del');
     put(root, 'gone.md', 'keep me\n');
     const t = await server(root, { undo: { on: false, days: 30 } });
-    const r = await t.call('delete_file', { path: 'gone.md' });
+    const r = await t.call('delete', { path: 'gone.md' });
     expect(r.text).toMatch(/^Deleted gone\.md \(Recycle Bin\) · undo: [a-f0-9]{8}$/);
     expect(fs.existsSync(path.join(root, 'gone.md'))).toBe(false);
     await t.s.audit.flush();
-    const row = fs.readFileSync(path.join(tmp, 'cfg', 'mcp-audit.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).reverse().find((x) => x.tool === 'delete_file');
+    const row = fs.readFileSync(path.join(tmp, 'cfg', 'mcp-audit.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).reverse().find((x) => x.tool === 'delete');
     expect(row.journal).toBeTruthy();
     const { revertGroup, JOURNAL_DIR } = await import('../../../src/mcp/journal');
     await revertGroup(t.f(), path.join(tmp, 'cfg', JOURNAL_DIR), row.journal, async () => {});
@@ -384,8 +384,8 @@ describe('5. folder moves, neutral refusals, 8.3 names', () => {
     put(root, 'docs/readme.md', 'r\n');
     const t = await server(root, { settings: { excludeGlobs: ['node_modules', 'docs/private'] } });
     expect(t.f().hidden('docs/private/key.md')).toBe(true);
-    expect((await t.call('move_file', { from: 'src', to: 'docs/src' })).isError).toBe(false); // docs/src/private is not excluded
-    expect((await t.call('move_file', { from: 'docs/src/private', to: 'docs/private' })).text).toMatch(/^EACCES: Cannot change docs\/private$/);
+    expect((await t.call('move', { from: 'src', to: 'docs/src' })).isError).toBe(false); // docs/src/private is not excluded
+    expect((await t.call('move', { from: 'docs/src/private', to: 'docs/private' })).text).toMatch(/^EACCES: Cannot change docs\/private$/);
     expect(fs.existsSync(path.join(root, 'docs/src/private/key.md'))).toBe(true);
   });
 
@@ -394,7 +394,7 @@ describe('5. folder moves, neutral refusals, 8.3 names', () => {
     put(root, 'a/private/x.md', 'x\n');
     put(root, 'a/y.md', 'y\n');
     const t = await server(root, { settings: { excludeGlobs: ['node_modules', 'docs/private'] } });
-    expect((await t.call('move_file', { from: 'a', to: 'docs' })).text).toMatch(/^EACCES: Cannot move a to docs$/);
+    expect((await t.call('move', { from: 'a', to: 'docs' })).text).toMatch(/^EACCES: Cannot move a to docs$/);
     expect(fs.existsSync(path.join(root, 'a/private/x.md'))).toBe(true);
     expect(fs.existsSync(path.join(root, 'docs'))).toBe(false);
   });

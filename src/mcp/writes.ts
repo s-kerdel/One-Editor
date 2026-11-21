@@ -7,6 +7,7 @@ import path from 'node:path';
 import { BackendFailure } from '../backend/errors';
 import { decode, encode } from '../backend/textcodec';
 import type { TextEncoding } from '../shared/api';
+import type { TrashOptions } from '../backend/trash';
 import { dirname } from '../shared/paths';
 import type { Folder, Stamp, Target, TextFile } from './folders';
 import type { Journal, JournalOp } from './journal';
@@ -19,8 +20,10 @@ export const MAX_WRITE_BYTES = 2 * 1024 * 1024;
 export const MAX_EDIT_BYTES = 256 * 1024;
 /** A file an edit produces (it is read whole to be edited). */
 export const MAX_RESULT_BYTES = 16 * 1024 * 1024;
-/** move_file: folders with more entries are refused. */
-export const MAX_MOVE_ENTRIES = 500;
+/** move: a folder with more visible files than this is refused (its links are rewritten one by one). */
+export const MAX_MOVE_ENTRIES = 10_000;
+/** move: and with more entries in all (hidden ones included: walked for links, never read). */
+export const MAX_MOVE_WALK = 200_000;
 /** Write calls per server session, and per minute. */
 export const WRITE_QUOTA = { session: 500, perMinute: 60 } as const;
 
@@ -44,8 +47,8 @@ export interface WriteCtx {
   journal: Journal;
   client: string;
   tool: string;
-  /** Moves a file to the Recycle Bin / trash; throws when there is none for this path. */
-  trash(abs: string): Promise<void>;
+  /** Moves a file or folder to the Recycle Bin / trash; throws when there is none for this path. */
+  trash(abs: string, o?: TrashOptions): Promise<void>;
   /** The variables file name (setting variables.fileName). */
   varsFile: string;
 }
@@ -55,15 +58,20 @@ export interface WriteCtx {
  *  from the disk, not the listing: a variables file created a moment ago counts at once. One that cannot be
  *  read through the resolver (hidden, excluded, a link) counts as unreadable: fail closed too. */
 export async function scopeAt(c: WriteCtx, notePath: string, noteText: string): Promise<SecretScope> {
+  const f = await varsFileFor(c, dirname(notePath));
+  if (f === null) return secretScope(null, noteText);
+  const vars = await c.folder.readText(f).catch(() => null);
+  return secretScope(vars ? vars.content : null, noteText);
+}
+
+/** The variables file that applies in folder `dir` (folder-relative), or null: none up to the share root. */
+export async function varsFileFor(c: WriteCtx, dir: string): Promise<string | null> {
   const name = (c.varsFile.trim() || 'variables.md').toLowerCase();
-  for (let dir = dirname(notePath); ; dir = dirname(dir)) {
-    const entries = await fsp.readdir(dir ? path.join(c.folder.root, ...dir.split('/')) : c.folder.root, { withFileTypes: true }).catch(() => []);
+  for (let d = dir; ; d = dirname(d)) {
+    const entries = await fsp.readdir(d ? path.join(c.folder.root, ...d.split('/')) : c.folder.root, { withFileTypes: true }).catch(() => []);
     const hit = entries.find((e) => e.name.toLowerCase() === name && !e.isDirectory());
-    if (hit) {
-      const vars = await c.folder.readText(dir ? `${dir}/${hit.name}` : hit.name).catch(() => null);
-      return secretScope(vars ? vars.content : null, noteText);
-    }
-    if (!dir) return secretScope(null, noteText);
+    if (hit) return d ? `${d}/${hit.name}` : hit.name;
+    if (!d) return null;
   }
 }
 
@@ -232,6 +240,28 @@ export async function trashFile(c: WriteCtx, t: Target, expect: Stamp): Promise<
   await c.journal.add(g, { client: c.client, tool: c.tool, root: c.folder.root, folder: c.folder.alias, op: 'delete', path: t.key, after: null }, prev, { force: true }).catch((err) => console.error('[mcp] journal', err));
   c.folder.changed([{ type: 'unlink', path: t.key }]);
   return { journal: g };
+}
+
+/**
+ * A whole folder to the Recycle Bin (one trash call), after the user's OK (tools/write.ts). No undo copy:
+ * its hidden contents are never read; it is restored from the bin. `noPermanent`: refused (nothing deleted)
+ * wherever the bin could delete it for good.
+ */
+export async function trashFolder(c: WriteCtx, t: Target): Promise<void> {
+  const ws = await c.folder.workspace();
+  const toBin = async (abs: string) => {
+    try {
+      await c.trash(abs, { noPermanent: true });
+    } catch {
+      throw new BackendFailure('ETRASH', 'No trash');
+    }
+  };
+  try {
+    await ws.remove(t.key, toBin, c.folder.guard());
+  } catch (err) {
+    throw writeError(err, t.key);
+  }
+  c.folder.changed([{ type: 'unlinkDir', path: t.key }]);
 }
 
 /** Renames / moves a file or folder; refuses to overwrite. Both ends are checked again at commit time. */

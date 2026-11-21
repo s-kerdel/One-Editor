@@ -205,7 +205,7 @@ function OutlineSection({ path, model }: { path: string; model: DocModel }) {
     </>
   ));
   return (
-    <Section id="outline" title={md ? 'Outline' : 'Symbols'} count={entries.length} actions={actions}>
+    <Section id="outline" title={md ? 'Outline' : 'Symbols'} count={entries.length} defaultOpen={entries.length > 0} actions={actions}>
       {entries.length === 0 ? (
         <Hint>{md ? <>No headings yet. Start a line with <code>#</code> to add one.</> : 'No classes or functions found.'}</Hint>
       ) : (
@@ -282,7 +282,7 @@ function CodeBlocksSection({ path, model }: { path: string; model: DocModel }) {
     )),
   );
   return (
-    <Section id="code" title="Code blocks" count={blocks.length}>
+    <Section id="code" title="Code blocks" count={blocks.length} defaultOpen={blocks.length > 0}>
       {blocks.length === 0 ? (
         <Hint>No code blocks. Fence one with <code>```</code> and a language.</Hint>
       ) : (
@@ -359,7 +359,7 @@ function TasksSection({ path, model, refresh }: { path: string; model: DocModel;
     </>
   ));
   return (
-    <Section id="tasks" title="Tasks" count={total ? `${t.done}/${total}` : 0} countTitle={`${t.open} open · ${t.done} done`} actions={actions}>
+    <Section id="tasks" title="Tasks" count={total ? `${t.done}/${total}` : 0} countTitle={`${t.open} open · ${t.done} done`} defaultOpen={total > 0} actions={actions}>
       {total === 0 ? (
         <Hint>No tasks. Type <code>- [ ]</code> to add one.</Hint>
       ) : (
@@ -398,7 +398,7 @@ function ConnectionsSlot({ path, model }: { path: string; model: DocModel }) {
   }, [!!mod]);
   if (!mod)
     return (
-      <Section id="connections" title="Connections" count={null}>
+      <Section id="connections" title="Connections" count={null} defaultOpen={false}>
         <Hint>Loading links…</Hint>
       </Section>
     );
@@ -473,6 +473,7 @@ function InfoSection({ path, model }: { path: string; model: DocModel | null }) 
   const bytes = model && doc && !doc.binary ? model.bytes : size;
   const lang = !md && model ? (app.editor?.getLanguage?.(path)?.name ?? null) : null;
   return (
+    // A fact sheet, not a list: no count, open unless the user folds it.
     <Section id="info" title="Info">
       <dl class="se-ov-facts">
         {s && md && <Fact label="Words" value={s.words.toLocaleString()} />}

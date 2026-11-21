@@ -1,5 +1,5 @@
 // Shell-only UI state (kept out of app.ts so the shared singleton stays small and stable).
-import { signal } from '@preact/signals';
+import { batch, signal } from '@preact/signals';
 import type { ComponentType } from 'preact';
 import type { Settings } from '@shared/api';
 import { isMarkdown } from '@shared/paths';
@@ -34,14 +34,48 @@ export const zen = signal<ZenSaved | null>(null);
  *  the file overview has its strip (it was open before zen); '' = off. */
 export const zenAttr = (keepStatus: boolean) => (zen.value ? `on${keepStatus ? ' status' : ''}${zen.value.overviewVisible ? ' ov' : ''}` : '');
 /** Shortcuts shown in the sidebar panel switchers' tooltips (shelf pills, classic icon bar, zen strip). */
-export const PANEL_KEYS: Record<string, string> = { search: 'Mod-Shift-f', outline: 'Mod-Alt-o', backlinks: 'Mod-Alt-l' };
+export const PANEL_KEYS: Record<string, string> = { search: 'Mod-Shift-f', bookmarks: 'Mod-Alt-k', outline: 'Mod-Alt-o', backlinks: 'Mod-Alt-l' };
+/** The sidebar menu (shelf pills, classic icon bar, zen strip) from `pref` = setting `sidebar.panels` { order, hidden }
+ *  (Settings → Appearance → Sidebar menu). A registered panel the order lacks (new in a later version) goes in right
+ *  after its default predecessor, never hidden; ids nobody registers are skipped; `open` (the shown panel) stays
+ *  while hidden; at least one entry is left. Pure: the first render already has the final bar. */
+export function menuPanels<T extends { id: string }>(panels: T[], pref: any, open?: unknown): T[] {
+  // concat: a hand-edited non-list value can never throw here (this draws the first frame).
+  const order: unknown[] = [].concat(pref?.order ?? []);
+  const hidden: unknown[] = [].concat(pref?.hidden ?? []);
+  // Sort key: the stored index; a panel the order lacks gets its default predecessor's key + a hair.
+  let k = -1;
+  const out = panels
+    .map((p) => [p, (k = order.includes(p.id) ? order.indexOf(p.id) : k + 1e-3)] as const)
+    .sort((a, b) => a[1] - b[1])
+    .map((x) => x[0]);
+  const shown = out.filter((p) => p.id === open || !hidden.includes(p.id));
+  return shown.length ? shown : out.slice(0, 1);
+}
 /** Editor share of the split view. */
 export const splitRatio = signal(0.5);
 /** Expanded folders in the file tree. */
 export const expanded = signal<Set<string>>(new Set());
 export const treeFilter = signal('');
-/** Keyboard-focused row in the tree (distinct from the active editor file). */
+/** Keyboard-focused row in the tree (distinct from the active editor file). Alone it is the selection. */
 export const treeSelection = signal<string | null>(null);
+/** Several rows selected (Ctrl / Shift + click or arrows; the steps are the lazy app/tree-select.ts). Belongs to its `focus`:
+ *  anything that moves treeSelection elsewhere (arrows, reveal, new note) drops it. The focus may be unselected. */
+export interface TreeSel {
+  focus: string;
+  anchor: string;
+  paths: ReadonlySet<string>;
+}
+export const treeMulti = signal<TreeSel | null>(null);
+treeSelection.subscribe((f) => {
+  if (treeMulti.peek() && treeMulti.peek()!.focus !== f) treeMulti.value = null;
+});
+export const isTreeSelected = (p: string) => (treeMulti.value ? treeMulti.value.paths.has(p) : treeSelection.value === p);
+export const setTreeSel = (s: TreeSel | null, focus = s?.focus ?? null) =>
+  batch(() => {
+    treeMulti.value = s;
+    treeSelection.value = focus;
+  });
 /** Path currently being renamed inline in the tree. */
 export const renaming = signal<string | null>(null);
 /** Inline "new file / new folder" input. */

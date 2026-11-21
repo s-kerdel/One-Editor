@@ -52,7 +52,9 @@ export type Control =
   /** Curated swatches (v = '#rrggbb', '' = theme default) plus a custom colour input. */
   | { type: 'color'; swatches: Choice[]; base?: string }
   /** Font presets (v = CSS font-family, '' = default) plus a free-text "Custom" entry. */
-  | { type: 'font'; presets: Choice[]; placeholder?: string };
+  | { type: 'font'; presets: Choice[]; placeholder?: string }
+  /** The sidebar menu's panels: order (drag / ↑ ↓ / Alt+↑ ↓), shown or hidden (app/SidebarMenuSetting.tsx). */
+  | { type: 'panels' };
 
 export interface SettingDef {
   key: string;
@@ -144,6 +146,16 @@ const defs: Draft[] = [
         { v: 'classic', label: 'Classic', icon: 'columns' },
       ],
     },
+  },
+  // { order, hidden } of the sidebar panels; null = default. The bar applies it in its first frame (ui.menuPanels).
+  {
+    key: 'sidebar.panels',
+    section: 'appearance',
+    label: 'Sidebar menu',
+    description: 'Order of the sidebar panels and which ones show. Hidden ones keep their shortcut.',
+    keywords: ['panels', 'pills', 'activity bar', 'icons', 'reorder', 'order', 'hide', 'show', 'customize', 'customise', 'left menu', 'bookmarks', 'tabs'],
+    default: null,
+    control: { type: 'panels' },
   },
   {
     key: 'tree.folderColors',
@@ -270,6 +282,16 @@ const defs: Draft[] = [
         { v: 'native', label: 'Native' },
       ],
     },
+  },
+  // Go back / forward buttons at the start of the tab strip (nav/buttons.tsx; read by app/Layout.tsx).
+  {
+    key: 'nav.buttons',
+    section: 'appearance',
+    label: 'Back and forward buttons',
+    description: 'Arrows at the start of the tab strip. Off: the shortcuts and mouse side buttons still work.',
+    keywords: ['go back', 'go forward', 'navigation', 'history', 'arrows', 'tab strip', 'recent places'],
+    default: true,
+    control: { type: 'toggle' },
   },
   // ---- Appearance → Zen mode (View: Toggle zen mode, app/zen.tsx) ----
   // `zen.keepFileTree` (zen before the strips) is gone on purpose: a stored value is ignored (app/zen-impl.ts).

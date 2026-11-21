@@ -286,7 +286,7 @@ test('read-write folder: write tools edit, move and delete (to the trash inside 
   const { client } = await connect(r);
   try {
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toEqual(expect.arrayContaining(['write_file', 'append_file', 'patch_file', 'replace_text', 'move_file', 'create_folder', 'delete_file']));
+    expect(names).toEqual(expect.arrayContaining(['write_file', 'append_file', 'patch_file', 'replace_text', 'move', 'create_folder', 'delete']));
     const call = async (name: string, args: Record<string, unknown>) => {
       const res: any = await client.callTool({ name, arguments: args });
       expect(res.isError, `${name}: ${text(res)}`).toBeFalsy();
@@ -298,11 +298,11 @@ test('read-write folder: write tools edit, move and delete (to the trash inside 
     await call('patch_file', { path: 'README.md', heading: 'Commands', operation: 'append', content: 'echo added' });
     expect(fs.readFileSync(path.join(r.ws, 'README.md'), 'utf8')).toContain('#tag/project #idea\necho added'); // the section's last line
     await call('replace_text', { path: 'notes/kubernetes.md', old: 'Get pods in all namespaces:', new: 'All pods:' });
-    const moved = await call('move_file', { from: 'notes/Daily notes.md', to: 'journal/Daily notes.md' });
+    const moved = await call('move', { from: 'notes/Daily notes.md', to: 'journal/Daily notes.md' });
     expect(moved).toMatch(/^Moved notes\/Daily notes\.md → journal\/Daily notes\.md · etag \S+/);
     await call('create_folder', { path: 'archive' });
     const name = 'notes/kubernetes.md';
-    await call('delete_file', { path: name });
+    await call('delete', { path: name });
     expect(fs.existsSync(path.join(r.ws, name))).toBe(false);
     // The XDG trash of this run (XDG_DATA_HOME), never the real home's.
     expect(fs.readdirSync(path.join(r.dir, 'xdg/Trash/files'))).toContain('kubernetes.md');
