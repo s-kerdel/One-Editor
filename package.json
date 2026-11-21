@@ -21,7 +21,9 @@
     "icons": "node scripts/make-icons.mjs",
     "analyze": "node scripts/analyze-bundle.mjs",
     "iteration": "node scripts/iteration.mjs",
-    "security": "node scripts/security.mjs"
+    "security": "node scripts/security.mjs",
+    "postinstall": "node scripts/postinstall.mjs",
+    "package:mac": "node scripts/package.mjs darwin"
   },
   "keywords": [],
   "author": "Shiva Kerdel",

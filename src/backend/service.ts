@@ -125,6 +125,8 @@ export class BackendService {
   private recent: string[] | null = null;
   /** Absolute paths waiting for the renderer (launch args); drained by bootstrap(). */
   readonly openRequests: string[] = [];
+  /** True once a renderer has called bootstrap(): later open requests are sent to it instead of queued. */
+  booted = false;
   /** PDFs written by exportPdf in this process: the only files showExportedFile will open. */
   private exported = new Set<string>();
   /** In-memory copy of export-dirs.json (workspace id → last PDF folder). */
@@ -182,6 +184,7 @@ export class BackendService {
   }
 
   async bootstrap(): Promise<BootstrapData> {
+    this.booted = true;
     const [settings, recent, session] = await Promise.all([this.getSettings(), this.recentWorkspaces(), this.workspace ? this.getSession() : Promise.resolve(null)]);
     return {
       os: process.platform,

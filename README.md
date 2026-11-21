@@ -11,7 +11,7 @@
 
 | | |
 |---|---|
-| **Desktop app** | Electron. Windows first, Linux/macOS too. |
+| **Desktop app** | Electron. Windows first, Linux and macOS too. |
 | **Browser mode** | A small local server. Handy from WSL. |
 | **Full guide** | [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) |
 
@@ -52,6 +52,31 @@ One.exe C:\notes\todo.md         :: open a file (inside its folder)
 
 - A second launch **hands the path to the running window**.
 - **Drag & drop** a folder or file onto the window also works.
+
+---
+
+## Run on macOS
+
+Needs **Node.js 20+** (see `.tool-versions`: 22). Build on the Mac you will run it on:
+
+```bash
+npm install
+npm run package:mac            # this Mac's architecture (arm64 / x64); or: npm run package:mac -- x64
+cp -R release/One-darwin-arm64/One.app /Applications/
+```
+
+- **First launch:** the app is signed *ad hoc* (no Apple Developer ID). Right-click **One → Open** once, or run
+  `xattr -cr /Applications/One.app`.
+- **Open With:** right-click a folder, text, Markdown, code or PDF file in Finder → **Open With → One**. One is only *offered*; it never
+  becomes the default for a file type unless you choose that (Get Info → Open with → Change All). Dropping files on the Dock icon works too.
+- **`one` in the terminal:** `one` opens the current folder as a project, `one notes.md` a file, `one ~/notes src` several. A running One
+  takes them into its window. Install once (the command lives inside the app, so it always matches the installed version):
+  `sudo ln -sf /Applications/One.app/Contents/Resources/bin/one /usr/local/bin/one`
+- **Quick try without packaging:** `npm run build && npm run electron -- <folder>`.
+- **Browser mode / MCP:** `release/One-darwin-*/start-web.sh [folder]` and `one-mcp.sh` (they use the app in `/Applications` when
+  copied elsewhere).
+- The zip (`release/One-darwin-*.zip`) is made with `ditto`, so it keeps the signature when unzipped.
+- After editing `build/*.svg`: `npm run icons` rebuilds `icon.icns` too (needs `npx playwright install chromium` once).
 
 ---
 
@@ -231,7 +256,7 @@ npm run serve -- ~/notes --open
 | `npm run build` | Renderer (Vite) + Electron/server entries (esbuild) |
 | `npm run electron -- <folder>` | Desktop app from the build |
 | `npm run serve -- <folder> --open` | Browser mode |
-| `npm run package:win` / `package:linux` | Ready-to-run build + zip in `release/` |
+| `npm run package:win` / `package:linux` / `package:mac` | Ready-to-run build + zip in `release/` |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run analyze` | What is in the startup JS bundle |
 

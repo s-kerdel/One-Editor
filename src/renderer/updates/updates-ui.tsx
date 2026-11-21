@@ -145,7 +145,7 @@ function Row({ f }: { f: Finding }) {
 }
 
 function openSettings() {
-  void import('../app/Settings').then((m) => {
+  void import('../app/SettingsOverlay').then((m) => {
     m.requestSection('updates');
     app.overlay.value = null;
     void runCommand('app.settings');

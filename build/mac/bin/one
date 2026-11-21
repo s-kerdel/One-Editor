@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+# Open a folder or file in One from the terminal:
+#   one              the current folder as a project
+#   one notes.md     a file (inside the folder it belongs to)
+#   one ~/notes src  several at once
+# Install:  sudo ln -sf /Applications/One.app/Contents/Resources/bin/one /usr/local/bin/one
+# A running One takes the path into its window; otherwise One starts. The terminal is not held.
+unset CDPATH
+SELF="$0"
+while [ -L "$SELF" ]; do # through the /usr/local/bin symlink (macOS readlink has no -f before 12.3)
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in /*) SELF="$LINK" ;; *) SELF="$(dirname "$SELF")/$LINK" ;; esac
+done
+EXE="$(cd "$(dirname "$SELF")" && pwd)/../../MacOS/one"
+[ -x "$EXE" ] || { echo "one: cannot find the One app next to $SELF" >&2; exit 1; }
+[ $# -gt 0 ] || set -- .
+# The app resolves relative paths against this shell's folder (a running One is handed it too).
+nohup "$EXE" "$@" >/dev/null 2>&1 &

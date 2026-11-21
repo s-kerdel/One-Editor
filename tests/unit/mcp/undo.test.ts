@@ -9,6 +9,8 @@ import { DEFAULT_SETTINGS } from '../../../src/shared/api';
 import { parseActivityLine } from '../../../src/shared/mcp';
 import { OneMcpServer } from '../../../src/mcp/server';
 import { WriteQuota } from '../../../src/mcp/writes';
+import { binWord } from '../../../src/mcp/confirm';
+const BIN = binWord(); // "Trash" on macOS, "Recycle Bin" elsewhere: what the server says on this machine
 
 const BASE = path.resolve(__dirname, '../../../.tmp/mcp/unit');
 let tmp: string;
@@ -114,12 +116,12 @@ describe('undo', () => {
     // A batch of folders and files asks first (no elicitation here: two steps).
     const ask = (await t.call('delete', { paths: ['proj'] })).text;
     const only = (await t.call('delete', { paths: ['proj'], confirm: /confirm: (\S+)$/.exec(ask)![1] })).text;
-    expect((await t.call('undo', { id: code(only) })).text).toBe('ENOTUNDOABLE: Not undoable here: restore proj from the Recycle Bin');
+    expect((await t.call('undo', { id: code(only) })).text).toBe('ENOTUNDOABLE: Not undoable here: restore proj from the ' + BIN + '');
     fs.mkdirSync(path.join(w.root, 'proj2'));
     fs.writeFileSync(path.join(w.root, 'proj2/y.md'), 'y\n');
     const ask2 = (await t.call('delete', { paths: ['proj2', 'f.md'] })).text;
     const mixed = (await t.call('delete', { paths: ['proj2', 'f.md'], confirm: /confirm: (\S+)$/.exec(ask2)![1] })).text;
-    expect((await t.call('undo', { id: code(mixed) })).text).toBe('Undone: 1 file restored; folder proj2: restore from the Recycle Bin');
+    expect((await t.call('undo', { id: code(mixed) })).text).toBe('Undone: 1 file restored; folder proj2: restore from the ' + BIN + '');
     expect(t.get('f.md')).toBe('f\n');
   });
 

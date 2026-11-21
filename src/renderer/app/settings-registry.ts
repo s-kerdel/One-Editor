@@ -27,11 +27,11 @@ export const SECTIONS: SectionDef[] = [
   { id: 'export', title: 'Export', icon: 'printer', blurb: 'Paper settings for “Export note to PDF…”.' },
   { id: 'variables', title: 'Variables & targets', icon: 'database', blurb: '{{name}} placeholders, environments and targets from the nearest variables.md.' },
   { ...TERMINAL_SECTION },
-  // Settings.tsx shows the live server state + Start / Stop above the rows (src/renderer/webserver).
+  // SettingsOverlay.tsx shows the live server state + Start / Stop above the rows (src/renderer/webserver).
   { id: 'webserver', title: 'Browser mode', icon: 'globe', blurb: 'Open this folder in a web browser: on this computer, or from other devices on your network.', desktopOnly: true },
-  // Settings.tsx shows on/off, the shared folders, client setup and activity above the rows (src/renderer/mcp).
+  // SettingsOverlay.tsx shows on/off, the shared folders, client setup and activity above the rows (src/renderer/mcp).
   { id: 'mcp', title: 'MCP server', icon: 'plug', blurb: 'Let AI apps (LM Studio, Codex CLI, Claude…) read the folders you share, through the Model Context Protocol.', desktopOnly: true },
-  // Settings.tsx shows the last check + "Check now" + what is sent above the row (src/renderer/updates).
+  // SettingsOverlay.tsx shows the last check + "Check now" + what is sent above the row (src/renderer/updates).
   { id: 'updates', title: 'Security updates', icon: 'shield', blurb: 'Tells you when this build needs a rebuild: a newer Electron patch, a known vulnerability, end of support.', desktopOnly: true },
   { id: 'shortcuts', title: 'Keyboard shortcuts', icon: 'keyboard' },
 ];

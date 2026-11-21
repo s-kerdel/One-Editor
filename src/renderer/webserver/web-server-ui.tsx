@@ -194,7 +194,7 @@ const accessLabel = (s: WebServerStatus) => {
 };
 
 function openOptions() {
-  void import('../app/Settings').then((m) => {
+  void import('../app/SettingsOverlay').then((m) => {
     m.requestSection('webserver');
     app.overlay.value = null;
     void runCommand('app.settings');

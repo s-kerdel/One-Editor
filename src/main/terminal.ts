@@ -10,7 +10,7 @@
 import path from 'node:path';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
-import { execFile, spawn as spawnChild } from 'node:child_process';
+import { execFile, execFileSync, spawn as spawnChild } from 'node:child_process';
 import { BackendFailure } from '../backend/errors';
 import { isInsideDir, resolveInside } from '../backend/pathsafe';
 import {
@@ -594,6 +594,37 @@ export class TerminalService {
     } catch {} // ESRCH: already gone
   }
 
+  /**
+   * Unix: every process below `pid` right now (the shell's jobs, which sit in groups of their own: `sleep 300 &`). Signalling
+   * the shell's group does not reach them, and macOS's bash 3.2 does not hang up its jobs when it gets SIGHUP, so they
+   * are collected before the shell dies (after that they are children of launchd and can no longer be found).
+   * Not with an injected `signalGroup` (tests with made-up pids must never reach a real process).
+   */
+  private descendants(pid: number): number[] {
+    if (this.platform === 'win32' || this.o.signalGroup) return [];
+    try {
+      const rows = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 1500, maxBuffer: 4 << 20 }).split('\n');
+      const kids = new Map<number, number[]>();
+      for (const row of rows) {
+        const [c, p] = row.trim().split(/\s+/).map(Number);
+        if (Number.isInteger(c) && Number.isInteger(p)) kids.set(p, [...(kids.get(p) ?? []), c]);
+      }
+      const out: number[] = [];
+      for (const q = [pid]; q.length; ) for (const c of kids.get(q.shift()!) ?? []) if (c !== pid && !out.includes(c)) (out.push(c), q.push(c));
+      return out;
+    } catch {
+      return []; // no ps / too slow: the group signal still goes out
+    }
+  }
+
+  private signalPids(pids: number[], sig: NodeJS.Signals) {
+    for (const p of pids) {
+      try {
+        process.kill(p, sig);
+      } catch {} // ESRCH: already gone
+    }
+  }
+
   private treeKill(pid: number) {
     try {
       (this.o.treeKill ?? defaultTreeKill)(pid);
@@ -606,6 +637,7 @@ export class TerminalService {
     t.killing = true;
     const win = this.platform === 'win32';
     const pid = t.pty.pid;
+    let jobs: number[] = [];
     if (win) {
       // At quit node-pty's own cleanup (an async console-process-list agent) would die with us.
       if (quitting) this.treeKill(pid);
@@ -614,7 +646,9 @@ export class TerminalService {
       } catch {}
     } else {
       // node-pty makes the shell a session + process-group leader: the group holds its jobs.
+      jobs = this.descendants(pid);
       this.signalGroup(pid, 'SIGHUP');
+      this.signalPids(jobs, 'SIGHUP');
       try {
         t.pty.kill('SIGHUP');
       } catch {}
@@ -626,6 +660,7 @@ export class TerminalService {
       if (win) this.treeKill(pid);
       else {
         this.signalGroup(pid, 'SIGKILL');
+        this.signalPids(jobs, 'SIGKILL');
         try {
           t.pty.kill('SIGKILL');
         } catch {}

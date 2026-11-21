@@ -11,6 +11,8 @@ import { MCP_CONFIRM_OVER, parseActivityLine } from '../../../src/shared/mcp';
 import { OneMcpServer } from '../../../src/mcp/server';
 import { WriteQuota } from '../../../src/mcp/writes';
 import { JOURNAL_DIR, revertGroup } from '../../../src/mcp/journal';
+import { binWord } from '../../../src/mcp/confirm';
+const BIN = binWord(); // "Trash" on macOS, "Recycle Bin" elsewhere: what the server says on this machine
 
 const BASE = path.resolve(__dirname, '../../../.tmp/mcp/unit');
 let tmp: string;
@@ -202,7 +204,7 @@ describe('batch delete (paths)', () => {
     const r = await rig({ files: notes(MCP_CONFIRM_OVER - 1) });
     const list = [...Object.keys(notes(MCP_CONFIRM_OVER - 1)), 'nope.md'];
     const t = (await r.call('delete', { paths: list })).text.split('\n');
-    expect(t[0]).toMatch(/^Deleted 9 of 10 items \(Recycle Bin\) · undo: [a-f0-9]{8}$/);
+    expect(t[0]).toMatch(/^Deleted 9 of 10 items \((?:Recycle Bin|Trash)\) · undo: [a-f0-9]{8}$/);
     expect(t.at(-1)).toBe('ENOENT nope.md: Not found: nope.md');
     expect(r.trashed).toHaveLength(9);
     const row = (await r.rows()).reverse().find((x) => x.tool === 'delete')!;
@@ -216,7 +218,7 @@ describe('batch delete (paths)', () => {
     const all = Object.keys(notes(MCP_CONFIRM_OVER + 2));
     const list = all.slice(0, MCP_CONFIRM_OVER + 1);
     const ask = (await r.call('delete', { paths: list })).text;
-    expect(ask).toMatch(/^Delete 11 files: "n\/00\.md", "n\/01\.md", "n\/02\.md" and 8 more\? 11 files, 0 folders, 154 B in all\. It goes to the Recycle Bin\. .* · confirm: \S+$/);
+    expect(ask).toMatch(/^Delete 11 files: "n\/00\.md", "n\/01\.md", "n\/02\.md" and 8 more\? 11 files, 0 folders, 154 B in all\. It goes to the (?:Recycle Bin|Trash)\. .* · confirm: \S+$/);
     expect(r.trashed).toEqual([]);
     const code = codeOf(ask);
     expect((await r.call('delete', { paths: all.slice(1), confirm: code })).text).toMatch(/^ECONFIRM: Not deleted: that confirm code is for something else/);
@@ -229,13 +231,13 @@ describe('batch delete (paths)', () => {
     for (let i = 0; i < 400 && !r.out.some((m) => m.method === 'elicitation/create'); i++) await new Promise((res) => setTimeout(res, 5));
     const asks = r.out.filter((m) => m.method === 'elicitation/create');
     expect(asks).toHaveLength(1);
-    expect(asks[0].params.message).toBe('Delete 1 folder with everything in them and 1 file: "a.md", "proj"? 3 files, 0 folders, 8 B in all (including hidden items such as .env). It goes to the Recycle Bin.');
+    expect(asks[0].params.message).toBe('Delete 1 folder with everything in them and 1 file: "a.md", "proj"? 3 files, 0 folders, 8 B in all (including hidden items such as .env). It goes to the ' + BIN + '.');
     await r.s.protocol.handle({ jsonrpc: '2.0', id: asks[0].id, result: { action: 'accept', content: { confirm: true } } });
     const t = (await pending).text.split('\n');
-    expect(t).toEqual([expect.stringMatching(/^Deleted 2 of 2 items \(Recycle Bin\) · undo: /), 'ok a.md', 'ok proj (folder, 2 files: restore it from the Recycle Bin)']);
+    expect(t).toEqual([expect.stringMatching(/^Deleted 2 of 2 items \((?:Recycle Bin|Trash)\) · undo: /), 'ok a.md', 'ok proj (folder, 2 files: restore it from the ' + BIN + ')']);
     expect(r.out.filter((m) => m.method === 'elicitation/create')).toHaveLength(1);
     const row = (await r.rows()).reverse().find((x) => x.tool === 'delete')!;
-    expect(row).toMatchObject({ items: 2, note: 'folders: restore from the Recycle Bin' });
+    expect(row).toMatchObject({ items: 2, note: 'folders: restore from the ' + BIN + '' });
   });
 });
 

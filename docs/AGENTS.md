@@ -397,6 +397,9 @@ there only if it must beat the shell.
    import it from any chunk that renders them (`.se-overlay` and `.se-menu*` stay in app.css).
    Icons: `app/icons.tsx` holds only first-screen glyphs; others are in the lazy `app/icon-pack.ts` or your chunk's
    `addIcons()`. An `<Icon>` whose name isn't registered yet draws an empty box and redraws when it arrives.
+   **No two source files may differ only by case** (`settings.ts` + `Settings.tsx`): on macOS / Windows an import of
+   `./Settings` resolves to the wrong one and the lazy chunk silently exports nothing (Settings stopped opening on macOS
+   this way; the component is now `SettingsOverlay.tsx`). Check: `git ls-files | grep -E '\.(ts|tsx|js|mjs)$' | sed -E 's/\.[^./]+$//' | sort -f | uniq -di`.
 4. **Dependencies**: install ONLY via `flock /tmp/sec-edit-npm.lock npm install <pkg>` (serialises concurrent agents).
    Edit `package.json` scripts ONLY via `flock /tmp/sec-edit-npm.lock npm pkg set scripts.x="..."`.
 5. **Testing is mandatory.** Unit tests in `tests/unit/<area>/`, E2E in `tests/e2e/<area>*.spec.ts` using `tests/e2e/harness.ts`

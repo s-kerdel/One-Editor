@@ -62,6 +62,18 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TMP = path.resolve(__dirname, '../../../.tmp/unit-case-names');
+// The tests of a case-SENSITIVE root need a disk that can hold "Docs" and "docs" side by side. macOS volumes (APFS) and
+// Windows are case-insensitive by default: those tests are skipped there (they run on Linux / WSL / case-sensitive APFS).
+const CASE_SENSITIVE_DISK = (() => {
+  fs.mkdirSync(TMP, { recursive: true });
+  const probe = fs.mkdtempSync(path.join(TMP, 'probe-'));
+  try {
+    fs.writeFileSync(path.join(probe, 'a'), '');
+    return !fs.existsSync(path.join(probe, 'A'));
+  } finally {
+    fs.rmSync(probe, { recursive: true, force: true });
+  }
+})();
 const realPlatform = process.platform;
 const waitFor = async (pred: () => boolean, ms = 4000) => {
   const t0 = Date.now();
@@ -94,7 +106,7 @@ afterEach(async () => {
   await fsp.rm(dir, { recursive: true, force: true });
 });
 
-describe('probeCaseSensitive (per folder, never writes)', () => {
+describe.skipIf(!CASE_SENSITIVE_DISK)('probeCaseSensitive (per folder, never writes)', () => {
   it('case-sensitive folder → true; NTFS-like folder → false; nothing to try → null', async () => {
     const { probeCaseSensitive } = await load(realPlatform);
     expect(await probeCaseSensitive(dir)).toBe(true);
@@ -111,7 +123,7 @@ describe('probeCaseSensitive (per folder, never writes)', () => {
   });
 });
 
-describe('(a) win32 + case-sensitive WSL root', () => {
+describe.skipIf(!CASE_SENSITIVE_DISK)('(a) win32 + case-sensitive WSL root', () => {
   it('both spellings live side by side; delete / move touch exactly the one named', async () => {
     const { Workspace } = await load('win32');
     const ws = new Workspace(dir, { watchMode: 'perdir', debounceMs: 20, readThreads: 0 });

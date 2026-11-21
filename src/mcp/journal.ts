@@ -9,7 +9,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { JOURNAL_GROUP_RE } from '../shared/mcp';
 import type { Folder, Stamp } from './folders';
-import { ToolError } from './protocol';
+import { ToolError, binWord } from './protocol';
 
 export const JOURNAL_DIR = 'mcp-history';
 export const JOURNAL_MAX_AGE_MS = 30 * 24 * 3600_000;
@@ -209,10 +209,10 @@ export async function revertGroupReport(folder: Folder, dir: string, group: stri
   if (reverted) throw new ToolError('EALREADY', 'Already undone (here or with Revert in One)');
   const inBin = all.filter((e) => e.op === 'trash').map((e) => e.path);
   const entries = all.filter((e) => e.op !== 'trash');
-  if (!entries.length) throw new ToolError('ENOTUNDOABLE', `Not undoable here: restore ${inBin.slice(0, 5).join(', ')}${inBin.length > 5 ? ' …' : ''} from the Recycle Bin`);
+  if (!entries.length) throw new ToolError('ENOTUNDOABLE', `Not undoable here: restore ${inBin.slice(0, 5).join(', ')}${inBin.length > 5 ? ' …' : ''} from the ${binWord()}`);
   const gdir = path.join(dir, group);
   const prev = async (e: JournalEntry) => {
-    if (!e.bytes) throw new ToolError('ENODATA', `The old content of ${e.path} was not kept (too large): restore it from the Recycle Bin`);
+    if (!e.bytes) throw new ToolError('ENODATA', `The old content of ${e.path} was not kept (too large): restore it from the ${binWord()}`);
     return fsp.readFile(path.join(gdir, `${e.seq}.bin`));
   };
   const steps = [...entries].reverse();

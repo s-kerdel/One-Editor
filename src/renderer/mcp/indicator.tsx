@@ -70,7 +70,7 @@ export function install() {
 
 /** Settings → MCP server, scrolled to Recent activity (mcp-ui scrolls once its panel is in). */
 function openActivity() {
-  void Promise.all([import('../app/Settings'), import('./mcp-ui')]).then(
+  void Promise.all([import('../app/SettingsOverlay'), import('./mcp-ui')]).then(
     ([settings, panel]) => {
       panel.revealActivity();
       settings.requestSection('mcp');

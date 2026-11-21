@@ -88,7 +88,9 @@ class InputRequired {
 }
 const ASK_KEY = 'confirm';
 /** Elicitation's own field: one required yes / no. */
-const CONFIRM_SCHEMA = { type: 'object', properties: { confirm: { type: 'boolean', title: 'Yes, delete it', description: 'Move it to the Recycle Bin', default: false } }, required: ['confirm'] } as const;
+/** What the platform calls its bin: "Trash" on macOS, "Recycle Bin" elsewhere (messages the AI client / user reads). */
+export const binWord = (platform: string = process.platform) => (platform === 'darwin' ? 'Trash' : 'Recycle Bin');
+const CONFIRM_SCHEMA = { type: 'object', properties: { confirm: { type: 'boolean', title: 'Yes, delete it', description: `Move it to the ${binWord()}`, default: false } }, required: ['confirm'] } as const;
 export const ELICIT_TIMEOUT_MS = 120_000;
 
 export interface ToolDef {

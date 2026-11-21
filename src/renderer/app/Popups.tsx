@@ -355,7 +355,7 @@ function bookmarkItem(paths: string[]): ui.MenuItem {
 export function panelMenu(id: string): ui.MenuItem[] {
   const p = app.panels.value.find((x) => x.id === id);
   const hidden: unknown[] = [].concat((app.settings.value['sidebar.panels'] as { hidden?: never } | null)?.hidden ?? []);
-  const settings = () => import('./Settings'); // the writes live in its chunk (app/panel-menu.ts)
+  const settings = () => import('./SettingsOverlay'); // the writes live in its chunk (app/panel-menu.ts)
   return [
     // At least one entry stays in the menu.
     ...(p ? [{ label: `Hide ${p.title}`, disabled: !app.panels.value.some((x) => x.id !== id && !hidden.includes(x.id)), run: () => settings().then((m) => m.setPanelHidden(id, true)) }, { separator: true }] : []),

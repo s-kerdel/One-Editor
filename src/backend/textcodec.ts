@@ -10,7 +10,17 @@ export interface Decoded {
 }
 
 const utf8Strict = new TextDecoder('utf-8', { fatal: true });
-const cp1252 = new TextDecoder('windows-1252');
+// Not TextDecoder('windows-1252'): Node 22 treats that label as plain Latin-1 (smart quotes and € come out as C1
+// control characters, and a table built from it would be wrong too). Windows-1252 = Latin-1 except 0x80-0x9F,
+// spelled out here; the five undefined slots (81 8D 8F 90 9D) stay C1 controls.
+const CP1252_C1 = '€\x81‚ƒ„…†‡ˆ‰Š‹Œ\x8dŽ\x8f\x90‘’“”•–—˜™š›œ\x9džŸ';
+const cp1252 = {
+  decode(buf: Uint8Array): string {
+    return Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength)
+      .toString('latin1')
+      .replace(/[\x80-\x9f]/g, (ch) => CP1252_C1[ch.charCodeAt(0) - 0x80]);
+  },
+};
 
 export function decode(buf: Uint8Array): Decoded {
   if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return { text: Buffer.from(buf.subarray(3)).toString('utf8'), encoding: 'utf8', bom: true, binary: false };
@@ -71,10 +81,7 @@ function swap16(buf: Uint8Array): Buffer {
 
 // Windows-1252 differs from Latin-1 only in 0x80–0x9F; map those back explicitly.
 const CP1252_HIGH: Record<number, number> = {};
-for (let b = 0x80; b <= 0x9f; b++) {
-  const ch = cp1252.decode(new Uint8Array([b])).charCodeAt(0);
-  if (ch !== 0xfffd) CP1252_HIGH[ch] = b;
-}
+for (let b = 0x80; b <= 0x9f; b++) CP1252_HIGH[CP1252_C1.charCodeAt(b - 0x80)] = b;
 
 function encodeCp1252(text: string): Buffer {
   const out = Buffer.alloc(text.length);

@@ -9,9 +9,11 @@ import crypto from 'node:crypto';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/shared/api';
 import { OneMcpServer } from '../../../src/mcp/server';
 import { WriteQuota } from '../../../src/mcp/writes';
-import { CONFIRM_TTL_MS, ConfirmCodes, folderSummary, shownName, shownPath } from '../../../src/mcp/confirm';
+import { binWord, CONFIRM_TTL_MS, ConfirmCodes, folderSummary, shownName, shownPath } from '../../../src/mcp/confirm';
 import { trashTimeout, windowsTrashCall } from '../../../src/backend/trash';
 import { parseActivityLine } from '../../../src/shared/mcp';
+
+const BIN = binWord(); // "Trash" on macOS, "Recycle Bin" elsewhere: what the server says on this machine
 
 const BASE = path.resolve(__dirname, '../../../.tmp/mcp/unit');
 let tmp: string;
@@ -125,7 +127,7 @@ describe('two steps (a client without elicitation)', () => {
     const code = /confirm: (\S+)$/.exec(text(await r.call('delete', { path: 'proj' })))![1];
     const b = await r.call('delete', { path: 'proj', confirm: code });
     expect(b.result.isError).toBe(true);
-    expect(text(b)).toMatch(/^EPARTIAL: Partly deleted: 1 item of 7 went to the Recycle Bin; 6 items are still in proj\.$/);
+    expect(text(b)).toMatch(/^EPARTIAL: Partly deleted: 1 item of 7 went to the (?:Recycle Bin|Trash); 6 items are still in proj\.$/);
     expect(exists(r, 'proj/sub/b.md')).toBe(true);
   });
 
@@ -141,12 +143,12 @@ describe('two steps (a client without elicitation)', () => {
     const quota = new WriteQuota({ session: 1, perMinute: 10 });
     const r = await rig({ era: 'legacy', elicit: false, quota });
     const a = text(await r.call('delete', { path: 'proj' }));
-    expect(a).toMatch(/^Delete folder "proj" and everything in it\? 5 files, 2 folders, 27 B \(including hidden items such as \.env, \.git, id_rsa\)\. It goes to the Recycle Bin\. .* · confirm: ([0-9A-Z]{4}-[0-9A-Z]{4})$/);
+    expect(a).toMatch(/^Delete folder "proj" and everything in it\? 5 files, 2 folders, 27 B \(including hidden items such as \.env, \.git, id_rsa\)\. It goes to the (?:Recycle Bin|Trash)\. .* · confirm: ([0-9A-Z]{4}-[0-9A-Z]{4})$/);
     expect(exists(r, 'proj/.git/config')).toBe(true);
     const code = /confirm: (\S+)$/.exec(a)![1];
     const b = await r.call('delete', { path: 'proj', confirm: code });
     expect(b.result.isError).toBeFalsy();
-    expect(text(b)).toMatch(/^Deleted folder proj \(5 files, 2 folders, 27 B\) to the Recycle Bin: restore it from there/);
+    expect(text(b)).toMatch(/^Deleted folder proj \(5 files, 2 folders, 27 B\) to the (?:Recycle Bin|Trash): restore it from there/);
     expect(r.trashed).toEqual(['proj']); // one trash call for the folder
     expect(exists(r, 'proj')).toBe(false);
     expect(exists(r, 'keep.md')).toBe(true);
@@ -183,7 +185,7 @@ describe('two steps (a client without elicitation)', () => {
   it('a single file delete is unchanged: no question, an undo copy, the bin', async () => {
     const r = await rig({ era: 'legacy', elicit: false });
     const t = text(await r.call('delete', { path: 'keep.md' }));
-    expect(t).toMatch(/^Deleted keep\.md \(Recycle Bin\) · undo: [a-f0-9]{8}$/);
+    expect(t).toMatch(/^Deleted keep\.md \((?:Recycle Bin|Trash)\) · undo: [a-f0-9]{8}$/);
     expect(r.trashed).toEqual(['keep.md']);
   });
 });
@@ -200,7 +202,7 @@ describe('elicitation, legacy era (a request to the client, matched by id)', () 
       const r = await rig({ era: 'legacy', elicit: true });
       const pending = r.call('delete', { path: 'proj' });
       const req = await answer(r, reply);
-      expect(req.params.message).toBe('Delete folder "proj" and everything in it? 5 files, 2 folders, 27 B (including hidden items such as .env, .git, id_rsa). It goes to the Recycle Bin.');
+      expect(req.params.message).toBe('Delete folder "proj" and everything in it? 5 files, 2 folders, 27 B (including hidden items such as .env, .git, id_rsa). It goes to the ' + BIN + '.');
       expect(req.params.mode).toBe('form');
       expect(req.params.requestedSchema).toMatchObject({ type: 'object', properties: { confirm: { type: 'boolean' } }, required: ['confirm'] });
       expect(text(await pending)).toMatch(want);
@@ -287,7 +289,7 @@ describe('activity rows and the bin', () => {
     await r.s.audit.flush();
     const rows = fs.readFileSync(path.join(tmp, 'cfg', 'mcp-audit.jsonl'), 'utf8').trim().split('\n').map((l) => parseActivityLine(l)!).filter((x) => x.tool === 'delete (folder)');
     expect(rows.at(-2)).toMatchObject({ ok: false, code: 'ASKED', note: 'waiting for the user', journal: null });
-    expect(rows.at(-1)).toMatchObject({ ok: true, note: 'restore from the Recycle Bin', journal: null, path: 'proj' });
+    expect(rows.at(-1)).toMatchObject({ ok: true, note: 'restore from the ' + BIN + '', journal: null, path: 'proj' });
   });
 
   it('Windows: one constant script; the path and "ask before deleting for good" come only through the environment', () => {

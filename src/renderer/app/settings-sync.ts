@@ -7,7 +7,7 @@ import { app } from './app';
 import { applySettingsToDom, flushSettings } from './settings';
 import { refreshTree } from './documents';
 
-/** Settings that change what the indexers read (same list as Settings.tsx). */
+/** Settings that change what the indexers read (same list as SettingsOverlay.tsx). */
 const INDEX_KEYS = ['search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'search.workers', 'excludeGlobs', 'showHiddenFiles'];
 
 let installed = false;

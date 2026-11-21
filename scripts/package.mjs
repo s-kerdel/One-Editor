@@ -1,6 +1,8 @@
 // Builds a ready-to-run desktop package from any OS (no wine needed: exe metadata/icon via resedit).
 //   node scripts/package.mjs win32   → release/One-win32-x64/One.exe  + release/One-win32-x64.zip
 //   node scripts/package.mjs linux   → release/One-linux-x64/one       + release/One-linux-x64.zip
+//   node scripts/package.mjs darwin  → release/One-darwin-<arch>/One.app + .zip   (npm run package:mac; arch = this Mac's)
+//   macOS: ad-hoc signed (no Apple Developer ID), so the first launch needs right-click → Open; see README.
 // Ships only the staged app (package.json + dist/) inside app.asar, plus node-pty in app.asar.unpacked.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -12,7 +14,8 @@ import { writeLicences } from './notices.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const platform = process.argv[2] || process.platform;
-const arch = process.argv[3] || 'x64';
+// A Mac builds for itself by default (arm64 on Apple Silicon); pass x64 / arm64 to cross-build. Win/Linux: x64.
+const arch = process.argv[3] || (platform === 'darwin' && process.arch === 'arm64' ? 'arm64' : 'x64');
 if (!['win32', 'linux', 'darwin'].includes(platform)) throw new Error(`Unknown platform ${platform}`);
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const electronVersion = JSON.parse(fs.readFileSync(path.join(root, 'node_modules/electron/package.json'), 'utf8')).version;
@@ -45,7 +48,26 @@ const [outDir] = await packager({
   overwrite: true,
   prune: false, // nothing to prune: the staged app has no package dependencies (node-pty is staged by hand)
   derefSymlinks: true,
-  icon: path.join(root, platform === 'win32' ? 'build/icon.ico' : 'build/icon.png'),
+  icon: path.join(root, platform === 'win32' ? 'build/icon.ico' : platform === 'darwin' ? 'build/icon.icns' : 'build/icon.png'),
+  // macOS bundle: the id names the app for the OS (Dock, Launch Services, permissions); not the data folder (that is "sec-edit").
+  appBundleId: 'app.one-editor.one',
+  appCategoryType: 'public.app-category.developer-tools',
+  // Finder's "Open With" lists an app only if its Info.plist says what it opens. Rank "Alternate": One is offered, but
+  // never becomes the default for a file type on its own. The files then arrive as 'open-file' (main.ts).
+  extendInfo: {
+    CFBundleDocumentTypes: [
+      { CFBundleTypeName: 'Folder', CFBundleTypeRole: 'Editor', LSHandlerRank: 'Alternate', LSItemContentTypes: ['public.folder'] },
+      {
+        CFBundleTypeName: 'Text, Markdown and code',
+        CFBundleTypeRole: 'Editor',
+        LSHandlerRank: 'Alternate',
+        LSItemContentTypes: ['public.text', 'public.plain-text', 'public.source-code', 'public.script', 'public.shell-script', 'public.json', 'public.xml', 'public.yaml', 'net.daringfireball.markdown'],
+      },
+      { CFBundleTypeName: 'PDF document', CFBundleTypeRole: 'Viewer', LSHandlerRank: 'Alternate', LSItemContentTypes: ['com.adobe.pdf'] },
+    ],
+  },
+  // Ad-hoc signing is redone below, after the fuses change the framework binary.
+  osxSign: false,
   win32metadata: {
     CompanyName: 'One',
     FileDescription: 'One — code, Markdown and PDF editor',
@@ -57,12 +79,32 @@ const [outDir] = await packager({
 });
 
 // Fuses: no NODE_OPTIONS, no --inspect for the packaged app (RunAsNode stays: the web server child needs it).
-// macOS keeps the wire in the framework binary and would need re-signing after the flip: not built here.
-if (platform !== 'darwin') {
+// macOS keeps the fuse wire in the Electron Framework binary, and flipping it breaks the code signature: the whole
+// bundle is signed again (ad hoc) right after, which Apple Silicon requires anyway before it will run a binary.
+const showFuses = (f) => console.log(`fuses: ${Object.entries(f).map(([k, v]) => `${k}=${v === true ? 'on' : v === false ? 'off' : v}`).join(' ')}`);
+if (platform === 'darwin') {
+  const app = path.join(outDir, 'One.app');
+  // The `one` terminal command lives in the bundle (like VS Code's `code`), so a symlink to it always matches the installed app.
+  fs.mkdirSync(path.join(app, 'Contents/Resources/bin'), { recursive: true });
+  fs.copyFileSync(path.join(root, 'build/mac/bin/one'), path.join(app, 'Contents/Resources/bin/one'));
+  fs.chmodSync(path.join(app, 'Contents/Resources/bin/one'), 0o755);
+  // Packager fills CFBundleDisplayName from executableName ('one', which the launchers use): Finder, Launchpad and
+  // the Dock would show "one". Fixed in the plist itself, before signing.
+  const plist = path.join(app, 'Contents/Info.plist');
+  const info = fs.readFileSync(plist, 'utf8');
+  const named = info.replace(/(<key>CFBundleDisplayName<\/key>\s*<string>)[^<]*(<\/string>)/, '$1One$2');
+  if (named === info && !info.includes('<string>One</string>')) throw new Error('Info.plist: CFBundleDisplayName not found');
+  fs.writeFileSync(plist, named);
+  showFuses(applyFuses(path.join(app, 'Contents/Frameworks/Electron Framework.framework/Versions/A/Electron Framework')));
+  if (process.platform === 'darwin') {
+    execFileSync('codesign', ['--force', '--deep', '--sign', '-', app], { stdio: 'inherit' });
+    execFileSync('codesign', ['--verify', '--deep', '--strict', app], { stdio: 'inherit' });
+    console.log('signed: ad hoc (no Developer ID)');
+  } else console.warn('signed: NOT — built off a Mac; run `codesign --force --deep --sign - One.app` on a Mac before first use');
+} else {
   const exe = path.join(outDir, platform === 'win32' ? 'One.exe' : 'one');
-  const fuses = applyFuses(exe);
-  console.log(`fuses: ${Object.entries(fuses).map(([k, v]) => `${k}=${v === true ? 'on' : v === false ? 'off' : v}`).join(' ')}`);
-} else console.warn('fuses: not set for darwin (flip them in the Electron Framework binary, then re-sign)');
+  showFuses(applyFuses(exe));
+}
 
 // Electron's locales: keep English only (saves ~40 MB unpacked; UI is English).
 const locales = path.join(outDir, platform === 'darwin' ? '' : 'locales');
@@ -79,6 +121,14 @@ if (platform === 'linux') {
     fs.chmodSync(path.join(outDir, f), 0o755);
   }
 }
+if (platform === 'darwin') {
+  // Browser mode launcher (start-web.sh) and the MCP server's stdio launcher (one-mcp.sh), next to One.app.
+  for (const f of fs.readdirSync(path.join(root, 'build/mac'), { withFileTypes: true })) {
+    if (!f.isFile()) continue;
+    fs.copyFileSync(path.join(root, 'build/mac', f.name), path.join(outDir, f.name));
+    fs.chmodSync(path.join(outDir, f.name), 0o755);
+  }
+}
 if (platform === 'win32') {
   // Optional Explorer integration (HKCU, no admin) + "Start web server.cmd" for browser mode + "One MCP.cmd" (stdio).
   for (const f of fs.readdirSync(path.join(root, 'build/windows'))) fs.copyFileSync(path.join(root, 'build/windows', f), path.join(outDir, f));
@@ -88,10 +138,12 @@ const zip = `${outDir}.zip`;
 fs.rmSync(zip, { force: true });
 const name = path.basename(outDir);
 try {
-  execFileSync('zip', ['-qry', path.basename(zip), name], { cwd: release, stdio: 'inherit' });
+  if (platform === 'darwin' && process.platform === 'darwin') execFileSync('ditto', ['-c', '-k', '--keepParent', '--sequesterRsrc', name, path.basename(zip)], { cwd: release, stdio: 'inherit' });
+  else execFileSync('zip', ['-qry', path.basename(zip), name], { cwd: release, stdio: 'inherit' });
 } catch {
   execFileSync('python3', ['-m', 'zipfile', '-c', path.basename(zip), name], { cwd: release, stdio: 'inherit' });
 }
 const mb = (p) => (fs.statSync(p).size / 1048576).toFixed(1);
 console.log(`\n✔ ${path.relative(root, outDir)}  (${((Date.now() - t0) / 1000).toFixed(1)} s)`);
 console.log(`✔ ${path.relative(root, zip)}  ${mb(zip)} MB`);
+if (platform === 'darwin') console.log(`\nInstall:  cp -R "${path.relative(root, path.join(outDir, 'One.app'))}" /Applications/\nFirst launch: right-click One in /Applications → Open (unsigned by Apple), or: xattr -cr /Applications/One.app\nTerminal:  sudo ln -sf /Applications/One.app/Contents/Resources/bin/one /usr/local/bin/one   (then: one . )`);

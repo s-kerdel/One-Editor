@@ -650,10 +650,29 @@ function main() {
     if (paths.length) win?.webContents.send('app:openRequest', paths);
   });
 
+  // macOS never puts "Open With", a drop on the Dock icon or `open -a One <path>` in argv: it sends 'open-file' (also to a
+  // running app, and on a cold start possibly before the window exists). A file of the folder already open just opens;
+  // before the renderer has booted the path joins the launch queue (bootstrap() hands it over), like an argv path.
+  app.on('open-file', (e, p) => {
+    e.preventDefault();
+    gate.vouch(p);
+    void (async () => {
+      if (!service.booted) await initialOpen;
+      if (service.booted) {
+        if (win?.isMinimized()) win.restore();
+        win?.show();
+        win?.focus();
+        win?.webContents.send('app:openRequest', [p]);
+      } else await openPathsAtLaunch([p]);
+    })().catch((err) => console.error('[sec-edit] open-file failed', err));
+  });
+
   if (process.platform === 'win32') app.setAppUserModelId('sec-edit'); // taskbar grouping + pinning
 
   app.whenReady().then(async () => {
     mark('appReady');
+    // `npm run electron` runs the stock Electron.app, whose Dock icon is Electron's; a packaged One.app has its own .icns.
+    if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(path.join(rendererDir, 'icon.png'));
     serveRenderer();
     // An editor needs no camera, mic, geolocation, notifications… deny everything but clipboard + fullscreen.
     const allowed = new Set(['clipboard-sanitized-write', 'clipboard-read', 'fullscreen']);

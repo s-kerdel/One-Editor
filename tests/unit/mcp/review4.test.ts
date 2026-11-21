@@ -13,6 +13,8 @@ import { WriteQuota } from '../../../src/mcp/writes';
 import { cleanPath } from '../../../src/mcp/folders';
 import { checkPlaceholderPolicy, fenceRuleProblem, lineRuleProblem, secretBlocks, secretScope } from '../../../src/mcp/placeholders';
 import { BackendService } from '../../../src/backend/service';
+import { binWord } from '../../../src/mcp/confirm';
+const BIN = binWord(); // "Trash" on macOS, "Recycle Bin" elsewhere: what the server says on this machine
 
 const BASE = path.resolve(__dirname, '../../../.tmp/mcp/unit');
 let tmp: string;
@@ -273,7 +275,7 @@ describe('3. deletes always keep an undo copy', () => {
     put(root, 'gone.md', 'keep me\n');
     const t = await server(root, { undo: { on: false, days: 30 } });
     const r = await t.call('delete', { path: 'gone.md' });
-    expect(r.text).toMatch(/^Deleted gone\.md \(Recycle Bin\) · undo: [a-f0-9]{8}$/);
+    expect(r.text).toMatch(/^Deleted gone\.md \((?:Recycle Bin|Trash)\) · undo: [a-f0-9]{8}$/);
     expect(fs.existsSync(path.join(root, 'gone.md'))).toBe(false);
     await t.s.audit.flush();
     const row = fs.readFileSync(path.join(tmp, 'cfg', 'mcp-audit.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).reverse().find((x) => x.tool === 'delete');

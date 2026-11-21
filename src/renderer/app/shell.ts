@@ -9,7 +9,7 @@ import { afterBootIdle, holdKeys, lazyComponent } from './lazy';
 import { installZen, toggleZen } from './zen';
 
 // Settings UI loads on first open (one stable component, so the Mod-, toggle keeps working).
-const SettingsOverlay = lazyComponent(() => import('./Settings').then((m) => m.SettingsOverlay));
+const SettingsOverlay = lazyComponent(() => import('./SettingsOverlay').then((m) => m.SettingsOverlay));
 // Bookmarks panel (../bookmarks): 4th by default (Files · Search · Git · Bookmarks); list, UI and menu items are lazy.
 const BookmarksPanel = lazyComponent(() => import('../bookmarks/Panel').then((m) => m.BookmarksPanel));
 

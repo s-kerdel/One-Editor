@@ -84,5 +84,13 @@ function stageNodePty(dest) {
     natives = ['build/Release/pty.node'];
   }
   for (const f of natives) copy(f);
+  // node-pty rewrites its helper path with .replace('app.asar', 'app.asar.unpacked'), for a module that lives INSIDE the
+  // asar. Ours is already a real folder in app.asar.unpacked (see package.mjs), so that turns the path into
+  // "app.asar.unpacked.unpacked" and every macOS terminal fails with "posix_spawnp failed". Only rewrite a bare ".asar".
+  const unixTerminal = path.join(dest, 'lib/unixTerminal.js');
+  const code = fs.readFileSync(unixTerminal, 'utf8');
+  const fixed = code.replace(/\.replace\('app\.asar', 'app\.asar\.unpacked'\)/, ".replace(/app\\.asar(?!\\.unpacked)/, 'app.asar.unpacked')").replace(/\.replace\('node_modules\.asar', 'node_modules\.asar\.unpacked'\)/, ".replace(/node_modules\\.asar(?!\\.unpacked)/, 'node_modules.asar.unpacked')");
+  if (fixed === code) throw new Error('node-pty: helperPath rewrite not found in lib/unixTerminal.js (changed upstream? re-check the staging fix)');
+  fs.writeFileSync(unixTerminal, fixed);
   for (const f of natives) if (/spawn-helper$|\.exe$/.test(f)) fs.chmodSync(path.join(dest, f), 0o755);
 }

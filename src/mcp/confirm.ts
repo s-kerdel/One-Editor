@@ -7,7 +7,7 @@
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { ToolError } from './protocol';
+import { ToolError, binWord } from './protocol';
 
 export const CONFIRM_TTL_MS = 5 * 60_000;
 const MAX_CODES = 32;
@@ -84,7 +84,7 @@ export async function surveyFolder(realDir: string, key: string, isHidden: (rel:
 }
 
 export const count = (n: number, one: string) => `${n.toLocaleString('en')} ${one}${n === 1 ? '' : 's'}`;
-export const binWord = (platform: string = process.platform) => (platform === 'darwin' ? 'Trash' : 'Recycle Bin');
+export { binWord };
 
 /** The one-line question, for the elicitation and for the two-step summary. */
 /** "12 MB", "340 kB", "2.4 GB". */
