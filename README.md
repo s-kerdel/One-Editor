@@ -4,6 +4,11 @@
 
 **A fast Markdown + code editor that works directly on your folders.** Obsidian-style notes, but **no vaults and no sync**: open any folder and edit.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/one-dark.png">
+  <img alt="One: file tree with git status, a note in live preview, and the file overview with tasks, local graph and backlinks" src="docs/images/one-light.png">
+</picture>
+
 | | |
 |---|---|
 | **Desktop app** | Electron. Windows first, Linux/macOS too. |
