@@ -86,3 +86,20 @@ export function relabelPatch(patch: string, labelA: string, labelB: string): str
   // Only the header above the first @@ (a removed line "-- x" looks like "--- x" further down).
   return [`--- a/${labelA}`, `+++ b/${labelB}`, ...lines.slice(body)].join('\n');
 }
+
+const lf = (t: string) => t.replace(/\r\n?/g, '\n');
+const closed = (t: string) => (t && !t.endsWith('\n') ? t + '\n' : t);
+
+/**
+ * The two texts as the compare view shows them: LF line ends, and a final newline for a piece of text
+ * (a selection, the clipboard) — it never "owns" the end of a file, so a missing last newline would only
+ * show up as a noisy changed line. A whole file stays exactly as it is (it can be edited in the view: the
+ * text shown must be its document), and a piece compared with it ends the way the file does.
+ */
+export function compareTexts(left: { text: string; whole: boolean }, right: { text: string; whole: boolean }): [string, string] {
+  const a = lf(left.text);
+  const b = lf(right.text);
+  if (left.whole === right.whole) return left.whole ? [a, b] : [closed(a), closed(b)];
+  const like = (piece: string, file: string) => (!file || file.endsWith('\n') ? closed(piece) : piece.replace(/\n$/, ''));
+  return left.whole ? [a, like(b, a)] : [like(a, b), b];
+}

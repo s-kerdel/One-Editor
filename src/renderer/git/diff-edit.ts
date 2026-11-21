@@ -1,8 +1,10 @@
 // Editing in the diff view (lazy diff chunk). Only the working-copy side is ever editable, and it is not
 // a second buffer: every edit is forwarded to the file's open document (the one its editor tab shows), so
 // the unsaved dot, Ctrl+S, autosave, line endings and disk-change handling are the editor's own.
-// Pure parts (which side is editable, reverting a block, save → stage order) are unit-tested.
-import type { Text } from '@codemirror/state';
+// Compare (two files / sources) follows the same model on both sides: a side takes text only when it IS a
+// workspace file, and a block can be applied from either side to such a side.
+// Pure parts (which side is editable, applying / reverting a block, save → stage order) are unit-tested.
+import type { ChangeSet, Text } from '@codemirror/state';
 import type { GitHunk } from '@shared/git';
 import { app } from '../app/app';
 
@@ -16,11 +18,36 @@ export type DiffSource =
    *  `live`: it is open and shown exactly as it is now. */
   | { kind: 'compare'; path?: string; whole: boolean; live: boolean; ignoreWhitespace: boolean };
 
-/** Only ever the right side, and only when it IS the workspace file. */
+/** Git diffs: only ever the right side, and only when it IS the workspace file. (Compare: `compareTargets`.) */
 export function editableSide(s: DiffSource): 'b' | null {
   if (s.kind === 'working') return s.text ? 'b' : null;
-  if (s.kind === 'compare') return s.path && s.whole && s.live && !s.ignoreWhitespace ? 'b' : null;
+  if (s.kind === 'compare') {
+    const t = compareTargets({ whole: false, live: false }, s, s.ignoreWhitespace);
+    return t.b && !t.off ? 'b' : null;
+  }
   return null;
+}
+
+/** One side of a compare. `whole`: a whole file (not a selection, not the clipboard); `live`: shown
+ *  exactly as the file is now (its open document, or the file on disk when no tab holds it). */
+export interface CompareSide {
+  path?: string;
+  whole: boolean;
+  live: boolean;
+}
+
+export const WHITESPACE_OFF = 'Switch off “Ignore whitespace” to apply blocks: the blocks shown leave out lines that differ only in spaces.';
+
+/**
+ * Which sides of a compare can take a block from the other side (and be typed in): only a side that IS
+ * a workspace file. HEAD, a commit, the clipboard, a selection or a remembered text are sources only.
+ * `off`: why nothing can be applied (or typed) right now, although those sides could take it.
+ */
+export function compareTargets(a: CompareSide, b: CompareSide, ignoreWhitespace: boolean): { a: boolean; b: boolean; off?: string } {
+  const file = (s: CompareSide) => !!s.path && s.whole && s.live;
+  // The same file on both sides is one document: the right side is it, the left a copy to read.
+  const can = { a: file(a) && !(file(b) && a.path === b.path), b: file(b) };
+  return ignoreWhitespace && (can.a || can.b) ? { ...can, off: WHITESPACE_OFF } : can;
 }
 
 /** A changed block as the merge view keeps it (`to` may point one past the end of the text). */
@@ -38,9 +65,51 @@ export function revertChange(c: Block, a: Text, b: Text): { from: number; to: nu
   return { from: c.fromB, to: Math.min(b.length, c.toB), insert };
 }
 
-/** The block under a working-copy position (a pure deletion: the spot its lines were at). */
-export function blockAt<T extends Block>(blocks: readonly T[], pos: number): T | null {
-  return blocks.find((c) => c.fromB <= pos && Math.max(c.fromB, c.toB - 1) >= pos) ?? null;
+/** The edit that makes side `to` of block `c` the same as the other side (`to` = 'b': revertChange). */
+export function applyChange(c: Block, to: 'a' | 'b', a: Text, b: Text): Edit {
+  return to === 'b' ? revertChange(c, a, b) : revertChange({ fromA: c.fromB, toA: c.toB, fromB: c.fromA, toB: c.toA }, b, a);
+}
+
+/** The block under a position of side `side` (a pure deletion / insertion: the spot its lines were at). */
+export function blockAt<T extends Block>(blocks: readonly T[], pos: number, side: 'a' | 'b' = 'b'): T | null {
+  return blocks.find((c) => (side === 'b' ? c.fromB <= pos && Math.max(c.fromB, c.toB - 1) >= pos : c.fromA <= pos && Math.max(c.fromA, c.toA - 1) >= pos)) ?? null;
+}
+
+/**
+ * Undo / redo for blocks applied to the LEFT side of a unified compare: there the left text lives in
+ * the view's state, not in an editor with a history of its own. Each step remembers how deep the
+ * right side's history was, so Ctrl+Z walks both sides back in the order things happened.
+ */
+export class SideHistory {
+  private done: Array<{ change: ChangeSet; depth: number }> = [];
+  private undone: Array<{ change: ChangeSet; depth: number }> = [];
+
+  /** A change was made to the side; `inverse` takes it back. `by`: it was this history's own step. */
+  record(by: 'undo' | 'redo' | undefined, inverse: ChangeSet, depth: { undo: number; redo: number }) {
+    if (by === 'undo') return void this.undone.push({ change: inverse, depth: depth.redo });
+    if (!by) this.undone = [];
+    this.done.push({ change: inverse, depth: depth.undo });
+  }
+
+  /** The next step for this side; null while the other side (`depth` steps on its stack) goes first. */
+  take(kind: 'undo' | 'redo', depth: number): ChangeSet | null {
+    const stack = kind === 'undo' ? this.done : this.undone;
+    const top = stack[stack.length - 1];
+    if (!top || depth > top.depth) return null;
+    stack.pop();
+    return top.change;
+  }
+
+  /** The other side was edited: what was undone here cannot come back in order any more. */
+  clearRedo() {
+    this.undone = [];
+  }
+
+  /** The side's text changed from outside (its tab, the disk): the steps no longer fit it. */
+  clear() {
+    this.done = [];
+    this.undone = [];
+  }
 }
 
 /** Working-copy line range [b0, b1) of a block (0-based), to match it with git's blocks. */

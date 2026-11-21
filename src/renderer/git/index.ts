@@ -8,7 +8,7 @@ import { app } from '../app/app';
 import { registerCommands } from '../app/commands';
 import { eventsUrl } from '../platform';
 import { GitStore, type GitBackend } from './store';
-import { diffUnavailable, openDiffWithHead } from './diff-open';
+import { diffUnavailable, openFileDiff } from './diff-open';
 import { gitUi, type GitUi } from './install';
 import { changesTree, rowClass } from './marks';
 import { ChangesBanner, GitBranchItem, GitTreeMark, fileMenuItems } from './ui';
@@ -160,7 +160,7 @@ export function installGit(): GitStore | null {
       category: 'Git',
       keywords: ['compare', 'changes', 'head', 'history'],
       when: () => !!active() && !diffUnavailable(s, active()!),
-      run: () => void openDiffWithHead(s, active()!),
+      run: () => void openFileDiff(s, active()!),
     },
     {
       id: 'git.showChanges',

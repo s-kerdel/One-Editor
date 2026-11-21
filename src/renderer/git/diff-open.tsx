@@ -1,6 +1,7 @@
 // Opens "Diff with last commit" in the app's overlay slot. Light: the merge view is a lazy chunk.
 import { useEffect, useState } from 'preact/hooks';
 import type { ComponentType } from 'preact';
+import type { GitEntry } from '@shared/git';
 import { basename } from '@shared/paths';
 import { app } from '../app/app';
 import type { GitStore } from './store';
@@ -63,8 +64,24 @@ export function diffUnavailable(store: GitStore, path: string): string | null {
   return null;
 }
 
-/** Shows HEAD ↔ working copy for `path`. Resolves false (after a toast) when there is nothing to show.
- *  `extra`: more view props (the pane's "include in commit" box). */
+/**
+ * A file's changes since the last commit, with the commit boxes: THE way in for "Diff with last commit"
+ * (tab / tree menu, palette, status bar) and for a click on a Source control row (`row`: its entry, which
+ * may be a new file). One route, so both get the same view and the same staging rules (./stage, lazy).
+ * No git at all without a status (not a repository, not trusted, switched off).
+ */
+export async function openFileDiff(store: GitStore, path: string, row?: GitEntry): Promise<boolean> {
+  const why = row ? (store.status.peek()?.ok ? null : 'Git is not available for this folder') : diffUnavailable(store, path);
+  if (why) {
+    app.toast(why, 'info');
+    return false;
+  }
+  const { openStaging } = await import('./stage');
+  return openStaging(store, path, row);
+}
+
+/** The plain view: HEAD ↔ working copy for `path`. Resolves false (after a toast) when there is nothing
+ *  to show. `extra`: more view props (./stage adds the "include in commit" boxes). */
 export async function openDiffWithHead(store: GitStore, path: string, extra?: Partial<OverlayProps>): Promise<boolean> {
   const why = diffUnavailable(store, path);
   if (why) {

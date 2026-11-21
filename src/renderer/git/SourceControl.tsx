@@ -3,6 +3,7 @@
 // history. Every action goes through ./actions (saves first, refreshes after, explains failures, hands
 // prompts to a terminal).
 import './scm.css';
+import './check.css';
 import { signal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { GitBranchInfo, GitCommit, GitCommitFile, GitCommitFiles, GitCommitInfo, GitEntry, GitJobError, GitStatus } from '@shared/git';
@@ -15,10 +16,10 @@ import { revealInTree } from '../app/fileops';
 import { installGit } from './index';
 import type { GitStore } from './store';
 import { markOf } from './marks';
-import { openCommitDiff } from './diff-open';
+import { openCommitDiff, openFileDiff } from './diff-open';
 import { busy, discard, handOff, handOffLabel, lastError, markResolved, runGit, stage } from './actions';
 import { allOf, ariaChecked, selectedCount, type Check } from './selection';
-import { openStaging, shownCheck, stager, toggleAll, toggleEntry } from './stage';
+import { shownCheck, stager, toggleAll, toggleEntry } from './stage';
 import { branchLabel, stopTrusting } from './ui';
 import { git, gitCall } from './rpc';
 
@@ -104,7 +105,7 @@ function Row({ s, e, group, check, onCheck }: { s: GitStore; e: GitEntry; group:
       data-path={e.path}
       data-group={group}
       data-check={check ?? undefined}
-      onClick={() => (group === 'conflicts' || e.dir || e.submodule ? openFile() : void openStaging(s, e))}
+      onClick={() => (group === 'conflicts' || e.dir || e.submodule ? openFile() : void openFileDiff(s, e.path, e))}
       onDblClick={openFile}
       onKeyDown={(ev) => {
         if (ev.target !== ev.currentTarget) return; // keys on the hover buttons are theirs

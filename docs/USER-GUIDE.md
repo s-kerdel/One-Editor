@@ -648,6 +648,8 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 
 **Compare a whole file:** right-click it (tree or tab) → **Diff with last commit**. Or `Ctrl+Shift+P` → "Diff with last commit". Switch **Unified / Side by side** at the top. `F7` jumps to the next change, `Esc` closes.
 
+**Same view as in Source control:** each block has its **Include in commit** box, the file has one at the top. See [Commit and push](#commit-and-push-ctrlshiftg).
+
 **Edit right in the diff.** The header says **Working copy · editable** when you can.
 
 | I want to… | Do this |
@@ -668,7 +670,7 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 3. Type a message → **`Ctrl+Enter`** (or **Commit**). Nothing ticked? It offers to include everything.
 4. **↑ Push** / **↓ Pull** at the top. A new branch shows **Publish** instead.
 
-**Only part of a file?** Click the file (not its box) → its changes open. Each block has its own **Include in commit** box. The file's box then shows **–** (partly).
+**Only part of a file?** Click the file (not its box) → its changes open. Each block has its own **Include in commit** box. The file's box then shows **–** (partly). **Diff with last commit** (tree, tab, palette, status bar) opens the same view with the same boxes.
 
 | Box | Means |
 |---|---|
@@ -710,9 +712,23 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 | Two parts of my files | Select the first part → **Select Text for Compare**. Go to the second (any file) → **Compare Text with Previous Selection** |
 | A whole file with the clipboard | Right-click the file in the tree, or its tab → **Compare with Clipboard** |
 
-In the compare view: **Swap sides**, **Ignore whitespace**, **Copy as patch**, Unified / Side by side. `Esc` closes it; nothing is changed or saved.
+In the compare view: **Swap sides**, **Ignore whitespace**, **Copy as patch**, Unified / Side by side. `Esc` closes it.
 
-**Editable too:** when the **right** side is a whole open file (not a selection, not the clipboard), you can type in it and **Revert** blocks, like in a diff. **Swap sides** to bring your file to the right. Not while **Ignore whitespace** is on.
+**Two whole files?** Open the first → **Select Text for Compare** (no selection = the whole file). Open the second → **Compare Text with Previous Selection**.
+
+**Apply a block to the other side.** Works towards every side that is **a whole file of your folder**.
+
+| I want to… | Do this |
+|---|---|
+| Copy a block to the **left** file | Side by side: **←** between the sides. Unified: **Apply to ‹left name›** on the block. Or **`Ctrl+Shift+F7`** at the cursor |
+| Copy a block to the **right** file | **→** / **Apply to ‹right name›**, or **`Ctrl+F7`** at the cursor |
+| Take it back | **`Ctrl+Z`** (`Ctrl+Y` redoes) |
+| Type in a file | Side by side: type in either file. Unified: the right one |
+| Save | **`Ctrl+S`** saves both files (autosave works too) |
+
+- It **is** the file: the tab gets the unsaved dot, a file without a tab gets one. Close the compare any time, **nothing is lost**.
+- **Read-only:** the clipboard, a selection, a text you selected earlier that changed since. They only **give** blocks: there is no arrow pointing at them.
+- **Ignore whitespace** on: the arrows are greyed out (the tooltip says why). Switch it off to apply.
 
 - The diff is **git's own** (`git diff --histogram`). No git installed? A built-in diff is used and the header says "built-in diff".
 - The remembered selection is kept **in memory only**, and dropped when you open another folder.

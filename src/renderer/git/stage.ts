@@ -1,6 +1,7 @@
-// Choose what to commit, glue (lazy SCM chunk): the file boxes' batcher bound to the store (through
-// ./actions: saves first, refreshes the status, toasts failures), and the diff view opened from the pane
-// with a box per changed block (git('hunks') / git('stageHunks')). The index stays the only selection.
+// Choose what to commit, glue (lazy chunk of its own: the pane imports it, "Diff with last commit" loads
+// it through ./diff-open `openFileDiff`): the file boxes' batcher bound to the store (through ./actions:
+// saves first, refreshes the status, toasts failures), and a file's diff view with a box per changed
+// block (git('hunks') / git('stageHunks')). The index stays the only selection.
 import { batch, computed, signal, type ReadonlySignal } from '@preact/signals';
 import type { GitActionResult, GitEntry, GitFileHunks, GitHunk, GitHunkPick, GitWholeFileReason } from '@shared/git';
 import { app } from '../app/app';
@@ -88,13 +89,20 @@ const entryOf = (s: GitStore, path: string): GitEntry | null => {
 };
 
 /**
- * Pane row → the file's changes, with "Include in commit" for the file and, where git can split it,
- * for each block. Blocks keep their ranges when staged or not, so they are the picks' identity.
+ * A file's changes with "Include in commit" for the file and, where git can split it, for each block
+ * (reached through ./diff-open `openFileDiff`: a pane row, or "Diff with last commit" from anywhere).
+ * `row`: the pane's entry; without one the status is asked, and a file git lists no change for yet (only
+ * unsaved edits, or saved a moment ago) still gets its boxes once git sees it.
+ * Blocks keep their ranges when staged or not, so they are the picks' identity.
  * The working copy can be edited in the view: git only knows the file on disk, so the blocks are read
  * again after every save, and a box clicked on unsaved edits saves first (./diff-edit `saveThenPick`).
  */
-export async function openStaging(s: GitStore, e: GitEntry): Promise<void> {
+export async function openStaging(s: GitStore, path: string, row?: GitEntry): Promise<boolean> {
   const b = stager(s);
+  const known = row ?? entryOf(s, path);
+  // Conflicts keep "Mark resolved", folders and submodules are one entry: the plain view, no boxes.
+  const pickable = known ? !!checkOf(known) && !known.dir && !known.submodule : true;
+  const e = { path, from: known?.from };
   const file: ReadonlySignal<Check | null> = computed(() => {
     const cur = entryOf(s, e.path);
     return cur ? shownCheck(b, cur) : null;
@@ -216,7 +224,7 @@ export async function openStaging(s: GitStore, e: GitEntry): Promise<void> {
     watch();
   };
 
-  const r = checkOf(e) && !e.dir && !e.submodule ? await git('hunks', e.path, from).catch(() => null) : null;
+  const r = pickable ? await git('hunks', e.path, from).catch(() => null) : null;
   const text = live();
   if (r?.mode === 'hunks' && unsaved() && text !== undefined && text !== r.work) {
     // Unsaved edits: the view shows (and edits) them, git's blocks belong to the file on disk. They
@@ -224,9 +232,21 @@ export async function openStaging(s: GitStore, e: GitEntry): Promise<void> {
     head = r.head;
     work.value = r.work;
     showDiff({ path: e.path, base: r.head, current: text, baseLabel: label(), currentLabel: 'Working copy', staging: { ...staging, note: 'blocks to pick appear once saved' }, editable: true });
-    return watch();
+    watch();
+    return true;
   }
-  if (r?.mode === 'hunks' && r.hunks.length) return show(r);
-  const note = r?.mode === 'file' ? WHY[r.reason] : undefined;
-  await openChange(s, e.path, checkOf(e) ? { staging: { ...staging, note } } : undefined);
+  if (r?.mode === 'hunks' && r.hunks.length) return show(r), true;
+  // The same file as the last commit on disk, edits only in its tab: the first save makes the blocks.
+  const onlyUnsaved = r?.mode === 'file' && r.reason === 'unchanged' && unsaved();
+  const note = onlyUnsaved ? 'blocks to pick appear once saved' : r?.mode === 'file' ? WHY[r.reason] : undefined;
+  const opened = await openChange(s, e.path, pickable ? { staging: { ...staging, note } } : undefined);
+  if (opened && onlyUnsaved) {
+    // The open view takes them (same editors) as long as it shows the commit's text git compares with.
+    const base = (await s.headFile(e.path))?.content;
+    if (typeof base === 'string') {
+      head = base;
+      watch();
+    }
+  }
+  return opened;
 }

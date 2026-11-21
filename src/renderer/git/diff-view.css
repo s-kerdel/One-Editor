@@ -126,7 +126,15 @@
 /* Anchored to its own block (the package leaves it to the nearest positioned ancestor). */
 .se-git-diff .se-git-diff-body .cm-deletedChunk { position: relative; }
 .se-git-diff .se-git-diff-body .cm-chunkButtons { top: 2px; inset-inline-end: 8px; z-index: 1; }
-.se-git-diff .se-git-diff-body .cm-chunkButtons .se-git-revert { margin: 0; padding: 0 7px; }
+.se-git-diff .se-git-diff-body .cm-chunkButtons { display: flex; gap: 4px; }
+.se-git-diff .se-git-diff-body .cm-chunkButtons .se-git-revert { margin: 0; padding: 0 7px; max-width: 24em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .se-git-diff .se-git-diff-body .cm-merge-revert { width: 24px; background: var(--bg-elev); border-left: 1px solid var(--border); }
-.se-git-diff .se-git-diff-body .cm-merge-revert .se-git-revert { left: 3px; width: 18px; height: 18px; margin-top: 1px; padding: 0; line-height: 16px; text-align: center; }
+/* One holder per block (placed by the merge view), an arrow per direction inside: a git diff has one
+   (revert), a compare one towards each side that is a workspace file. */
+.se-git-diff .se-git-diff-body .cm-merge-revert .se-git-apply { position: absolute; left: 0; right: 0; display: flex; justify-content: center; gap: 2px; }
+.se-git-diff .se-git-diff-body .cm-merge-revert .se-git-apply .se-git-revert { position: static; flex: none; width: 18px; height: 18px; margin-top: 1px; padding: 0; line-height: 16px; text-align: center; }
+.se-git-diff[data-apply='ab'] .se-git-diff-body .cm-merge-revert { width: 44px; }
+/* Switched off ("Ignore whitespace"): still there, its tooltip says why. */
+.se-git-diff .se-git-diff-body .se-git-revert[aria-disabled='true'],
+.se-git-diff .se-git-diff-body .se-git-revert[aria-disabled='true']:hover { opacity: 0.4; cursor: default; background: var(--bg-elev); color: var(--text-muted); border-color: var(--border); }
 .se-git-diff .se-git-diff-body .cm-merge-revert + .cm-mergeViewEditor { border-left: 1px solid var(--border); }

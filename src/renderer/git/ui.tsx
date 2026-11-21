@@ -6,7 +6,7 @@ import * as ui from '../app/ui';
 import { Icon, addIcons } from '../app/icons';
 import { copyText } from '../app/fileops';
 import type { GitStore } from './store';
-import { openDiffWithHead } from './diff-open';
+import { openFileDiff } from './diff-open';
 import { markResolved, stage, unstage } from './actions';
 import { compareEnabled } from './compare-menu';
 import { git } from './rpc';
@@ -68,7 +68,7 @@ export function branchMenuItems(store: GitStore, active: string | null): ui.Menu
         }
       },
     },
-    { label: 'Diff with last commit', icon: 'gitCompare', disabled: !active || !store.headKey(active), run: () => active && openDiffWithHead(store, active) },
+    { label: 'Diff with last commit', icon: 'gitCompare', disabled: !active || !store.headKey(active), run: () => active && openFileDiff(store, active) },
     { label: 'Open source control', icon: 'gitBranch', keys: 'Ctrl+Shift+G', run: openPane },
     { label: 'Stop trusting this folder', icon: 'lock', run: () => void stopTrusting(store) },
   ];
@@ -166,7 +166,7 @@ export function fileMenuItems(store: GitStore, path: string): ui.MenuItem[] {
   if (compareEnabled()) items.push({ label: 'Compare with Clipboard', icon: 'gitCompare', run: () => import('./compare').then((c) => c.compareFileWithClipboard(path)) });
   if (!store.status.peek()?.ok) return items.length ? [{ separator: true }, ...items] : [];
   const m = store.marks.peek().file(path);
-  if (store.headKey(path)) items.push({ label: 'Diff with last commit', icon: 'gitCompare', run: () => openDiffWithHead(store, path) });
+  if (store.headKey(path)) items.push({ label: 'Diff with last commit', icon: 'gitCompare', run: () => openFileDiff(store, path) });
   if (m?.state === 'conflicted') items.push({ label: 'Mark resolved', icon: 'check', run: () => markResolved(store, path) });
   else if (m && m.state !== 'ignored' && (m.unstaged || m.state === 'untracked') && !m.submodule) items.push({ label: 'Stage changes', icon: 'plus', run: () => stage(store, [path]) });
   if (m?.staged && m.state !== 'conflicted') items.push({ label: 'Unstage', icon: 'minus', run: () => unstage(store, [path]) });
