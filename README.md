@@ -270,3 +270,9 @@ On WSL start Xvfb first: `~/.local/xvfb/start-xvfb.sh :99`.
 | **Your notes** | Only in the folders you open |
 
 Pasted images are saved into your folder (default: `attachments/`). Nothing else is written there.
+
+---
+
+## Licence
+
+**GPL-3.0-or-later.** See [`LICENSE`](LICENSE).

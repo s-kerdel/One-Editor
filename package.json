@@ -24,8 +24,9 @@
     "security": "node scripts/security.mjs"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Shiva Kerdel",
+  "license": "GPL-3.0-or-later",
+  "repository": "github:s-kerdel/One-Editor",
   "type": "module",
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.4",
