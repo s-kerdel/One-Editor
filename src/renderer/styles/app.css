@@ -296,6 +296,9 @@ html[data-theme='light'] .se-ws-avatar { color: hsl(var(--ws-hue) 55% 42%); }@me
 .se-ficon-folder { color: var(--ft-folder); }
 .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220) 52% 64%); }
 html[data-theme='light'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220) 48% 46%); }@media (prefers-color-scheme: light) { html[data-theme='system'] .ui-shelf .se-ficon-folder { color: hsl(var(--hue, 220) 48% 46%); } }
+/* Folder colours → One colour (html[data-folders], both styles): classic's grey, or the picked colour as
+   --folder-color (derived per theme by app/accent.ts, like the accent). */
+html[data-folders='one'] .se-root .se-ficon-folder { color: var(--folder-color, var(--ft-folder)); }
 .se-ficon-badge { border-radius: var(--radius-xs); font: 700 8px/1 var(--font-ui); letter-spacing: -0.02em; box-shadow: inset 0 0 0 1.4px currentColor; }
 .se-ficon-badge span { transform: translateY(0.2px); }
 
@@ -454,6 +457,20 @@ html.se-dragging .frame-integrated .se-topline { -webkit-app-region: no-drag; ap
 .frame-integrated.ui-classic[data-os='darwin'] :is(.se-activity, .se-sidebar) { padding-top: env(titlebar-area-height, 0px); }
 .frame-integrated.ui-shelf[data-os='darwin'] .shelf-hidden .se-topline { padding-left: max(0px, env(titlebar-area-x, 0px) - 8px); }
 .frame-integrated.ui-classic[data-os='darwin'] .shelf-hidden .se-topline { padding-left: max(0px, env(titlebar-area-x, 0px) - 48px); }
+
+/* ---------- zen mode (View: Toggle zen mode, app/zen.tsx) ----------
+   Only the text: the card goes flush; the tab strip's place stays as an empty band — the window's drag
+   area with the integrated frame (the .se-topline rules above) — and shows "Exit zen" on hover. */
+.se-zen .se-content, .se-zen .se-main.shelf-hidden .se-content { margin: 0; border-width: 0; border-radius: 0; box-shadow: none; }
+.se-zen .se-topline { background: var(--bg); }
+.se-zen-bar { flex: 1; display: flex; align-items: center; justify-content: flex-end; height: 28px; padding: 0 8px; }
+/* Same height as the tab strip above its rule: the window controls keep their size. */
+.frame-integrated .se-zen-bar { height: calc(var(--tab-h) - 1px); padding-right: calc(var(--wco-right) + 8px); }
+.frame-integrated.ov-open .se-zen-bar { padding-right: 8px; }
+.se-zen-exit { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 4px 0 10px; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-muted); font-size: 12px; opacity: 0; transition: opacity 0.15s; }
+.se-zen-bar:hover .se-zen-exit, .se-zen-exit:focus-visible { opacity: 1; }
+.se-zen-exit:hover { background: var(--bg-hover); color: var(--text); }
+.se-zen-exit kbd { font-size: 10px; line-height: 14px; }
 
 @keyframes se-fade { from { opacity: 0; } }
 @keyframes se-pop { from { opacity: 0; transform: translateY(-4px) scale(0.985); } }

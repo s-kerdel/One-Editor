@@ -19,9 +19,10 @@ export function applySettingsToDom(s: Settings) {
     ui: s.sidebarStyle === 'classic' ? 'classic' : 'shelf',
     corners: s.cornerStyle === 'square' ? 'square' : '',
     density: s.uiDensity === 'compact' || s.uiDensity === 'spacious' ? s.uiDensity : '',
+    folders: s['tree.folderColors'] === 'one' ? 'one' : '',
   };
-  const accent = /^#[0-9a-f]{6}$/i.test(s.accentColor ?? '') ? s.accentColor!.toLowerCase() : '';
-  const sheet = document.getElementById('se-accent');
+  // Picked colours → derived per-theme stylesheets (app/accent.ts): the accent and the one folder colour.
+  const sheets = { accent: s.accentColor, folder: s['tree.folderColor'] } as Record<'accent' | 'folder', unknown>;
   try {
     for (const k in attrs) {
       if (attrs[k]) root.dataset[k] = attrs[k];
@@ -29,11 +30,19 @@ export function applySettingsToDom(s: Settings) {
       if (attrs[k]) localStorage.setItem(`sec-edit-${k}`, attrs[k]);
       else localStorage.removeItem(`sec-edit-${k}`);
     }
-    if (!accent) localStorage.removeItem('sec-edit-accent');
   } catch {}
-  // Accent: the derived tokens live in a cached stylesheet; the colour maths only load when it is stale.
-  if (!accent) sheet?.remove();
-  else if (!sheet?.textContent?.startsWith(`/*${accent}*/`)) void import('./accent').then((m) => m.applyAccent(accent));
+  // The derived tokens live in cached stylesheets; the colour maths only load when one is stale.
+  for (const k of ['accent', 'folder'] as const) {
+    const v = sheets[k];
+    const hex = typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : '';
+    const sheet = document.getElementById(`se-${k}`);
+    if (!hex) {
+      sheet?.remove();
+      try {
+        localStorage.removeItem(`sec-edit-${k}`);
+      } catch {}
+    } else if (!sheet?.textContent?.startsWith(`/*${hex}*/`)) void import('./accent').then((m) => m.applyColorSheet(k, hex));
+  }
   root.style.setProperty('--editor-font-size', `${s.fontSize}px`);
   if (s.editorFont?.trim()) root.style.setProperty('--font-editor', s.editorFont.trim());
   else root.style.removeProperty('--font-editor');

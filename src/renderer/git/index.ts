@@ -121,9 +121,12 @@ export function installGit(): GitStore | null {
 
   // "Show changes" tree, memoised so the virtualised tree only re-flattens when something changed.
   let memo: { tree: unknown; marks: unknown; out: ReturnType<GitUi['view']> } | null = null;
+  // Settings → Files → "Git colours in the file tree": off draws no marks. Drawing only — status, the
+  // Source control pane, the branch item and change bars are unaffected, and no git runs for it.
+  const treeColors = () => app.settings.value['git.treeColors'] !== false;
   const ui: GitUi = {
-    row: (p, dir) => rowClass(s.marks.value, p, dir),
-    Mark: (p) => h(GitTreeMark, { store: s, ...p }),
+    row: (p, dir) => (treeColors() ? rowClass(s.marks.value, p, dir) : ''),
+    Mark: (p) => (treeColors() ? h(GitTreeMark, { store: s, ...p }) : null),
     Branch: () => h(GitBranchItem, { store: s }),
     Banner: () => h(ChangesBanner, { store: s }),
     view(tree) {

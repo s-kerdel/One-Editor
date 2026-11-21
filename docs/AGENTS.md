@@ -151,6 +151,20 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   (debounced; own writes give no diff; keys still in flight are skipped) and reports *external* changes:
   `onExternalSettings` → Electron `settings:changed` (preload channel) / server SSE `event: settings`. The renderer
   re-syncs in `app/settings-sync.ts` (installed by the idle Popups chunk: no startup code).
+- **Zen mode** (shell, "View: Toggle zen mode", `Mod-Alt-z`; stub `app/zen.tsx`, logic in the lazy `app/zen-impl.ts`):
+  the flag is **`ui.zen`** (null = off, else the layout to restore). Entering saves sidebar visibility / panel, the
+  overview, the process dock and the terminal panel, then closes them through **their own signals**; leaving
+  restores exactly that. Tab strip, status bar (unless `zen.keepStatusBar`), classic activity bar and the shelf
+  head / foot have no state: `Layout` leaves them out while `ui.zen` is set; the strip's place is `.se-zen-bar`
+  (inside `.se-topline`, so the integrated frame's drag region and `--wco-right` still apply). **Contract:** a panel
+  that opens *itself* (not on a user action: auto-open on an event, a restored flag) must not while `ui.zen.value`
+  is set; a user action may open it (it shows on top of zen, and leaving zen still restores the pre-zen layout). Saved
+  in the session (`SessionState.zen`) and in the skeleton cache (`sec-edit-layout` `z` → `<html data-zen="on[ status]">`
+  by theme-boot.js), so the first paint is already zen.
+- Calm file tree: setting `git.treeColors` (off = `gitUi.row()` / `Mark` draw nothing; drawing only, never a git run)
+  and `tree.folderColors` (`hue` | `one` → `<html data-folders="one">`) + `tree.folderColor` (→ token
+  **`--folder-color`**, derived per theme by `app/accent.ts` like the accent, cached as `sec-edit-folder` for
+  theme-boot.js; unset = `--ft-folder`). Draw folder icons with `.se-ficon-folder` and they follow both.
 - Browser state is per origin = per port: `cli.ts` remembers the last port per folder (`web-ports.json` in app data,
   `server/ports.ts`) and tries it first without `--port`; when it is busy, the ready handshake carries `busy` and the
   info panel says browser state starts empty.
@@ -158,7 +172,7 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
 ### Global keybinding allocation (avoid conflicts)
 | Owner | Keys |
 |---|---|
-| shell | `Mod-s` save, `Mod-w` close tab, `Mod-n` new note, `Mod-Shift-b` sidebar, `Mod-e` toggle edit/preview, `Mod-\` split, `Ctrl-Tab`/`Ctrl-Shift-Tab` tabs, `Mod-,` settings, `Mod-=`/`Mod--`/`Mod-0` zoom |
+| shell | `Mod-s` save, `Mod-w` close tab, `Mod-n` new note, `Mod-Shift-b` sidebar, `Mod-Alt-z` zen mode (also in `APP_KEYS_IN_TERMINAL`), `Mod-e` toggle edit/preview, `Mod-\` split, `Ctrl-Tab`/`Ctrl-Shift-Tab` tabs, `Mod-,` settings, `Mod-=`/`Mod--`/`Mod-0` zoom |
 | search | `Mod-p`/`Mod-o` quick open, `Mod-Shift-p`/`F1` palette, `Mod-Shift-f` find in files, `Mod-Shift-h` replace in files, `Mod-Shift-o` go to heading, `Mod-t` workspace symbol/heading |
 | format | `Shift-Alt-f` format document, `Mod-Alt-f` format selection/code block |
 | editor (CM-local, not global) | `Mod-b` bold, `Mod-i` italic, `Mod-k` link, `Mod-f`/`Mod-h` in-file find/replace, `Mod-d`, `Mod-/`, `Mod-Enter` toggle checkbox, `Alt-Up/Down` move line, `Mod-Shift-v` paste exactly as copied (plain text, no trailing-whitespace trim, no smart paste), `/` slash menu, `Alt-F10` focus formatting toolbar, … |

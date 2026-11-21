@@ -174,6 +174,8 @@ export interface SessionState {
   splitRatio?: number;
   /** Expanded folders in the file tree. */
   expanded?: RelPath[];
+  /** Zen mode is on: the layout to restore when leaving it (renderer app/zen.tsx). */
+  zen?: { sidebarVisible: boolean; sidebarPanel: string; overviewVisible: boolean; processesOpen: boolean };
   [key: string]: unknown;
 }
 

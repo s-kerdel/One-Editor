@@ -7,6 +7,7 @@ import { openWorkspace } from './documents';
 import { newNote, openAbsolutePaths } from './fileops';
 import { toggleEditPreview, toggleSplit, zoom, activeIsMarkdown } from './settings';
 import { afterBootIdle, holdKeys, lazyComponent } from './lazy';
+import { installZen, toggleZen } from './zen';
 
 // Settings UI loads on first open (one stable component, so the Mod-, toggle keeps working).
 const SettingsOverlay = lazyComponent(() => import('./Settings').then((m) => m.SettingsOverlay));
@@ -107,6 +108,7 @@ function syncTitle() {
 
 export function installShell() {
   installDrop();
+  installZen();
   app.events.on('active:changed', syncTitle);
   app.events.on('workspace:opened', syncTitle);
   app.backend.onOpenRequest((paths) => void openAbsolutePaths(paths));
@@ -126,6 +128,7 @@ export function installShell() {
         app.sidebarVisible.value = !app.sidebarVisible.value;
       },
     },
+    { id: 'view.toggleZen', title: 'View: Toggle zen mode', keys: ['Mod-Alt-z'], keywords: ['distraction free', 'focus', 'writing'], run: toggleZen },
     { id: 'view.toggleEditPreview', title: 'View: Toggle edit / reading view', keys: ['Mod-e'], when: activeIsMarkdown, run: toggleEditPreview },
     { id: 'view.toggleSplit', title: 'View: Toggle split preview', keys: ['Mod-\\'], when: activeIsMarkdown, run: toggleSplit },
     {

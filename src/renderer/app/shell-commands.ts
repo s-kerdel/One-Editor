@@ -37,6 +37,17 @@ export function registerShellCommands() {
     { id: 'file.copyRelativePath', title: 'File: Copy relative path', when: hasActive, run: () => void copyText(app.activePath.value!, 'Relative path') },
     { id: 'workspace.open', title: 'Open folder…', keywords: ['workspace', 'project'], run: openFolderInteractive },
     { id: 'files.collapseAll', title: 'Files: Collapse all folders', run: collapseAll },
+    {
+      id: 'files.toggleGitColors',
+      title: 'Files: Toggle git colours in file tree',
+      keywords: ['git', 'status', 'marks', 'letters', 'modified', 'calm', 'focus', 'colors'],
+      run: () => {
+        // Drawing only (git/index.ts): no git run, the Source control pane and change bars stay.
+        const on = app.settings.value['git.treeColors'] === false;
+        updateSettings({ 'git.treeColors': on });
+        app.toast(`Git colours in the file tree: ${on ? 'on' : 'off'}`, 'info', 1500);
+      },
+    },
     { id: 'view.contentWidth', title: 'View: Content width…', keywords: ['readable', 'wide', 'full', 'column', 'margin', 'line length'], when: activeIsMarkdown, run: () => openPicker((m) => m.openWidthPicker()) },
     { id: 'editor.changeLanguage', title: 'Change language mode…', keywords: ['syntax', 'highlighting', 'file type', 'plain text'], when: hasActive, run: () => openPicker((m) => m.openLanguagePicker()) },
     {

@@ -36,12 +36,13 @@ export function paintedBackground(el: Element | null): string {
 
 /** What the overlay should look like now, or null when the strip is not rendered. */
 export function measureTitleBar(): { color: string; symbolColor: string; height: number } | null {
-  const bar = document.querySelector<HTMLElement>('.se-tabbar');
+  // Zen mode: an empty band takes the strip's place (app/zen.tsx), painted like the editor behind it.
+  const bar = document.querySelector<HTMLElement>('.se-tabbar, .se-zen-bar');
   if (!bar) return null;
   const cs = getComputedStyle(bar);
   // File overview open: the controls sit over its top band (shelf: the backdrop; classic: the panel).
   const corner = document.querySelector('.se-overview .se-ov-head') ?? document.querySelector('.se-overview');
-  const color = toHex(corner ? paintedBackground(corner) : cs.backgroundColor);
+  const color = toHex(paintedBackground(corner ?? bar));
   const symbolColor = toHex(cs.getPropertyValue('--text-muted'));
   if (!color || !symbolColor) return null;
   // Overlay height is in window units: CSS px × zoom. Stop above the strip's bottom rule so it runs on under the controls.
@@ -76,6 +77,7 @@ export function installTitleBar() {
   app.events.on('settings:changed', schedule);
   // Opening / closing the file overview moves the controls between the strip and the overview's top band.
   ui.overviewVisible.subscribe(schedule);
+  ui.zen.subscribe(schedule);
   // Theme "System": the OS switched light/dark (also fires when main applies a new theme source).
   matchMedia('(prefers-color-scheme: dark)').addEventListener('change', schedule);
   // A drag region takes no drops: while a tab or file is dragged, the strip's empty end must accept it

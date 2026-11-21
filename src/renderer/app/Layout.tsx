@@ -11,6 +11,7 @@ import { ShelfTop, ShelfFoot, ShelfReveal } from './Shelf';
 import { loadClassic, setClassicPrimer } from './classic-loader';
 import { panelOpen as terminalOpen, TerminalPanelSlot } from '../terminal/install';
 import { OverviewPanelLazy as OverviewPanel } from '../overview';
+import { ZenBar, zenKeepsStatus } from './zen';
 
 const ActivityBar = lazyComponent(() => loadClassic().then((m) => m.ActivityBar));
 
@@ -93,15 +94,16 @@ function Sash({ of }: { of: keyof typeof SASHES }) {
   );
 }
 
-function Sidebar({ classic }: { classic: boolean }) {
+function Sidebar({ classic, zen }: { classic: boolean; zen: boolean }) {
   const panels = app.panels.value;
   const current = panels.find((p) => p.id === app.sidebarPanel.value) ?? panels[0];
   const Panel = current?.component;
   return (
     <aside class={`se-sidebar${classic ? '' : ' se-shelf'}`} style={{ width: `${ui.sidebarWidth.value}px` }} data-panel={current?.id} aria-label={current?.title}>
-      {!classic && <ShelfTop />}
+      {/* Zen ("Keep the file tree"): just the panel, without the shelf's chrome. */}
+      {!classic && !zen && <ShelfTop />}
       <div class="se-sidebar-body">{Panel && <Panel />}</div>
-      {!classic && <ShelfFoot />}
+      {!classic && !zen && <ShelfFoot />}
       <Sash of="sidebar" />
     </aside>
   );
@@ -111,23 +113,32 @@ export function Layout() {
   const Overlay = app.overlay.value;
   const ProcessDock = ui.processDock.value;
   const classic = isClassic();
+  // Zen (app/zen.tsx): no tab strip, activity bar or status bar (unless kept); panels are closed by their own state.
+  const zen = !!ui.zen.value;
+  const status = !zen || zenKeepsStatus();
   return (
     // frame-integrated: the desktop window has no OS title bar; the tab strip is the title bar (styles/app.css).
-    <div class={`se-root theme-${app.settings.value.theme} ${classic ? 'ui-classic' : 'ui-shelf'}${app.backend?.frame === 'integrated' ? ' frame-integrated' : ''}${ui.overviewVisible.value ? ' ov-open' : ''}`} data-os={app.backend?.os}>
+    <div class={`se-root theme-${app.settings.value.theme} ${classic ? 'ui-classic' : 'ui-shelf'}${app.backend?.frame === 'integrated' ? ' frame-integrated' : ''}${ui.overviewVisible.value ? ' ov-open' : ''}${zen ? ' se-zen' : ''}`} data-os={app.backend?.os}>
       <div class={`se-main${app.sidebarVisible.value ? '' : ' shelf-hidden'}`}>
-        {classic && <ActivityBar />}
-        {app.sidebarVisible.value && <Sidebar classic={classic} />}
+        {classic && !zen && <ActivityBar />}
+        {app.sidebarVisible.value && <Sidebar classic={classic} zen={zen} />}
         <section class="se-content">
           <div class="se-topline">
-            {!app.sidebarVisible.value && !classic && <ShelfReveal />}
-            <TabBar />
+            {zen ? (
+              <ZenBar />
+            ) : (
+              <>
+                {!app.sidebarVisible.value && !classic && <ShelfReveal />}
+                <TabBar />
+              </>
+            )}
           </div>
           <EditorArea />
           {/* "Developer: Process explorer", docked (non-modal); its chunk fills ui.processDock when loaded. */}
           {ui.processesOpen.value && ProcessDock && <ProcessDock />}
           {/* Integrated terminal (Ctrl+`): bottom of the editor card, both sidebar styles. Starts closed. */}
           {terminalOpen.value && <TerminalPanelSlot />}
-          {!classic && <StatusBar />}
+          {!classic && status && <StatusBar />}
         </section>
         {/* File overview (Ctrl+Alt+B): right column, mirroring the shelf. */}
         {ui.overviewVisible.value && (
@@ -138,7 +149,7 @@ export function Layout() {
         )}
       </div>
       {/* Classic keeps the full-width status bar; the shelf puts it inside the editor card. */}
-      {classic && <StatusBar />}
+      {classic && status && <StatusBar />}
       {Overlay && <Overlay />}
       {ui.tabSwitcher.value && <TabSwitcher />}
       {ui.dialog.value && <DialogHost />}

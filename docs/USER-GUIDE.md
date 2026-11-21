@@ -14,6 +14,7 @@
 | Make a PDF of a note | [Export to PDF](#export-to-pdf) |
 | Run commands / use Claude Code | [7. Terminal and Claude Code](#7-terminal-and-claude-code) |
 | See changes, commit, push | [8. Git](#8-git) |
+| Hide everything but the text | [Zen mode](#zen-mode) |
 | Change how it behaves | [9. Settings](#9-settings) |
 | Open this folder in a web browser (phone, tablet, another PC) | [Browser mode](#browser-mode-web-server) |
 | Know when One itself needs a security rebuild | [Security updates](#security-updates) |
@@ -56,6 +57,29 @@
 Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at the top (or at the start of the tab strip when hidden) does the same.
 
 **Hidden stays hidden.** The sidebar comes back the way you left it after a restart or refresh — shown or hidden, same width.
+
+**A calmer tree** (Settings, both styles, combine freely):
+
+| Setting | Choices | What changes |
+|---|---|---|
+| Appearance → **Folder colours** | **Per top-level folder** (default) · **One colour** | One colour: every folder icon alike (Classic always looks like this) |
+| Appearance → **Folder colour** | Grey (default) · swatches · **+** any colour | The one colour. Tuned per theme so it stays visible. **↺** = grey again |
+| Files → **Git colours in the file tree** | On (default) · Off | Off: no git colours, letters or dots in the tree. Git keeps working (Source control, branch, change bars). Palette: "Toggle git colours in file tree" |
+
+### Zen mode
+
+**`Ctrl+Alt+Z` shows only the text.** Again to leave. Palette: "Toggle zen mode".
+
+| | |
+|---|---|
+| **Hidden** | Sidebar, file overview, terminal, tab strip, status bar (Classic: also the icon bar) |
+| **Still works** | Every shortcut: `Ctrl+P`, `Ctrl+Shift+P`, `Ctrl+F`, `Ctrl+,`… A panel you open yourself shows |
+| **Leave with the mouse** | Hover the **top edge** → **Exit zen** (top right) |
+| **Keep some of it** | Settings → Appearance → Zen mode: **Keep the file tree**, **Keep the status bar** (both off by default) |
+
+- **Leaving puts everything back** exactly as it was: sidebar, its width and panel, overview, terminal.
+- **Remembered:** still in zen after a refresh or restart.
+- **No title bar?** The empty strip at the top still **moves the window**; the window buttons stay at the right.
 
 ### File overview (right sidebar)
 
@@ -640,7 +664,7 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 
 | Where | What you see |
 |---|---|
-| **File tree** | A letter at the end of the row: **M** modified · **A** added · **U** untracked (new) · **R** renamed · **!** merge conflict. Ignored files are **dimmed**. A folder with changes gets a small **dot** |
+| **File tree** | A letter at the end of the row: **M** modified · **A** added · **U** untracked (new) · **R** renamed · **!** merge conflict. Ignored files are **dimmed**. A folder with changes gets a small **dot**. Too busy? Settings → Files → **Git colours in the file tree: Off** |
 | **Status bar** | The **branch**, `↑2` / `↓1` (commits to push / to pull) and a dot when something is uncommitted. **Click it**: copy the branch name, **Show changes** (tree lists changed files only), Diff with last commit |
 | **Editor** | **Bars** next to the text: green = added, blue = changed, red wedge = lines deleted. They update **while you type** |
 
@@ -767,6 +791,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | **Appearance** | Theme | Dark |
 | | Accent colour | Blue |
 | | Sidebar style | Shelf |
+| | Folder colours / Folder colour | Per top-level folder / Grey |
 | | Corners | Rounded |
 | | Density | Comfortable |
 | | Font size | 15 px |
@@ -775,6 +800,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | Content width | Readable |
 | | Zoom (desktop only) | 100% |
 | | Window frame (desktop only) | Integrated (no title bar) |
+| | Zen mode: Keep the file tree / Keep the status bar | Off / Off |
 | **Editor** | View mode | Live |
 | | Formatting toolbar in live mode | On |
 | | Line numbers in Markdown source & split mode | On |
@@ -789,6 +815,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | Show hidden files | Off |
 | | Excluded folders | `node_modules`, `.git`, `dist`, `build`, `vendor`, `.next`, `.cache`, `__pycache__` |
 | | Confirm before deleting | On |
+| | Git colours in the file tree | On |
 | **Formatting** | Format on save | Off |
 | | Print width | 80 |
 | | Tab width | 4 for PHP, 2 elsewhere |

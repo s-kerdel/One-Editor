@@ -54,8 +54,13 @@ export function sessionSnapshot(): SessionState {
     splitRatio: Math.round(ui.splitRatio.value * 1000) / 1000,
     expanded: [...ui.expanded.value].slice(0, 2000),
     languageOverrides: ui.languageOverrides.value,
+    // Zen: what to restore on leaving (the terminal is memory only: it starts closed anyway).
+    zen: zenSaved(ui.zen.value),
   };
 }
+
+const zenSaved = (z: ui.ZenSaved | null | undefined): SessionState['zen'] =>
+  z && typeof z === 'object' ? { sidebarVisible: !!z.sidebarVisible, sidebarPanel: String(z.sidebarPanel), overviewVisible: !!z.overviewVisible, processesOpen: !!z.processesOpen } : undefined;
 
 /** Write a pending (debounced) session save now — used when the page is unloading. */
 export function flushSession() {
@@ -68,7 +73,7 @@ export function flushSession() {
 export function persistSession() {
   try {
     // Lets index.html's skeleton match the real layout on the next launch.
-    localStorage.setItem('sec-edit-layout', JSON.stringify({ w: Math.round(ui.sidebarWidth.value), sb: app.sidebarVisible.value, ov: ui.overviewVisible.value, ow: Math.round(ui.overviewWidth.value) }));
+    localStorage.setItem('sec-edit-layout', JSON.stringify({ w: Math.round(ui.sidebarWidth.value), sb: app.sidebarVisible.value, ov: ui.overviewVisible.value, ow: Math.round(ui.overviewWidth.value), z: ui.zenAttr(app.settings.value['zen.keepStatusBar'] === true) || undefined }));
   } catch {}
   if (!app.workspace.value || !sessionRestored) return;
   if (sessionTimer) clearTimeout(sessionTimer);
@@ -236,6 +241,7 @@ export function applySessionLayout(s: SessionState | null) {
     if (typeof s.processesHeight === 'number') ui.processesHeight.value = Math.max(120, s.processesHeight);
     if (typeof s.processesOpen === 'boolean') ui.processesOpen.value = s.processesOpen;
     if (typeof s.sidebarPanel === 'string' && app.panels.value.some((p) => p.id === s.sidebarPanel)) app.sidebarPanel.value = s.sidebarPanel;
+    ui.zen.value = zenSaved(s.zen as ui.ZenSaved | undefined) ?? null;
     if (Array.isArray(s.expanded)) ui.expanded.value = new Set(s.expanded.filter((x) => typeof x === 'string'));
     const langs = s.languageOverrides;
     if (langs && typeof langs === 'object') ui.languageOverrides.value = langs as Record<string, string>;

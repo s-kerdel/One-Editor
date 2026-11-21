@@ -75,6 +75,17 @@
     :root[data-ui='classic'] .sk-main, :root[data-ui='classic'][data-sb='0'] .sk-main { margin: 0; border: 0; border-radius: 0; box-shadow: none; background: linear-gradient(to bottom, var(--sk-sunken) 0 calc(var(--sk-tab) - 1px), var(--sk-line) calc(var(--sk-tab) - 1px) var(--sk-tab), var(--sk-bg) var(--sk-tab)); }
     :root[data-ui='classic'] .sk-status { display: block; grid-column: 1 / -1; background: var(--sk-sunken); border-top: 1px solid var(--sk-line); }
     .sk-status { display: none; }
+    /* zen mode (data-zen, Ctrl+Alt+Z): no tab strip, activity bar or shelf chrome, the card flush to the window;
+       the status bar only when zen keeps it (data-zen~='status'). The sidebar's own state (data-sb) still applies. */
+    :root[data-zen] .sk-act, :root[data-zen] .sk-side > :is(.sk-ws, .sk-name, .sk-jump, .sk-nav, .sk-foot) { display: none; }
+    :root[data-zen] .sk-main { margin: 0 !important; border-width: 0 !important; border-radius: 0 !important; box-shadow: none !important; background: var(--sk-bg) !important; }
+    :root[data-zen~='status']:not([data-ui='classic']) .sk-main { background: linear-gradient(to bottom, var(--sk-bg) calc(100% - var(--sk-st)), var(--sk-line) calc(100% - var(--sk-st)) calc(100% - var(--sk-st) + 1px), var(--sk-sunken) calc(100% - var(--sk-st) + 1px)) !important; }
+    :root[data-zen][data-ui='classic'] .sk { grid-template-columns: var(--skel-sidebar, 260px) 1fr; }
+    :root[data-zen][data-ui='classic'][data-sb='0'] .sk { grid-template-columns: 1fr; }
+    :root[data-zen][data-ui='classic'][data-ov='1'] .sk { grid-template-columns: var(--skel-sidebar, 260px) 1fr var(--skel-ov, 280px); }
+    :root[data-zen][data-ui='classic'][data-ov='1'][data-sb='0'] .sk { grid-template-columns: 1fr var(--skel-ov, 280px); }
+    :root[data-zen]:not([data-zen~='status']) .sk { grid-template-rows: 1fr; }
+    :root[data-zen]:not([data-zen~='status']) .sk-status { display: none !important; }
   </style>
 </head>
 <body>

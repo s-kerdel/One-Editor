@@ -168,7 +168,7 @@ function Control({ def, s, disabled }: { def: SettingDef; s: Values; disabled: b
         />
       );
     case 'color':
-      return <ColorControl def={def} value={typeof value === 'string' ? value : ''} swatches={c.swatches} disabled={disabled} />;
+      return <ColorControl def={def} value={typeof value === 'string' ? value : ''} swatches={c.swatches} base={c.base} disabled={disabled} />;
     case 'font':
       return <FontControl def={def} value={typeof value === 'string' ? value : ''} presets={c.presets} placeholder={c.placeholder} disabled={disabled} />;
     case 'list':
@@ -177,8 +177,8 @@ function Control({ def, s, disabled }: { def: SettingDef; s: Values; disabled: b
   }
 }
 
-/** Swatch grid + a custom colour well. '' (first swatch) = the theme's own accent. */
-function ColorControl({ def, value, swatches, disabled }: { def: SettingDef; value: string; swatches: Choice[]; disabled: boolean }) {
+/** Swatch grid + a custom colour well. '' (first swatch) = the theme's own colour (`base`; default: the accent blue). */
+function ColorControl({ def, value, swatches, base = 'var(--ft-blue)', disabled }: { def: SettingDef; value: string; swatches: Choice[]; base?: string; disabled: boolean }) {
   const v = value.toLowerCase();
   const custom = v !== '' && !swatches.some((o) => o.v === v);
   return (
@@ -192,8 +192,8 @@ function ColorControl({ def, value, swatches, disabled }: { def: SettingDef; val
           title={o.label}
           data-value={String(o.v)}
           disabled={disabled}
-          // The default swatch shows the theme's built-in accent, whatever is currently applied.
-          style={{ '--swatch': o.v ? String(o.v) : 'var(--ft-blue)' }}
+          // The default swatch shows the theme's built-in colour, whatever is currently applied.
+          style={{ '--swatch': o.v ? String(o.v) : base }}
           onClick={() => apply(def, o.v)}
         >
           {o.v === v && <Icon name="check" size={13} />}
@@ -202,8 +202,8 @@ function ColorControl({ def, value, swatches, disabled }: { def: SettingDef; val
       <label class={`se-swatch custom${custom ? ' active' : ''}`} title="Custom colour…" style={custom ? { '--swatch': v } : undefined}>
         <input
           type="color"
-          aria-label="Custom accent colour"
-          data-testid="accent-custom"
+          aria-label={`Custom ${def.label.toLowerCase()}`}
+          data-testid={def.key === 'accentColor' ? 'accent-custom' : `${def.id}-custom`}
           disabled={disabled}
           value={custom ? v : '#7aa2f7'}
           // Fires continuously while dragging in the OS picker: apply live, save once it settles.

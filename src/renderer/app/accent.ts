@@ -1,7 +1,8 @@
 // Accent colour (Settings → Appearance): derives every accent token for the dark and the light theme
 // from one picked colour and installs them as a tiny stylesheet. The same stylesheet text is cached
 // in localStorage so theme-boot.js can apply it before first paint (no colour flash on refresh).
-// Lazy: only loaded when a custom accent is set and the cache is missing or stale.
+// The folder colour (Folder colours → One colour) works the same way with one token, --folder-color.
+// Lazy: only loaded when a custom colour is set and its cache is missing or stale.
 
 type Rgb = [number, number, number];
 
@@ -47,6 +48,12 @@ const shift = (c: Rgb, dl: number): Rgb => {
   return hslToRgb([h, s, Math.min(0.96, Math.max(0.04, l + dl))]);
 };
 
+/** `c` nudged lighter (dir 1) or darker (dir -1) until it has `min` contrast on `bg`; the hue is kept. */
+function readable(c: Rgb, bg: Rgb, dir: number, min: number): Rgb {
+  for (let i = 0; i < 40 && contrast(c, bg) < min; i++) c = shift(c, 0.02 * dir);
+  return c;
+}
+
 /** Theme facts the derivation needs: page background, which way "more readable" is, and the alphas of the soft tokens. */
 const THEMES = {
   dark: { bg: [27, 29, 34] as Rgb, dir: 1, min: 5, soft: 0.15, sel: 0.28, ring: 0.6 },
@@ -68,8 +75,7 @@ export interface AccentTokens {
  *  theme) until it is readable as text on the page background; the hue is kept. */
 export function accentTokens(hex: string, theme: 'dark' | 'light'): AccentTokens {
   const t = THEMES[theme];
-  let c = hexToRgb(hex);
-  for (let i = 0; i < 40 && contrast(c, t.bg) < t.min; i++) c = shift(c, 0.02 * t.dir);
+  const c = readable(hexToRgb(hex), t.bg, t.dir, t.min);
   const strong = shift(c, 0.07 * t.dir);
   const rgb = c.map(Math.round).join(', ');
   return {
@@ -97,18 +103,38 @@ export function accentCss(hex: string): string {
   return `/*${h}*/html:root:root{${block(h, 'dark')}}html[data-theme='light']:root:root{${light}}@media (prefers-color-scheme:light){html[data-theme='system']:root:root{${light}}}`;
 }
 
-/** Installs (or replaces) the accent stylesheet and caches it for the next launch. */
-export function applyAccent(hex: string): void {
+/** Folder icons are graphics: 3:1 (WCAG non-text) on the lightest (dark theme) / darkest (light theme)
+ *  background a tree row can have — the hover row (--bg-hover). */
+const FOLDER_BG = { dark: [38, 42, 49] as Rgb, light: [235, 235, 233] as Rgb };
+
+/** The one folder colour for a theme (#rrggbb): the pick, nudged until it stays visible. */
+export function folderColor(hex: string, theme: 'dark' | 'light'): string {
+  return rgbToHex(readable(hexToRgb(hex), FOLDER_BG[theme], THEMES[theme].dir, 3));
+}
+
+/** Stylesheet defining --folder-color per theme (consumed by app.css under html[data-folders='one']). */
+export function folderCss(hex: string): string {
+  const h = hex.toLowerCase();
+  const light = `--folder-color:${folderColor(h, 'light')}`;
+  return `/*${h}*/html:root:root{--folder-color:${folderColor(h, 'dark')}}html[data-theme='light']:root:root{${light}}@media (prefers-color-scheme:light){html[data-theme='system']:root:root{${light}}}`;
+}
+
+const SHEETS = { accent: accentCss, folder: folderCss };
+
+/** Installs (or replaces) a colour stylesheet (`<style id="se-accent|se-folder">`) and caches it for the next launch. */
+export function applyColorSheet(kind: keyof typeof SHEETS, hex: string): void {
   if (!isHexColor(hex)) return;
-  const css = accentCss(hex);
-  let el = document.getElementById('se-accent');
+  const css = SHEETS[kind](hex);
+  let el = document.getElementById(`se-${kind}`);
   if (!el) {
     el = document.createElement('style');
-    el.id = 'se-accent';
+    el.id = `se-${kind}`;
     document.head.appendChild(el);
   }
   el.textContent = css;
   try {
-    localStorage.setItem('sec-edit-accent', css);
+    localStorage.setItem(`sec-edit-${kind}`, css);
   } catch {}
 }
+
+export const applyAccent = (hex: string): void => applyColorSheet('accent', hex);

@@ -48,7 +48,7 @@ export type Control =
   | { type: 'text'; placeholder?: string; mono?: boolean }
   | { type: 'list'; placeholder?: string }
   /** Curated swatches (v = '#rrggbb', '' = theme default) plus a custom colour input. */
-  | { type: 'color'; swatches: Choice[] }
+  | { type: 'color'; swatches: Choice[]; base?: string }
   /** Font presets (v = CSS font-family, '' = default) plus a free-text "Custom" entry. */
   | { type: 'font'; presets: Choice[]; placeholder?: string };
 
@@ -89,6 +89,9 @@ export const ACCENT_SWATCHES: Choice[] = [
   { v: '#14b8a6', label: 'Teal' },
   { v: '#8b94a5', label: 'Graphite' },
 ];
+
+/** One folder colour: '' = classic's grey (--ft-folder, per theme); picks are tuned per theme (app/accent.ts). */
+export const FOLDER_SWATCHES: Choice[] = [{ v: '', label: 'Grey (default)' }, { v: '#7aa2f7', label: 'Blue' }, ...ACCENT_SWATCHES.slice(1, -1)];
 
 export const FONT_PRESETS: Choice[] = [
   { v: '', label: 'System' },
@@ -139,6 +142,31 @@ const defs: Draft[] = [
         { v: 'classic', label: 'Classic', icon: 'columns' },
       ],
     },
+  },
+  {
+    key: 'tree.folderColors',
+    section: 'appearance',
+    label: 'Folder colours',
+    description: 'Shelf style: a colour per top-level folder. One colour: every folder alike, in both styles.',
+    keywords: ['folder', 'colour', 'color', 'hue', 'tree', 'icon', 'calm', 'grey', 'gray', 'file tree'],
+    default: 'hue',
+    control: {
+      type: 'segmented',
+      options: [
+        { v: 'hue', label: 'Per top-level folder' },
+        { v: 'one', label: 'One colour' },
+      ],
+    },
+  },
+  {
+    key: 'tree.folderColor',
+    section: 'appearance',
+    label: 'Folder colour',
+    description: 'The colour of every folder when they share one. Tuned per theme to stay visible.',
+    keywords: ['folder', 'colour', 'color', 'tree', 'icon', 'grey', 'gray', 'file tree'],
+    default: '',
+    control: { type: 'color', swatches: FOLDER_SWATCHES, base: 'var(--ft-folder)' },
+    enabledWhen: (s) => s['tree.folderColors'] === 'one',
   },
   {
     key: 'cornerStyle',
@@ -240,6 +268,27 @@ const defs: Draft[] = [
         { v: 'native', label: 'Native' },
       ],
     },
+  },
+  // ---- Appearance → Zen mode (View: Toggle zen mode, app/zen.tsx) ----
+  {
+    key: 'zen.keepFileTree',
+    section: 'appearance',
+    group: 'Zen mode',
+    label: 'Keep the file tree',
+    description: 'Zen mode (Ctrl+Alt+Z) shows only the text. On: the file tree stays beside it.',
+    keywords: ['zen', 'distraction free', 'focus', 'sidebar', 'files', 'tree', 'writing'],
+    default: false,
+    control: { type: 'toggle' },
+  },
+  {
+    key: 'zen.keepStatusBar',
+    section: 'appearance',
+    group: 'Zen mode',
+    label: 'Keep the status bar',
+    description: 'Zen mode hides the status bar too. On: it stays at the bottom.',
+    keywords: ['zen', 'distraction free', 'focus', 'status', 'word count', 'writing'],
+    default: false,
+    control: { type: 'toggle' },
   },
 
   // ---- Editor ----
@@ -428,6 +477,16 @@ const defs: Draft[] = [
     label: 'Change bars in the editor',
     description: 'Mark lines added, changed or deleted since the last commit next to the text.',
     keywords: ['git', 'diff', 'changes', 'modified lines', 'margin'],
+    default: true,
+    control: { type: 'toggle' },
+    enabledWhen: (s) => s['git.enabled'] !== false,
+  },
+  {
+    key: 'git.treeColors',
+    section: 'files',
+    label: 'Git colours in the file tree',
+    description: 'Colour changed files and show their letters and folder dots. Off: a calm tree; git keeps working.',
+    keywords: ['git', 'colour', 'color', 'marks', 'modified', 'untracked', 'letters', 'dots', 'calm', 'focus', 'decorations'],
     default: true,
     control: { type: 'toggle' },
     enabledWhen: (s) => s['git.enabled'] !== false,
