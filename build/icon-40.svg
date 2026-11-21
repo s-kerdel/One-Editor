@@ -1,2 +1,2 @@
-<!-- One mark, 40 px: pixel-snapped (stem 5 px), master proportions. Generated; edit, then: npm run icons -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect x="0" y="0" width="40" height="40" rx="8" fill="#00A3BA"/><polygon points="18,8 23,8 23,24.05 24.66,22 31.1,22 23,32 18,32 18,15.95 16.34,18 9.9,18" fill="#ffffff"/></svg>
+<!-- One mark, 40 px: pixel-snapped (stem 4 px, 3 px margin), master proportions. Generated; edit, then: npm run icons -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect x="3" y="3" width="34" height="34" rx="6" fill="#00A3BA"/><polygon points="18,10 22,10 22,23.64 24.14,21 29.29,21 22,30 18,30 18,16.36 15.86,19 10.71,19" fill="#ffffff"/></svg>
