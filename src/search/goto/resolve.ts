@@ -136,9 +136,10 @@ class Session {
     return t;
   }
 
+  /** The open document is always scanned (extraction is linear; files that big are not indexed either). */
   fileDefs(path: string): Promise<DefHit[] | null> {
     let d = this.defs.get(path);
-    if (!d) this.defs.set(path, (d = this.text(path).then((t) => (t === null || t.length > MAX_EXTRACT ? null : hitsOf(path, t)))));
+    if (!d) this.defs.set(path, (d = this.text(path).then((t) => (t === null || (t.length > MAX_EXTRACT && path !== this.req.path) ? null : hitsOf(path, t)))));
     return d;
   }
 

@@ -218,3 +218,13 @@ describe('import specifiers', () => {
     expect(pyCandidates('mod.py', { dots: 3, module: 'x' }, 'y')).toEqual([]);
   });
 });
+
+describe('psr4Candidates on hostile names', () => {
+  it('a 16k-segment backslash run returns at once, nothing to read', async () => {
+    const { psr4Candidates } = await import('../../../src/search/goto/php');
+    const name = '\\' + Array(16000).fill('a').join('\\');
+    const t = performance.now();
+    expect(psr4Candidates(name, [{ prefix: 'a\\', dirs: ['src'] }] as never)).toEqual([]);
+    expect(performance.now() - t).toBeLessThan(50);
+  });
+});

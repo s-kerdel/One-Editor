@@ -280,7 +280,8 @@ export function psr4Index(maps: Psr4Map[]): Psr4Index {
 /** Candidate files for a class, longest matching prefix first (PSR-4: prefix → folder, rest → path). */
 export function psr4Candidates(fqn: string, maps: Psr4Map[] | Psr4Index, limit = 12): string[] {
   const name = stripLead(fqn);
-  if (!name || !isPhpName(name)) return [];
+  // Longer than any path safeJoin accepts; also keeps the prefix loop below from going quadratic on `\a\a…`.
+  if (!name || name.length > 1024 || !isPhpName(name)) return [];
   const ix = Array.isArray(maps) ? psr4Index(maps) : maps;
   const segs = name.split('\\');
   const out: string[] = [];

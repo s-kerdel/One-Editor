@@ -356,6 +356,14 @@ describe('bounded work per click', () => {
     expect(r2.hits[0]).toMatchObject({ path: 'vendor/acme/lib/src/Collection.php', kind: 'file', line: 0 });
   });
 
+  it('an open file over the 4M-char scan cap still finds its own definitions', async () => {
+    const content = `function foo() {}\n${'// filler\n'.repeat(420_000)}foo();\n`;
+    expect(content.length).toBeGreaterThan(4_000_000);
+    const { env } = envOf({});
+    const r = await resolveDefinition({ path: 'src/huge.ts', content, ...at(content, 'foo();') }, env);
+    expect(r.hits.map((h) => `${h.path}:${h.line}`)).toEqual(['src/huge.ts:0']);
+  });
+
   it('a parent class defined in the same file as its child is found there (not in the file clicked in)', async () => {
     const files = {
       ...FILES,
