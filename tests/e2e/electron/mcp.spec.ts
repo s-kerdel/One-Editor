@@ -167,11 +167,12 @@ test('several folders at once: one native confirm lists them and the refused one
     ['notes', fs.realpathSync(a), 'read'],
     ['notes-2', fs.realpathSync(b), 'read'],
   ]);
-  // One confirm for the batch: what is added (alias: real path), the refused apart, a reason each.
+  // ONE confirm for the batch (v0.5.3: the access choice is in it too): what is added (alias: real path),
+  // the refused apart with a reason each, and read-only vs allow changes (+ the code-files checkbox).
   await expect.poll(() => boxes().length).toBe(1);
   const [box] = boxes();
-  expect(box).toMatchObject({ title: 'Share 3 folders?', message: 'Let MCP clients read these 3 folders?', buttons: ['Add 3 folders', 'Cancel'] });
-  expect(box.detail).toContain(`Read-only:\n• work-docs: ${fs.realpathSync(w)}\n• notes: ${fs.realpathSync(a)}\n• notes-2: ${fs.realpathSync(b)}`);
+  expect(box).toMatchObject({ title: 'Share 3 folders?', message: 'Share these 3 folders with MCP clients?', buttons: ['Add read-only', 'Add and allow changes', 'Cancel'] });
+  expect(box.detail).toContain(`Folders:\n• work-docs: ${fs.realpathSync(w)}\n• notes: ${fs.realpathSync(a)}\n• notes-2: ${fs.realpathSync(b)}`);
   expect(box.detail).toContain(`Not added:\n• ${gone}: Not a folder\n• ${el.userData}: This folder holds One’s own data`);
 
   // Straight through the bridge with paths: ignored, main opens its own dialog (the same five, now all
