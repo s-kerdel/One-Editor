@@ -5,24 +5,33 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-/** @param {{ packages?: Record<string, { version?: string, dev?: boolean, link?: boolean }> }} lock package-lock.json (v2 / v3) */
+/** @typedef {{ packages?: Record<string, { version?: string, dev?: boolean, link?: boolean, license?: unknown }> }} Lock package-lock.json (v2 / v3) */
+
+/** @param {Lock} lock */
 export function shippedDeps(lock) {
+  const e = lock?.packages?.['node_modules/electron'];
+  const electron = e && !e.link && typeof e.version === 'string' ? e.version : '';
+  const packages = shippedEntries(lock).map(({ name, version }) => ({ name, version }));
+  if (!electron) throw new Error('shipped-deps: electron is not in package-lock.json');
+  return { electron, packages };
+}
+
+/** Every production package of the lockfile, one per name@version (the first install path wins), sorted.
+ *  `key` is its install path (`node_modules/a/node_modules/b`); notices.mjs reads its licence there.
+ *  @param {Lock} lock */
+export function shippedEntries(lock) {
   const all = lock?.packages;
   if (!all || typeof all !== 'object') throw new Error('shipped-deps: package-lock.json has no "packages" (lockfileVersion 2 or 3 needed)');
   const seen = new Map();
-  let electron = '';
   for (const [key, p] of Object.entries(all)) {
-    // "" is the project itself; links point at another entry.
-    if (!key || p.link || typeof p.version !== 'string') continue;
+    // "" is the project itself; links point at another entry; `dev: true` = only reachable from
+    // devDependencies: what --omit=dev leaves out.
+    if (!key || p.link || typeof p.version !== 'string' || p.dev) continue;
     const name = key.slice(key.lastIndexOf('node_modules/') + 'node_modules/'.length);
-    if (key === 'node_modules/electron') electron = p.version;
-    // `dev: true` = only reachable from devDependencies: what --omit=dev leaves out.
-    if (p.dev) continue;
-    seen.set(`${name}@${p.version}`, { name, version: p.version });
+    const id = `${name}@${p.version}`;
+    if (!seen.has(id)) seen.set(id, { key, name, version: p.version, license: p.license });
   }
-  if (!electron) throw new Error('shipped-deps: electron is not in package-lock.json');
-  const packages = [...seen.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.version < b.version ? -1 : a.version > b.version ? 1 : 0));
-  return { electron, packages };
+  return [...seen.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.version < b.version ? -1 : a.version > b.version ? 1 : 0));
 }
 
 export function writeShippedDeps(root, file) {

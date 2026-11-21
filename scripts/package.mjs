@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { packager } from '@electron/packager';
 import { applyFuses } from './fuses.mjs';
+import { writeLicences } from './notices.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const platform = process.argv[2] || process.platform;
@@ -67,6 +68,8 @@ const locales = path.join(outDir, platform === 'darwin' ? '' : 'locales');
 if (platform !== 'darwin' && fs.existsSync(locales)) {
   for (const f of fs.readdirSync(locales)) if (!/^en-US\.pak$/.test(f)) fs.rmSync(path.join(locales, f));
 }
+// LICENSE.txt (One), LICENSE.electron.txt, THIRD-PARTY-NOTICES.txt: binary copies must carry the licence texts.
+writeLicences(root, outDir, { product: 'One' });
 if (platform === 'linux') {
   fs.copyFileSync(path.join(root, 'build/icon.png'), path.join(outDir, 'one.png'));
   // Browser mode launcher (start-web.sh).
