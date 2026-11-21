@@ -262,8 +262,10 @@ export class BackendService {
   listTree(p?: string) {
     return this.ws().listTree(p ?? '');
   }
-  readFile(p: string) {
-    return this.ws().readFile(p);
+  /** `opts` comes from the page: only a finite, non-negative `maxBytes` is passed on. */
+  readFile(p: string, opts?: unknown) {
+    const max = opts && typeof opts === 'object' ? (opts as { maxBytes?: unknown }).maxBytes : undefined;
+    return this.ws().readFile(p, typeof max === 'number' && Number.isFinite(max) && max >= 0 ? { maxBytes: Math.floor(max) } : {});
   }
   writeFile(p: string, content: string, opts?: WriteOptions) {
     return this.ws()

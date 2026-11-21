@@ -12,7 +12,7 @@ import { parseQuery } from './query';
 import type { FromWorker, HeadingQuery, ToWorker } from './protocol';
 import type { HeadingHit, SearchDoc, SearchOptions, SearchResponse } from './types';
 import type { Mention } from '../knowledge/index';
-import { DEF_LIMIT, compareDefHits } from './symbols';
+import { DEF_LIMIT, defOrder } from './symbols';
 import type { DefHit, DefQuery } from './defs';
 
 // Same order as knowledge's compareMentions (inlined: the search client chunk stays free of knowledge code).
@@ -293,13 +293,13 @@ export class ShardedSearch {
     return r.parts.flat().sort(compareMentions).slice(0, limit);
   }
 
-  /** Same contract as SearchEngine.definitions: each shard's first `limit` in (path, line) order, merged. */
+  /** Same contract as SearchEngine.definitions: each shard's first `limit` in defOrder(near), merged in that order. */
   async definitions(q: DefQuery): Promise<DefHit[] | null> {
     const r = await this.gather<DefHit[]>((id) => ({ type: 'defs', id, q }));
     if (!r) return null;
     return r.parts
       .flat()
-      .sort(compareDefHits)
+      .sort(defOrder(q.near))
       .slice(0, q.limit ?? DEF_LIMIT);
   }
 

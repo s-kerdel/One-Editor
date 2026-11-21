@@ -12,7 +12,7 @@
 import { languageForPath } from '@shared/languages';
 import { isMarkdown } from '@shared/paths';
 import { parseStructure } from './markdown';
-import type { DefHit } from './defs';
+import type { DefHit, DefQuery } from './defs';
 
 export interface OutlineItem {
   line: number;
@@ -54,6 +54,10 @@ export interface Def {
 export const MAX_LINE = 400;
 const MAX_SYMBOLS = 2000;
 const MAX_EXTRAS = 2000;
+/** One cap for everything a file contributes (scan + JS members / consts + index-only kinds). */
+export const MAX_DEFS = MAX_SYMBOLS + MAX_EXTRAS;
+/** Traits per PHP class body. */
+const MAX_USES = 32;
 
 /** Kinds that name a type: `new X`, `X::`, `extends X`, type positions. */
 export const CLASS_KINDS = new Set(['class', 'interface', 'trait', 'enum', 'struct', 'type', 'record', 'object', 'protocol', 'actor', 'union', 'mixin', 'typedef', 'namespace', 'extension']);
@@ -442,7 +446,8 @@ export function braceDepths(content: string, hashComments = false): Int32Array {
 }
 
 // `  async foo<T>(a: T): Promise<void> {`, `  get size() {`, `  constructor(…) {`
-const METHOD_RE = /^\s*(?:(?:public|private|protected|static|readonly|async|override|abstract|declare|get|set)\s+)*\*?\s*(#?[A-Za-z_$][\w$]*)\s*(?:<[^>()]*>)?\s*\(/;
+// No two neighbours can take the same blanks: `\s*(?:<…>)?\s*\(` traded them (quadratic on a run of spaces).
+const METHOD_RE = /^\s*(?:(?:public|private|protected|static|readonly|async|override|abstract|declare|get|set)\s+)*(?:\*\s*)?(#?[A-Za-z_$][\w$]*)\s*(?:<[^>()]*>\s*)?\(/;
 // `  handle = async (e) => {` — arrow-function class fields.
 const FIELD_FN_RE = /^\s*(?:(?:public|private|protected|static|readonly|override)\s+)*(#?[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=>/;
 // `  private items: Item[] = [];`, `  count = 0;`, `  #secret;` — plain fields (index only).
@@ -450,31 +455,64 @@ const FIELD_RE = /^\s*(?:(?:public|private|protected|static|readonly|declare|ove
 const CONST_RE = /^(?:export\s+)?(?:declare\s+)?const\s+([A-Za-z_$][\w$]*)\s*[:=]/;
 const JS_NOT_A_NAME = /^(if|for|while|switch|return|catch|function|else|do|try|new|typeof|await|super|this|throw|with|yield|delete|void)$/;
 
+/**
+ * The bodies of the class-likes starting on `starts` (sorted lines), in ONE pass over the depths: a body
+ * opens when the depth rises within 4 lines of its start (else it has none) and ends on the line before the
+ * depth falls back. `inner(line, k)` sees every line exactly one level inside the innermost open body k.
+ * A stack of open bodies, so nested bodies that never close cost O(lines), not O(classes × lines).
+ */
+function bodies(depths: Int32Array, n: number, starts: readonly number[], inner?: (line: number, k: number) => void): Int32Array {
+  const ends = new Int32Array(starts.length);
+  const pending: number[] = []; // started, not opened yet (at most 4 lines old)
+  const open: number[] = []; // innermost last (non-decreasing depth)
+  let next = 0;
+  for (let i = 0; i < n; i++) {
+    const x = depths[i];
+    while (open.length && depths[starts[open[open.length - 1]]] >= x) ends[open.pop()!] = i - 1;
+    for (let q = 0; q < pending.length; ) {
+      const k = pending[q];
+      const at = starts[k];
+      if (x > depths[at]) {
+        open.push(k);
+        pending.splice(q, 1);
+      } else if (i > at + 3) {
+        ends[k] = at; // `class X {}` / a declaration without a body
+        pending.splice(q, 1);
+      } else q++;
+    }
+    if (inner && open.length) {
+      const k = open[open.length - 1];
+      if (x === depths[starts[k]] + 1) inner(i, k);
+    }
+    while (next < starts.length && starts[next] === i) pending.push(next++);
+    while (next < starts.length && starts[next] < i) ends[next] = starts[next++]; // duplicate / out-of-range starts
+  }
+  for (const k of open) ends[k] = n - 1;
+  for (const k of pending) ends[k] = starts[k];
+  return ends;
+}
+
 /** Members of each class: lines one brace level inside its body that declare a method / arrow field (/ field). */
 function jsMembers(lines: readonly string[], depths: Int32Array, classes: ReadonlyArray<{ line: number }>, extras: boolean): Raw[] {
   const out: Raw[] = [];
-  for (const c of classes) {
-    const d = depths[c.line];
-    let opened = false;
-    for (let i = c.line + 1; i < lines.length; i++) {
-      if (depths[i] <= d) {
-        if (opened || i > c.line + 3) break; // body closed, or `class X {}` / no body
-        continue;
-      }
-      opened = true;
+  bodies(
+    depths,
+    lines.length,
+    classes.map((c) => c.line),
+    (i) => {
       const l = lines[i];
-      if (depths[i] !== d + 1 || l.length > MAX_LINE || !l.trim()) continue;
+      if (out.length >= MAX_DEFS || l.length > MAX_LINE || !l.trim()) return;
       const method = METHOD_RE.exec(l);
       const m = method ?? FIELD_FN_RE.exec(l);
       if (m) {
-        if (JS_NOT_A_NAME.test(m[1])) continue;
+        if (JS_NOT_A_NAME.test(m[1])) return;
         out.push({ line: i, col: extras ? groupStart(method ? METHOD_RE : FIELD_FN_RE, l, 1) : 0, name: m[1], kind: m[1] === 'constructor' ? 'constructor' : 'method', indented: true });
-        continue;
+        return;
       }
       const f = extras ? FIELD_RE.exec(l) : null;
       if (f && !JS_NOT_A_NAME.test(f[1])) out.push({ line: i, col: groupStart(FIELD_RE, l, 1), name: f[1], kind: 'property', indented: true, extra: true });
-    }
-  }
+    },
+  );
   return out;
 }
 
@@ -492,13 +530,14 @@ function scan(path: string, content: string, extras: boolean): { lang: string; l
       raws.filter((s) => s.kind === 'class'),
       extras,
     );
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = 0; i < lines.length && extra.length < MAX_DEFS; i++) {
       const m = depths[i] === 0 && lines[i].length <= MAX_LINE ? CONST_RE.exec(lines[i]) : null;
       if (m) extra.push({ line: i, col: extras ? groupStart(CONST_RE, lines[i], 1) : 0, name: m[1], kind: 'const', indented: false });
     }
     if (extra.length) {
       const taken = new Set(raws.map((s) => s.line));
       raws = [...raws, ...extra.filter((s) => !taken.has(s.line) && (taken.add(s.line), true))].sort((a, b) => a.line - b.line);
+      if (raws.length > MAX_DEFS) raws.length = MAX_DEFS;
     }
   }
   return { lang, lines, raws, levels: raws.map((s) => Math.min(depths[s.line] ?? 0, 5) + 1), depths };
@@ -550,28 +589,42 @@ export function extractDefs(path: string, content: string): Def[] {
   });
   if (!defs.length) return defs;
 
+  const isPhp = lang === 'php' || lang === 'blade';
   if (depths) {
-    // Class bodies by brace depth: a member is a definition one level inside.
+    // Class bodies (one pass over the depths), then members: a definition one level inside a body.
+    const classes = defs.filter((d) => CLASS_KINDS.has(d.kind) && d.kind !== 'namespace');
+    const ends = bodies(
+      depths,
+      lines.length,
+      classes.map((c) => c.line),
+      isPhp
+        ? (i, k) => {
+            const c = classes[k];
+            if ((c.uses?.length ?? 0) >= MAX_USES || lines[i].length > MAX_LINE) return;
+            const m = PHP_USE_TRAIT.exec(lines[i]);
+            if (m) (c.uses ??= []).push(...m[1].split(',').slice(0, MAX_USES - (c.uses?.length ?? 0)).map((x) => x.trim()));
+          }
+        : undefined,
+    );
+    classes.forEach((c, k) => (c.end = ends[k]));
     const stack: Array<{ d: Def; depth: number }> = [];
     for (const d of defs) {
       const depth = depths[d.line];
       while (stack.length && (stack[stack.length - 1].depth >= depth || (stack[stack.length - 1].d.end ?? Infinity) < d.line)) stack.pop();
       const top = stack[stack.length - 1];
       if (top && !d.container && depth === top.depth + 1) d.container = top.d.name;
-      if (CLASS_KINDS.has(d.kind) && d.kind !== 'namespace') {
-        d.end = bodyEnd(depths, d.line, lines.length);
-        stack.push({ d, depth });
-      }
+      if (CLASS_KINDS.has(d.kind) && d.kind !== 'namespace') stack.push({ d, depth });
     }
   } else if (lang === 'python') {
     // Indentation: a class body is every following line indented deeper (blank lines included); its
     // members sit at the body's first indentation (a function nested in a method is no member).
     const stack: Array<{ d: Def; indent: number; body: number }> = [];
     let di = 0;
+    let lastNonBlank = 0; // classes closing on one line all end on the same one: no walk back per class
     for (let i = 0; i < lines.length && (di < defs.length || stack.length); i++) {
       const ind = indentOf(lines[i]);
       if (ind >= 0) {
-        while (stack.length && ind <= stack[stack.length - 1].indent) stack.pop()!.d.end = prevNonBlank(lines, i);
+        while (stack.length && ind <= stack[stack.length - 1].indent) stack.pop()!.d.end = lastNonBlank;
         const top = stack[stack.length - 1];
         if (top && top.body < 0) top.body = ind;
       }
@@ -581,6 +634,7 @@ export function extractDefs(path: string, content: string): Def[] {
         if (top && !d.container && ind === top.body) d.container = top.d.name;
         if (d.kind === 'class') stack.push({ d, indent: Math.max(0, ind), body: -1 });
       }
+      if (ind >= 0) lastNonBlank = i;
     }
     for (const s of stack) s.d.end = lines.length - 1;
   }
@@ -588,14 +642,13 @@ export function extractDefs(path: string, content: string): Def[] {
   // Go methods: the receiver type is the container.
   if (lang === 'go') {
     for (const d of defs) {
-      const m = /^\s*func\s*\(\s*\w*\s*\*?\s*([A-Za-z_]\w*)/.exec(lines[d.line]);
+      const m = /^\s*func\s*\(\s*(?:\w+\s+)?(?:\*\s*)?([A-Za-z_]\w*)/.exec(lines[d.line]);
       if (m) d.container = m[1];
     }
   }
 
   let ns: string | undefined;
   let nsLine = -1;
-  const isPhp = lang === 'php' || lang === 'blade';
   for (const d of defs) {
     if (CLASS_KINDS.has(d.kind)) {
       const base = baseOf(lang, lines[d.line]);
@@ -609,41 +662,9 @@ export function extractDefs(path: string, content: string): Def[] {
         nsLine = i;
       }
       if (ns) d.ns = ns;
-      if (CLASS_KINDS.has(d.kind) && depths) d.uses = traitsOf(lines, depths, d);
     }
   }
   return defs;
-}
-
-function prevNonBlank(lines: readonly string[], i: number): number {
-  let j = i - 1;
-  while (j > 0 && indentOf(lines[j]) < 0) j--;
-  return j;
-}
-
-/** Last line of the body opened on (or right after) `line`: the line before depth falls back. */
-function bodyEnd(depths: Int32Array, line: number, n: number): number {
-  const d = depths[line];
-  let opened = false;
-  for (let i = line + 1; i < n; i++) {
-    if (depths[i] > d) opened = true;
-    else if (opened) return i - 1;
-    else if (i > line + 3) return line; // `class X {}` / a declaration without a body
-  }
-  return opened ? n - 1 : line;
-}
-
-/** `use A, B;` lines directly inside a PHP class / trait body. */
-function traitsOf(lines: readonly string[], depths: Int32Array, d: Def): string[] | undefined {
-  const out: string[] = [];
-  const end = d.end ?? d.line;
-  const inner = depths[d.line] + 1;
-  for (let i = d.line + 1; i <= end && i < lines.length; i++) {
-    if (depths[i] !== inner || lines[i].length > MAX_LINE) continue;
-    const m = PHP_USE_TRAIT.exec(lines[i]);
-    if (m) out.push(...m[1].split(',').map((s) => s.trim()));
-  }
-  return out.length ? out : undefined;
 }
 
 // --------------------------------------------------------------------------- index contract (./defs)
@@ -667,6 +688,42 @@ export function familyLangs(lang: string): string[] {
 /** Total order of hits (path, line, col): identical whether one index or several shards answered. */
 export function compareDefHits(a: DefHit, b: DefHit): number {
   return a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line || a.col - b.col || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+}
+
+/** How many leading folders `path` shares with `near` (the file itself ranks above all). */
+export function nearness(path: string, near: string): number {
+  if (path === near) return 1e6;
+  let i = 0;
+  let shared = 0;
+  for (;;) {
+    const a = path.indexOf('/', i);
+    const b = near.indexOf('/', i);
+    if (a < 0 || a !== b || path.slice(i, a) !== near.slice(i, b)) return shared;
+    shared++;
+    i = a + 1;
+  }
+}
+
+/** The order of definition hits: nearest to `near` first, then compareDefHits — a total order every shard shares. */
+export function defOrder(near?: string): (a: DefHit, b: DefHit) => number {
+  if (!near) return compareDefHits;
+  const memo = new Map<string, number>();
+  const score = (p: string) => {
+    let v = memo.get(p);
+    if (v === undefined) memo.set(p, (v = nearness(p, near)));
+    return v;
+  };
+  return (a, b) => score(b.path) - score(a.path) || compareDefHits(a, b);
+}
+
+/** Does a hit pass a query's filters (names and languages aside)? */
+export function defMatches(h: DefHit, q: DefQuery): boolean {
+  if (q.ns !== undefined && (h.ns ?? '').toLowerCase() !== q.ns.toLowerCase()) return false;
+  if (q.classLike !== undefined && (CLASS_KINDS.has(h.kind) && h.kind !== 'namespace') !== q.classLike) return false;
+  if (q.topLevel && h.container) return false;
+  if (q.member && !h.container) return false;
+  if (q.containers && !(h.container && q.containers.some((c) => c.toLowerCase() === h.container!.toLowerCase()))) return false;
+  return true;
 }
 
 export const DEF_TEXT_MAX = 200;

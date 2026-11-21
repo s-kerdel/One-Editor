@@ -29,4 +29,17 @@ export interface DefQuery {
   /** Only files of these languages (canonical ids). */
   langs?: string[];
   limit?: number;
+  // Filters applied in the shards BEFORE the limit (a common name must not crowd out the right hit):
+  /** PHP: only definitions in this namespace ('' = global; case-insensitive). */
+  ns?: string;
+  /** true: only class-likes; false: no class-likes. */
+  classLike?: boolean;
+  /** Only members of one of these classes (case-insensitive). */
+  containers?: string[];
+  /** Only definitions outside any class. */
+  topLevel?: boolean;
+  /** Only members (definitions inside a class). */
+  member?: boolean;
+  /** Nearest folders to this path first (then path / line), in every shard alike. */
+  near?: string;
 }

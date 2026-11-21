@@ -286,3 +286,87 @@ describe('index state', () => {
     expect(reads).not.toContain('etc/passwd');
   });
 });
+
+describe('bounded work per click', () => {
+  const at = (content: string, needle: string) => {
+    const i = content.indexOf(needle);
+    const line = content.slice(0, i).split('\n').length - 1;
+    return { line, col: i - (content.lastIndexOf('\n', i - 1) + 1) };
+  };
+  function envOf(files: Record<string, string>, opts: { stat?: boolean; indexed?: (p: string) => boolean } = {}) {
+    const index = new SearchEngine({ defs: true });
+    index.reset(Object.entries(files).filter(([p]) => (opts.indexed ?? (() => true))(p)).map(([path, content]) => ({ path, content })));
+    const reads: string[] = [];
+    const stats: string[] = [];
+    const env: GotoEnv = {
+      read: async (p) => (reads.push(p), files[p] ?? null),
+      known: (p) => (p.startsWith('vendor/') ? undefined : p in files ? p : null),
+      lookup: async (q) => index.definitions(q),
+      memo: new Map(),
+    };
+    if (opts.stat) env.stat = async (p) => (stats.push(p), p in files);
+    return { env, reads, stats };
+  }
+
+  it('trait fan-out (40 traits × 40 traits × …) stops at the budgets and answers', async () => {
+    const files: Record<string, string> = {};
+    const traits = (prefix: string) => Array.from({ length: 40 }, (_, i) => `${prefix}${i}`);
+    files['app/Main.php'] = `<?php\nclass Main\n{\n    use ${traits('A').join(', ')};\n\n    public function go()\n    {\n        $this->missing();\n    }\n}\n`;
+    for (const t of traits('A')) files[`app/${t}.php`] = `<?php\ntrait ${t}\n{\n    use ${traits(`${t}x`).join(', ')};\n}\n`;
+    for (const t of traits('A')) for (const u of traits(`${t}x`)) files[`app/${u}.php`] = `<?php\ntrait ${u}\n{\n    use ${traits(`${u}y`).join(', ')};\n}\n`;
+    const { env, reads } = envOf(files);
+    const content = files['app/Main.php'];
+    const t0 = performance.now();
+    const r = await resolveDefinition({ path: 'app/Main.php', content, ...at(content, 'missing') }, env);
+    expect(performance.now() - t0).toBeLessThan(3000);
+    expect(r.hits).toEqual([]);
+    expect(r.truncated).toBe(true);
+    expect(reads.length).toBeLessThanOrEqual(150);
+  });
+
+  it('a chain of `export *` modules: bounded, and the same trait / class is resolved once', async () => {
+    const files: Record<string, string> = { 'src/main.ts': "import { deep } from './m0';\ndeep();\n" };
+    for (let i = 0; i < 400; i++) files[`src/m${i}.ts`] = Array.from({ length: 40 }, (_, k) => `export * from './m${i * 40 + k + 1}';`).join('\n');
+    const { env, reads } = envOf(files);
+    const content = files['src/main.ts'];
+    const r = await resolveDefinition({ path: 'src/main.ts', content, ...at(content, 'deep();') }, env);
+    expect(reads.length).toBeLessThanOrEqual(150);
+    expect(r.hits.every((h) => h.path.startsWith('src/'))).toBe(true);
+
+    const twice = { ...FILES, 'app/Models/Twice.php': "<?php\nnamespace App\\Models;\n\nclass Twice extends User\n{\n    use \\App\\Concerns\\HasName, \\App\\Concerns\\HasName;\n\n    public function x()\n    {\n        $this->nope();\n    }\n}\n" };
+    const e2 = envOf(twice, { indexed: (p) => !p.startsWith('vendor/') });
+    const c2 = twice['app/Models/Twice.php'];
+    await resolveDefinition({ path: 'app/Models/Twice.php', content: c2, ...at(c2, 'nope') }, e2.env);
+    expect(e2.reads.filter((p) => p === 'app/Concerns/HasName.php')).toHaveLength(1);
+  });
+
+  it('existence of unlisted files (vendor/) is a stat, not a read; a file too big to scan is still the target', async () => {
+    const { env, reads, stats } = envOf({ ...FILES, 'vendor/acme/lib/src/Collection.php': FILES['vendor/acme/lib/src/Collection.php'] }, { stat: true, indexed: (p) => !p.startsWith('vendor/') });
+    const content = FILES['app/Http/Controller.php'];
+    const r = await resolveDefinition({ path: 'app/Http/Controller.php', content, ...at(content, 'Collection()') }, env);
+    expect(r.hits.map((h) => h.path)).toEqual(['vendor/acme/lib/src/Collection.php']);
+    expect(stats).toContain('vendor/acme/lib/src/Collection.php');
+    expect(reads.filter((p) => p.endsWith('.php') && p !== 'vendor/composer/autoload_psr4.php')).toEqual(['vendor/acme/lib/src/Collection.php']); // read once, to scan it
+
+    // read() refuses it (too big): the jump lands on the file.
+    const big = envOf(FILES, { stat: true, indexed: (p) => !p.startsWith('vendor/') });
+    const read = big.env.read;
+    big.env.read = async (p) => (p.endsWith('Collection.php') ? null : read(p));
+    const r2 = await resolveDefinition({ path: 'app/Http/Controller.php', content, ...at(content, 'Collection()') }, big.env);
+    expect(r2.hits[0]).toMatchObject({ path: 'vendor/acme/lib/src/Collection.php', kind: 'file', line: 0 });
+  });
+
+  it('a parent class defined in the same file as its child is found there (not in the file clicked in)', async () => {
+    const files = {
+      ...FILES,
+      'vendor/composer/autoload_psr4.php': FILES['vendor/composer/autoload_psr4.php'].replace("'App\\\\'", "'Acme\\\\Pair\\\\' => array($vendorDir . '/acme/pair/src'),\n    'App\\\\'"),
+      'vendor/acme/pair/src/Child.php': '<?php\nnamespace Acme\\Pair;\n\nclass Base\n{\n    public function hello() {}\n}\n\nclass Child extends Base\n{\n}\n',
+      'app/Leaf.php': '<?php\nnamespace App;\n\nuse Acme\\Pair\\Child;\n\nclass Leaf extends Child\n{\n    public function x()\n    {\n        $this->hello();\n    }\n}\n',
+    };
+    const { env } = envOf(files, { indexed: (p) => !p.startsWith('vendor/') });
+    const content = files['app/Leaf.php'];
+    const r = await resolveDefinition({ path: 'app/Leaf.php', content, ...at(content, 'hello') }, env);
+    expect(r.hits.map((h) => `${h.path}:${h.line}`)).toEqual(['vendor/acme/pair/src/Child.php:5']);
+  });
+});
+

@@ -197,6 +197,48 @@ describe('Workspace files', () => {
   });
 });
 
+describe('excluded and hidden places stay out of the index (Go to definition reads them)', () => {
+  async function allText() {
+    const out: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const pg = await ws.readAllTextPage({ cursor, maxBytes: 1 << 20 });
+      out.push(...pg.files.map((f) => f.path));
+      cursor = pg.nextCursor;
+    } while (cursor);
+    return out;
+  }
+
+  it('reading vendor/ or a dot folder lists, indexes and refreshes nothing; a save there neither', async () => {
+    await fsp.mkdir(p('vendor', 'acme'), { recursive: true });
+    await fsp.writeFile(p('vendor', 'acme', 'Lib.php'), '<?php class Lib {}\n');
+    await fsp.mkdir(p('.hidden'), { recursive: true });
+    await fsp.writeFile(p('.hidden', 'x.ts'), 'export const x = 1;\n');
+    ws.setOptions({ exclude: ['vendor'], showHidden: false });
+    const names = (await ws.listTree()).children!.map((c) => c.name);
+    const files = ws.filePaths();
+    expect((await ws.readFile('vendor/acme/Lib.php')).content).toContain('class Lib');
+    expect((await ws.readFile('.hidden/x.ts')).content).toContain('x = 1');
+    await ws.writeFile('vendor/acme/Lib.php', '<?php class Lib { }\n');
+    expect(ws.filePaths().sort()).toEqual([...files].sort());
+    expect((await allText()).filter((f) => f.startsWith('vendor/') || f.startsWith('.hidden/'))).toEqual([]);
+    const upd = await ws.readIndexedFiles(['vendor/acme/Lib.php', '.hidden/x.ts', 'README.md']);
+    expect(upd.files.map((f) => f.path)).toEqual(['README.md']);
+    expect(upd.gone).toEqual(expect.arrayContaining(['vendor/acme/Lib.php', '.hidden/x.ts']));
+    expect((await ws.listTree()).children!.map((c) => c.name)).toEqual(names);
+    // Listed files still count: reading one keeps it in the index as before.
+    await ws.readFile('README.md');
+    expect(ws.filePaths()).toContain('README.md');
+  });
+
+  it('maxBytes: a bigger file is refused before reading (ETOOBIG), a missing one is ENOENT', async () => {
+    await fsp.writeFile(p('ten.txt'), '0123456789');
+    await expect(ws.readFile('ten.txt', { maxBytes: 3 })).rejects.toMatchObject({ code: 'ETOOBIG' });
+    expect((await ws.readFile('ten.txt', { maxBytes: 10 })).content).toBe('0123456789');
+    await expect(ws.readFile('nope.txt', { maxBytes: 0 })).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
 describe('exclude matcher', () => {
   it('matches names, globs and rooted paths case-insensitively', () => {
     const m = createExcludeMatcher(['node_modules', '*.log', 'docs/build'], false);

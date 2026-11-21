@@ -683,16 +683,22 @@ export class Workspace {
     return node;
   }
 
-  /** Every indexed file path (after the first listTree). */
+  private pathsMemo: { version: number; matcher: ExcludeMatcher; list: string[] } | null = null;
+
+  /** Every indexed file path (after the first listTree); never an excluded or hidden one. */
   filePaths(): string[] {
+    const m = this.pathsMemo;
+    if (m && m.version === this.indexVersion && m.matcher === this.matcher) return m.list.slice();
     const out: string[] = [];
-    for (const [k, v] of this.index) if (v.kind === 'file') out.push(k);
-    return out;
+    for (const [k, v] of this.index) if (v.kind === 'file' && !this.matcher.path(k)) out.push(k);
+    this.pathsMemo = { version: this.indexVersion, matcher: this.matcher, list: out };
+    return out.slice();
   }
 
   // ---- reading / writing ----------------------------------------------------------------------
 
-  async readFile(rel: string): Promise<FileData> {
+  /** `maxBytes`: refuse (ETOOBIG) before reading anything bigger — a cheap existence / size probe. */
+  async readFile(rel: string, opts: { maxBytes?: number } = {}): Promise<FileData> {
     const key = normalize(rel);
     const abs = await this.real(key);
     await fsDelayAsync(); // tests: latency injection (slow bridge / antivirus)
@@ -705,10 +711,15 @@ export class Workspace {
       // FIFOs / sockets / devices: reading would block a libuv thread forever (and stall indexing).
       if (!st.isFile()) throw new BackendFailure('EINVAL', `Not a regular file: ${rel}`);
       if (st.size > MAX_OPEN_BYTES) throw new BackendFailure('ETOOBIG', `File is too large to open (${Math.round(st.size / 1048576)} MB): ${rel}`);
+      if (opts.maxBytes !== undefined && st.size > opts.maxBytes) throw new BackendFailure('ETOOBIG', `File is larger than ${opts.maxBytes} bytes: ${rel}`);
       const buf = await fsp.readFile(abs);
       const d = decode(buf);
-      this.noteEntry(key, { kind: 'file', mtime: st.mtimeMs, size: st.size });
-      this.touchHot(key);
+      // An excluded / hidden place (vendor/, a dot folder) is not part of the listing: reading it — Go to
+      // definition does — must not hand it to the indexers, nor push the user's files off the hot list.
+      if (!this.matcher.path(key)) {
+        this.noteEntry(key, { kind: 'file', mtime: st.mtimeMs, size: st.size });
+        this.touchHot(key);
+      }
       const eol = detectEol(d.text);
       const data: FileData = { path: key, content: toLf(d.text), mtime: st.mtimeMs, eol, size: st.size };
       if (d.bom) data.bom = true;
@@ -989,6 +1000,11 @@ export class Workspace {
     const ok: string[] = [];
     const refused: string[] = [];
     for (const p of paths.map(normalize).filter(Boolean)) {
+      // Excluded / hidden places are never indexed, however a path to one arrives (an open vendor/ file closing).
+      if (this.matcher.path(p)) {
+        refused.push(p);
+        continue;
+      }
       // real() also refuses One's data folder (as written and where it really is): a listed path can lead
       // there through a link, so even listed paths take that check here.
       const known = (this.index.get(p)?.kind === 'file' && !this.denyDirs.length) || (await this.real(p).then(() => true, () => false));
@@ -1120,6 +1136,7 @@ export class Workspace {
   private noteParents(rel: string) {
     for (let p = parentOf(rel); p; p = parentOf(p)) {
       if (this.index.get(p)?.kind === 'dir') break;
+      if (this.matcher.path(p)) continue; // an excluded folder (a save into vendor/) is neither listed nor watched
       this.index.set(p, { kind: 'dir' });
       this.indexVersion++;
       this.watchDir(p);
@@ -1127,6 +1144,7 @@ export class Workspace {
   }
 
   private noteEntry(rel: string, e: Entry) {
+    if (this.matcher.path(rel)) return; // what the walk leaves out stays out (writes into vendor/, a move there)
     this.noteParents(rel); // mkdir -p via createFile/writeFile
     if (this.index.get(rel)?.kind !== e.kind) this.indexVersion++;
     this.index.set(rel, e);

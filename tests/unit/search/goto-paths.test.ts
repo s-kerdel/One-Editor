@@ -3,7 +3,7 @@
 // name a file outside the folder or an odd device, whatever the source.
 import { describe, expect, it } from 'vitest';
 import { safeJoin, safeRel } from '../../../src/search/goto/paths';
-import { psr4Candidates, psr4FromAutoload, psr4FromComposer } from '../../../src/search/goto/php';
+import { psr4Candidates, psr4FromAutoload, psr4FromComposer, psr4Index } from '../../../src/search/goto/php';
 import { jsCandidates, pyCandidates } from '../../../src/search/goto/js';
 
 describe('safeRel / safeJoin: one case per attack', () => {
@@ -31,8 +31,21 @@ describe('safeRel / safeJoin: one case per attack', () => {
     ['empty', ''],
     ['only dots', './.'],
     ['too long', 'a/'.repeat(600)],
+    ['device, blank before the extension', 'app/con .php'],
+    ['device, tab before the extension', 'CON\t.txt'],
+    ['device, upper case', 'app/AUX'],
+    ['UNC with forward slashes', '//server/share/x.php'],
+    ['Win32 device namespace', '\\\\?\\C:\\x'],
+    ['trailing dot (Win32 strips it)', 'app/User.php.'],
+    ['trailing space', 'app/User.php '],
+    ['folder with a trailing dot', 'app./User.php'],
+    ['too many segments', Array.from({ length: 65 }, () => 'a').join('/')],
   ];
   for (const [what, p] of refused) it(`refuses ${what}`, () => expect(safeRel(p)).toBeNull());
+
+  it('64 segments are fine, 65 are not', () => {
+    expect(safeRel(Array.from({ length: 64 }, () => 'a').join('/'))).not.toBeNull();
+  });
 
   it('normalises harmless forms', () => {
     expect(safeRel('app/./Models//User.php')).toBe('app/Models/User.php');
@@ -124,6 +137,31 @@ return array(
     'G\\\\' => array($vendorDir . '/a\\\\..\\\\..\\\\b'),
 );`;
     expect(psr4FromAutoload(php, 'vendor/composer/autoload_psr4.php')).toEqual([{ prefix: 'E\\', dirs: ['vendor/ok/src'] }]);
+  });
+
+  it('huge or crafted maps: linear to parse, capped (5,000 prefixes, 16 folders each), oversized files skipped', () => {
+    const many = Array.from({ length: 20_000 }, (_, i) => `    'Ns${i}\\\\' => array($vendorDir . '/p${i}/src'),`).join('\n');
+    const wide = `    'Wide\\\\' => array(${Array.from({ length: 200 }, (_, i) => `$vendorDir . '/w${i}'`).join(', ')}),`;
+    let auto: ReturnType<typeof psr4FromAutoload> = [];
+    const t0 = performance.now();
+    auto = psr4FromAutoload(`<?php\nreturn array(\n${wide}\n${many}\n);`, 'vendor/composer/autoload_psr4.php');
+    const entries: Array<[string, string[]]> = Array.from({ length: 20_000 }, (_, i) => [`C${i}\\`, ['a/', 'b/']]);
+    entries.unshift(['Wide\\', Array.from({ length: 40 }, (_, k) => `d${k}/`)]);
+    const json = JSON.stringify({ autoload: { 'psr-4': Object.fromEntries(entries) } }); // < 2 MB
+    const { map } = psr4FromComposer(json, 'composer.json');
+    expect(performance.now() - t0).toBeLessThan(1500);
+    expect(auto).toHaveLength(5000);
+    expect(auto[0]).toMatchObject({ prefix: 'Wide\\' });
+    expect(auto[0].dirs).toHaveLength(16);
+    expect(map).toHaveLength(5000);
+    expect(map[0].dirs).toHaveLength(16);
+    const big = JSON.stringify({ autoload: { 'psr-4': { 'App\\': 'app/' } }, pad: 'x'.repeat(3 << 20) });
+    expect(psr4FromComposer(big, 'composer.json').map).toEqual([]);
+    const ix = psr4Index([auto, map]);
+    const t1 = performance.now();
+    for (let i = 0; i < 64; i++) psr4Candidates(`Ns${i}\\Deep\\Name\\Space\\Thing`, ix);
+    expect(performance.now() - t1).toBeLessThan(50); // a map lookup per namespace prefix, not a scan of 10,000 entries
+    expect(psr4Candidates('Ns7\\A\\B', ix)).toEqual(['vendor/p7/src/A/B.php']);
   });
 
   it('candidates: longest prefix first, fallback prefix last, never outside, only PHP names', () => {

@@ -2,7 +2,7 @@
 // New languages get their own patterns; existing languages must keep their exact outline; every pattern
 // stays linear on pathological lines (lines are capped at 400 characters).
 import { describe, expect, it } from 'vitest';
-import { codeSymbols, extractDefs, outline, MAX_LINE } from '../../../src/search/symbols';
+import { codeSymbols, extractDefs, outline, MAX_DEFS, MAX_LINE } from '../../../src/search/symbols';
 
 const names = (path: string, text: string) => outline(path, text).map((o) => `${o.detail}:${o.text}`);
 const defs = (path: string, text: string) => extractDefs(path, text);
@@ -312,6 +312,39 @@ describe('ReDoS guards: every pattern stays linear on pathological lines', () =>
       });
       expect(ms, ext).toBeLessThan(400);
     }
+  });
+
+  it('the same lines inside a class body (JS / TS members, PHP traits), and methods still match', () => {
+    const body = Array.from({ length: 50 }, () => pathological.map((l) => `  ${l}`).join('\n')).join('\n');
+    for (const ext of ['ts', 'js', 'tsx', 'php']) {
+      const text = `class A {\n${body}\n  public ${'x'.repeat(10)}${' '.repeat(380)}\n  foo${' '.repeat(390)}\n}`;
+      expect(time(() => extractDefs(`x.${ext}`, text)), ext).toBeLessThan(400);
+    }
+    expect(codeSymbols('a.ts', 'class A {\n  foo<T>(x: T) {}\n  bar  () {}\n  get size() { return 1; }\n  *gen() {}\n  async * agen() {}\n}').map((x) => x.text)).toEqual(['A', 'foo', 'bar', 'size', 'gen', 'agen']);
+  });
+
+  it('nested class bodies that never close stay linear (PHP, TS, Python)', () => {
+    const blank = '\n'.repeat(1_000_000);
+    const php = `<?php\n${'class A {\n'.repeat(2000)}${'    use T;\n'.repeat(200)}${blank}`;
+    const ts = `${'class A {\n'.repeat(2000)}${blank}`;
+    const py = `${Array.from({ length: 2000 }, (_, i) => `${' '.repeat(i % 400)}class A${i}:`).join('\n')}${blank}x = 1\n`;
+    let defs: ReturnType<typeof extractDefs> = [];
+    expect(time(() => (defs = extractDefs('a.php', php)))).toBeLessThan(1000);
+    expect(defs).toHaveLength(2000);
+    expect(defs[0].end).toBe(php.split('\n').length - 1); // open to the last line
+    expect(defs[1999].uses).toHaveLength(32); // traits capped per class
+    expect(time(() => extractDefs('a.ts', ts))).toBeLessThan(1000);
+    expect(time(() => extractDefs('a.py', py))).toBeLessThan(1000);
+  });
+
+  it('one cap for everything a file contributes: scan, JS consts and members, index-only kinds', () => {
+    const consts = Array.from({ length: 6000 }, (_, i) => `const c${i} = ${i};`).join('\n');
+    expect(extractDefs('a.ts', consts).length).toBeLessThanOrEqual(MAX_DEFS);
+    const members = `class A {\n${Array.from({ length: 6000 }, (_, i) => `  m${i}() {}\n  f${i} = 1;`).join('\n')}\n}`;
+    expect(extractDefs('a.ts', members).length).toBeLessThanOrEqual(MAX_DEFS);
+    expect(codeSymbols('a.ts', members).length).toBeLessThanOrEqual(MAX_DEFS);
+    const php = `<?php\nclass A {\n${Array.from({ length: 6000 }, (_, i) => `  public $p${i};\n  public function m${i}() {}`).join('\n')}\n}`;
+    expect(extractDefs('a.php', php).length).toBeLessThanOrEqual(MAX_DEFS);
   });
 
   it('longer lines are skipped at once (the cap), whatever they hold', () => {

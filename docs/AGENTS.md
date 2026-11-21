@@ -56,6 +56,11 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   the tree still lists them), reads in worker threads and keeps a text cache in the app's data folder (never the workspace).
   Search is sharded over workers (`src/search/shards.ts`, exact two-phase merge — keep `tests/unit/search/shards.test.ts` green).
   Emit `app.events.emit('index:stale')` after a setting that changes what is indexed (both indexes rebuild).
+  **Excluded / hidden places never enter the backend index**, however they are touched: `Workspace.noteEntry` /
+  `noteParents` refuse them, `readFile` of one (Go to definition reading `vendor/`) neither notes it nor puts it on the
+  poller's hot list, and `filePaths()` / `readable()` filter them (`tests/unit/backend/workspace.test.ts`). An open
+  excluded file is still searchable while open (open documents' live text always is) and leaves the index when it
+  closes. `readFile(path, { maxBytes })` refuses (`ETOOBIG`) before reading a bigger file: use it as a cheap probe.
   The index may be built **on demand** (`search.indexing`): a feature that reads it must ask for it —
   `searchClient.start()` / `(app as any).knowledge.ensure()` (search, mentions, headings already do) — and show
   "Indexing… x / y" (`searchClient.progress`) instead of an empty state; `indexDeferred` (`search/demand.ts`) = not built yet.
@@ -88,7 +93,11 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   first (`flushDefs`), so answers are exact. Lookup by exact name (`Map`, lower-cased key): `SearchEngine.definitions`,
   `ShardedSearch.definitions` (merge = `compareDefHits` order + limit, `tests/unit/search/defs-index.test.ts`),
   `searchClient.definitions(q)`; workspace symbols ride on `headings(…, { symbols: true })` (non-empty query, ≤ 20 per
-  file across the workspace).
+  file across the workspace). Narrow a lookup **in the query** (`ns`, `classLike`, `containers`, `topLevel`, `member`,
+  `near`): the shards filter and order (`defOrder(near)`, the same total order everywhere) before the 500 cap, so a
+  common name cannot crowd out the right hit. Extraction is linear on any input: class bodies, PHP traits and JS
+  members come from ONE stack pass over the brace depths (`bodies()`), never a scan per class; one cap per file
+  (`MAX_DEFS`), ≤ 32 traits per class; `flushDefs` checks its budget after every file.
 - **Go to definition** (search): pure resolver `src/search/goto/` (`resolve.ts` orchestrates imports → members →
   same file → same-language index; `php.ts` namespace / `use` / PSR-4 as **text**; `js.ts` imports; `context.ts`
   identifier + hints; `paths.ts` = `safeRel` / `safeJoin`, through which **every path derived from file contents**
@@ -96,7 +105,15 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   `GotoEnv` (reads, tree, index), so it is unit-tested on a fake workspace (`goto-resolve.test.ts`). The app side is
   the lazy chunk `renderer/search/gotodef.tsx` (env over `app.backend.readFile` + open docs + `app.tree` +
   `searchClient`, picker, toasts, Find usages); it loads the search implementation by `import('./impl')`, not via the
-  stub (`./index`: that static import split `app/lazy` into its own startup chunk). The editor chunk holds only the
+  stub (`./index`: that static import split `app/lazy` into its own startup chunk). **Work per click is bounded**
+  (`Session` in `resolve.ts`): ≤ 150 reads, ≤ 32 M characters, ≤ 64 class resolutions (memoized per file + name +
+  namespace), ≤ 32 traits / `export *` followed per step, 5 levels; past a budget it answers with what it has
+  (`truncated`). Parses are cached per text and linear — `jsModule` / `pyImports` / `phpParse` find each statement
+  start once and use forward-only pointers for where a clause ends (no regex that re-scans a window from every line
+  start), only the first 2 M characters; PSR-4 maps are `Map` + `Set` (≤ 5,000 prefixes, ≤ 16 folders each, files
+  over 2 MB skipped). Existence is the tree (`known()`) or a size-limited probe (`readFile(path, { maxBytes: 0 })`),
+  never a full read; reads use `maxBytes` too. A generation token drops results the user no longer waits for
+  (F12 auto-repeat, another file). The editor chunk holds only the
   forwarders (`editor/gotodef.ts`: `Mod`+click, `F12` / `Shift-F12`, the underline decoration; `goToDefinitionAt` /
   `findUsagesAt` for the menu and palette). Same-file jumps call `app.markNavigation?.()`. A new surface that wants
   "definition of X": call those, don't resolve names yourself.

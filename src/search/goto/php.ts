@@ -76,40 +76,67 @@ export function parseUseBody(body: string, line = 0, endLine = line): PhpUse[] {
   return out;
 }
 
-const USE_RE = /^[ \t]*use\s+([^;\s][^;]{0,4000});/gm;
-const NS_RE = /^[ \t]*namespace\s+([A-Za-z_\u0080-\uffff][\w\\\u0080-\uffff]*)\s*[;{]/gm;
+/** Parsed head of a file (imports never sit megabytes down). */
+export const PARSE_MAX = 2_000_000;
+const MAX_USES = 5000;
+const MAX_USE_BODY = 4000;
+// `use` at a line start; the statement runs to the next `;` (found with a forward-only pointer).
+const USE_START_RE = /^[ \t]*use\s/gm;
+const NS_RE = /^[ \t]*namespace[ \t]+([A-Za-z_\u0080-\uffff][\w\\\u0080-\uffff]*)[ \t]*[;{]/gm;
 
-/** Namespace (at `line`) and the file's top-level imports. Linear; `use` inside class bodies (traits) is skipped. */
-export function phpContext(content: string, line = Number.MAX_SAFE_INTEGER): PhpContext {
+/** What phpContext needs from a file, independent of the line: parse once per text (Session caches it). */
+export interface PhpParse {
+  nsLines: Array<{ line: number; ns: string }>;
+  uses: PhpUse[];
+}
+
+/** Namespaces and top-level `use` imports. Linear: no statement start re-scans a window (20,000 unfinished `use` lines = one pass). */
+export function phpParse(content: string): PhpParse {
+  const text = content.length > PARSE_MAX ? content.slice(0, PARSE_MAX) : content;
   const starts = [0];
-  for (let i = content.indexOf('\n'); i !== -1; i = content.indexOf('\n', i + 1)) starts.push(i + 1);
+  for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+  const nsLines: PhpParse['nsLines'] = [];
+  NS_RE.lastIndex = 0;
+  for (let m = NS_RE.exec(text); m; m = NS_RE.exec(text)) nsLines.push({ line: lineAt(starts, m.index + m[0].length - 1), ns: stripLead(m[1]) });
+  const depths = braceDepths(text, true);
+  const bracketed = /^[ \t]*namespace\b[^;{\n]*\{/m.test(text);
+  const uses: PhpUse[] = [];
+  let semi = -1;
+  let resume = -1;
+  USE_START_RE.lastIndex = 0;
+  for (let m = USE_START_RE.exec(text); m && uses.length < MAX_USES; m = USE_START_RE.exec(text)) {
+    const at = m.index + m[0].length;
+    if (at <= resume) continue;
+    const first = lineAt(starts, m.index);
+    if ((depths[first] ?? 0) > (bracketed ? 1 : 0)) continue; // a trait `use` inside a class body
+    if (semi < at) {
+      semi = text.indexOf(';', at);
+      if (semi < 0) break; // no statement can end any more
+    }
+    if (semi - at > MAX_USE_BODY) continue;
+    uses.push(...parseUseBody(text.slice(at, semi), first, lineAt(starts, semi)));
+    resume = semi;
+  }
+  return { nsLines, uses };
+}
+
+/** The namespace holding `line` and the imports in effect there. */
+export function phpContextAt(parse: PhpParse, line = Number.MAX_SAFE_INTEGER): PhpContext {
   let ns = '';
   let nsLine = -1;
-  const nsLines: Array<{ line: number; ns: string }> = [];
-  NS_RE.lastIndex = 0;
-  for (let m = NS_RE.exec(content); m; m = NS_RE.exec(content)) {
-    const l = lineAt(starts, m.index + m[0].length - 1);
-    nsLines.push({ line: l, ns: m[1] });
-    if (l <= line && l >= nsLine) {
-      ns = m[1];
-      nsLine = l;
+  for (const n of parse.nsLines) {
+    if (n.line <= line && n.line >= nsLine) {
+      ns = n.ns;
+      nsLine = n.line;
     }
   }
-  // Imports in effect: those after the namespace line that holds `line` (and before the next one).
-  const nextNs = nsLines.find((n) => n.line > nsLine)?.line ?? Infinity;
-  const depths = braceDepths(content, true);
-  const bracketed = /^[ \t]*namespace\b[^;{\n]*\{/m.test(content);
-  const uses: PhpUse[] = [];
-  USE_RE.lastIndex = 0;
-  for (let m = USE_RE.exec(content); m; m = USE_RE.exec(content)) {
-    const first = lineAt(starts, m.index + m[0].indexOf('use'));
-    if (first < nsLine || first > nextNs) continue;
-    const depth = depths[first] ?? 0;
-    if (depth > (bracketed ? 1 : 0)) continue; // a trait `use` inside a class body
-    const last = lineAt(starts, m.index + m[0].length - 1);
-    uses.push(...parseUseBody(m[1], first, last));
-  }
-  return { ns: stripLead(ns), uses };
+  const nextNs = parse.nsLines.find((n) => n.line > nsLine)?.line ?? Infinity;
+  return { ns, uses: parse.uses.filter((u) => u.line >= nsLine && u.line <= nextNs) };
+}
+
+/** Namespace (at `line`) and the file's top-level imports. `use` inside class bodies (traits) is skipped. */
+export function phpContext(content: string, line = Number.MAX_SAFE_INTEGER): PhpContext {
+  return phpContextAt(phpParse(content), line);
 }
 
 /** Fully qualified class name for a name as written in a file (`Foo`, `Sub\Foo`, `\Foo`, `namespace\Foo`). */
@@ -143,14 +170,27 @@ export function splitFqn(fqn: string): { ns: string; short: string } {
 /** Namespace prefix (with trailing `\`, '' = fallback) → workspace-relative folders. */
 export type Psr4Map = Array<{ prefix: string; dirs: string[] }>;
 
-function addEntry(map: Psr4Map, prefix: string, dir: string | null) {
+const MAX_PREFIXES = 5000;
+const MAX_DIRS = 16;
+/** composer.json / autoload_psr4.php bigger than this are not parsed. */
+const MAX_MAP_TEXT = 2 << 20;
+
+/** Map + Set: adding stays O(1) however many entries a (crafted) map holds. */
+type Builder = Map<string, Set<string>>;
+
+function addEntry(map: Builder, prefix: string, dir: string | null) {
   if (dir === null) return;
   const p = prefix ? stripLead(prefix).replace(/\\*$/, '\\') : '';
   if (p && !isPhpName(p.slice(0, -1))) return;
-  let e = map.find((x) => x.prefix === p);
-  if (!e) map.push((e = { prefix: p, dirs: [] }));
-  if (!e.dirs.includes(dir)) e.dirs.push(dir);
+  let dirs = map.get(p);
+  if (!dirs) {
+    if (map.size >= MAX_PREFIXES) return;
+    map.set(p, (dirs = new Set()));
+  }
+  if (dirs.size < MAX_DIRS) dirs.add(dir);
 }
+
+const listOf = (map: Builder): Psr4Map => [...map].map(([prefix, dirs]) => ({ prefix, dirs: [...dirs] }));
 
 /** `""` is the composer root itself; anything leaving the folder is dropped. */
 function dirIn(base: string, rel: unknown): string | null {
@@ -163,14 +203,14 @@ function dirIn(base: string, rel: unknown): string | null {
 /** PSR-4 roots from a composer.json at `composerPath` (`autoload` + `autoload-dev`), plus its vendor folder. */
 export function psr4FromComposer(json: string, composerPath: string): { map: Psr4Map; vendorDir: string | null } {
   const base = dirOf(composerPath);
-  const map: Psr4Map = [];
+  const map: Builder = new Map();
   let data: unknown;
   try {
-    data = JSON.parse(json);
+    data = json.length > MAX_MAP_TEXT ? null : JSON.parse(json);
   } catch {
-    return { map, vendorDir: safeJoin(base, 'vendor') };
+    data = null;
   }
-  if (!data || typeof data !== 'object') return { map, vendorDir: safeJoin(base, 'vendor') };
+  if (!data || typeof data !== 'object') return { map: [], vendorDir: safeJoin(base, 'vendor') };
   const d = data as Record<string, any>;
   for (const key of ['autoload', 'autoload-dev']) {
     const psr4 = d[key]?.['psr-4'];
@@ -181,7 +221,7 @@ export function psr4FromComposer(json: string, composerPath: string): { map: Psr
     }
   }
   const vd = d.config?.['vendor-dir'];
-  return { map, vendorDir: typeof vd === 'string' ? dirIn(base, vd) : safeJoin(base, 'vendor') };
+  return { map: listOf(map), vendorDir: typeof vd === 'string' ? dirIn(base, vd) : safeJoin(base, 'vendor') };
 }
 
 const unquote = (s: string) => s.replace(/\\(['\\])/g, '$1');
@@ -196,8 +236,8 @@ const DIR_RE = /\$(vendorDir|baseDir)\s*\.\s*'((?:[^'\\\n]|\\.){0,1024})'/g;
 export function psr4FromAutoload(text: string, autoloadPath: string): Psr4Map {
   const vendorDir = dirOf(dirOf(autoloadPath));
   const baseDir = dirOf(vendorDir);
-  const map: Psr4Map = [];
-  if (text.length > 2 << 20) return map;
+  const map: Builder = new Map();
+  if (text.length > MAX_MAP_TEXT) return [];
   ENTRY_RE.lastIndex = 0;
   for (let m = ENTRY_RE.exec(text); m; m = ENTRY_RE.exec(text)) {
     const prefix = unquote(m[1]);
@@ -207,24 +247,57 @@ export function psr4FromAutoload(text: string, autoloadPath: string): Psr4Map {
       addEntry(map, prefix, dirIn(d[1] === 'vendorDir' ? vendorDir : baseDir, rel));
     }
   }
-  return map;
+  return listOf(map);
+}
+
+/** PSR-4 maps merged for lookups: prefix → folders (exact, and lower-cased for PHP's case-insensitive names). */
+export interface Psr4Index {
+  exact: Map<string, string[]>;
+  lower: Map<string, string[]>;
+  fallback: string[];
+}
+
+export function psr4Index(maps: Psr4Map[]): Psr4Index {
+  const ix: Psr4Index = { exact: new Map(), lower: new Map(), fallback: [] };
+  const add = (m: Map<string, string[]>, k: string, dirs: string[]) => {
+    const list = m.get(k) ?? [];
+    for (const d of dirs) if (!list.includes(d) && list.length < MAX_DIRS * 4) list.push(d);
+    m.set(k, list);
+  };
+  for (const map of maps) {
+    for (const e of map) {
+      if (!e.prefix) add(ix.exact, '', e.dirs);
+      else {
+        add(ix.exact, e.prefix, e.dirs);
+        add(ix.lower, e.prefix.toLowerCase(), e.dirs);
+      }
+    }
+  }
+  ix.fallback = ix.exact.get('') ?? [];
+  return ix;
 }
 
 /** Candidate files for a class, longest matching prefix first (PSR-4: prefix → folder, rest → path). */
-export function psr4Candidates(fqn: string, maps: Psr4Map[], limit = 12): string[] {
+export function psr4Candidates(fqn: string, maps: Psr4Map[] | Psr4Index, limit = 12): string[] {
   const name = stripLead(fqn);
   if (!name || !isPhpName(name)) return [];
-  const entries = maps.flat().filter((e) => !e.prefix || name.startsWith(e.prefix) || name.toLowerCase().startsWith(e.prefix.toLowerCase()));
-  entries.sort((a, b) => b.prefix.length - a.prefix.length);
+  const ix = Array.isArray(maps) ? psr4Index(maps) : maps;
+  const segs = name.split('\\');
   const out: string[] = [];
-  for (const e of entries) {
-    const rest = name.slice(e.prefix.length).split('\\').join('/');
-    if (!rest) continue;
-    for (const dir of e.dirs) {
+  const push = (dirs: readonly string[], rest: string) => {
+    for (const dir of dirs) {
       const p = safeJoin(dir, `${rest}.php`);
       if (p && !out.includes(p)) out.push(p);
-      if (out.length >= limit) return out;
+      if (out.length >= limit) return true;
     }
+    return false;
+  };
+  // One lookup per namespace prefix of the name (a map lookup each, whatever the map size).
+  for (let k = segs.length - 1; k >= 1; k--) {
+    const prefix = `${segs.slice(0, k).join('\\')}\\`;
+    const rest = segs.slice(k).join('/');
+    if (push(ix.exact.get(prefix) ?? [], rest) || push(ix.lower.get(prefix.toLowerCase()) ?? [], rest)) return out;
   }
+  push(ix.fallback, segs.join('/'));
   return out;
 }

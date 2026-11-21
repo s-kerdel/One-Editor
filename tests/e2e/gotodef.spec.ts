@@ -112,6 +112,19 @@ test('PHP: Ctrl+click through `use` → the class; into vendor/ via PSR-4; Alt+�
   // vendor/ is excluded from the tree and never indexed: PSR-4 from autoload_psr4.php finds it.
   await ctrlClick(page, 'Collection()');
   await expect.poll(() => state(page)).toBe('gd/vendor/acme/lib/src/Collection.php:3');
+
+  // Those reads must not put vendor/ into the index: not after the tab closes, not after a rebuild.
+  await page.evaluate(() => (window as any).__secEdit.closeTab('gd/vendor/acme/lib/src/Collection.php'));
+  await page.evaluate(() => (window as any).__secEditSearch.reindex());
+  await page.waitForFunction(() => (window as any).__secEditSearch.status.value === 'ready', null, { timeout: 20000 });
+  const leaked = await page.evaluate(async () => {
+    const c = (window as any).__secEditSearch;
+    const r = await c.search('Collection', {}, 'test');
+    const h = await c.headings({ query: 'Collection', symbols: true });
+    const d = await c.definitions({ names: ['Collection'] });
+    return [...r.results.map((x: any) => x.path), ...h.map((x: any) => x.path), ...d.map((x: any) => x.path)].filter((p: string) => p.includes('vendor/'));
+  });
+  expect(leaked).toEqual([]);
 });
 
 test('JS: Ctrl+click on an imported name → its definition; F12 at the cursor does the same', async ({ page, ws }) => {

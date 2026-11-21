@@ -66,6 +66,27 @@ describe('definitions()', () => {
     await expect.poll(() => host.engine.pendingDefs).toBe(0);
   });
 
+  it('a flush slice checks its budget after every file (one big file cannot hold a slice)', () => {
+    const e = engine(DOCS);
+    const before = e.pendingDefs;
+    expect(e.flushDefs(-1)).toBe(false); // an exhausted budget: exactly one file per call
+    expect(e.pendingDefs).toBe(before - 1);
+  });
+
+  it('filters and nearness apply before the cap: a common name cannot crowd out the right hit', () => {
+    const docs: Record<string, string> = {};
+    for (let i = 0; i < 700; i++) docs[`aaa/far${i}.php`] = `<?php\nnamespace Far;\nclass User\n{\n    public function save() {}\n}\n`;
+    docs['zzz/app/Models/User.php'] = '<?php\nnamespace App\\Models;\nclass User\n{\n    public function save() {}\n}\n';
+    docs['zzz/app/Http/helpers.php'] = '<?php\nnamespace App\\Http;\nfunction save() {}\n';
+    const e = engine(docs);
+    expect(e.definitions({ names: ['User'] }).some((h) => h.path.startsWith('zzz/'))).toBe(false); // path order, capped at 500
+    expect(at(e.definitions({ names: ['User'], ns: 'app\\models' }))).toEqual(['zzz/app/Models/User.php:2']);
+    expect(e.definitions({ names: ['save'], near: 'zzz/app/Http/Controller.php', limit: 2 }).map((h) => h.path)).toEqual(['zzz/app/Http/helpers.php', 'zzz/app/Models/User.php']);
+    expect(at(e.definitions({ names: ['save'], topLevel: true }))).toEqual(['zzz/app/Http/helpers.php:2']);
+    expect(e.definitions({ names: ['save'], member: true, containers: ['user'], near: 'zzz/x.php', limit: 1 })[0].path).toBe('zzz/app/Models/User.php');
+    expect(e.definitions({ names: ['User'], classLike: false })).toEqual([]);
+  });
+
   it('engines without `defs` (MCP, replace) keep no symbol index', () => {
     const e = new SearchEngine();
     e.reset(Object.entries(DOCS).map(([path, content]) => ({ path, content })));
@@ -146,7 +167,18 @@ describe('sharded symbol index equals one index', () => {
       one.remove(code[9].path);
       s.remove([code[9].path]);
       await settle();
-      for (const q of [{ names: ['Thing3'] }, { names: ['helper3'], langs: ['typescript', 'javascript'] }, { names: ['run2', 'task1'] }, { names: ['Renamed'] }, { names: ['thing1'] }, { names: ['helper1'], limit: 7 }]) {
+      for (const q of [
+        { names: ['Thing3'] },
+        { names: ['helper3'], langs: ['typescript', 'javascript'] },
+        { names: ['run2', 'task1'] },
+        { names: ['Renamed'] },
+        { names: ['thing1'] },
+        { names: ['helper1'], limit: 7 },
+        { names: ['helper1'], near: 'pkg3/m10.ts', limit: 9 },
+        { names: ['Thing3', 'run1'], classLike: true, near: 'pkg5/x/y.php' },
+        { names: ['run1'], member: true, containers: ['Thing1', 'thing6'], limit: 4, near: 'pkg2b/m2.ts' },
+        { names: ['helper2'], topLevel: true, near: 'pkg1/m1.go', limit: 3 },
+      ]) {
         expect(await s.definitions(q), JSON.stringify(q)).toEqual(one.definitions(q));
       }
       for (const hq of [{ query: 'thing', symbols: true }, { query: 'help', symbols: true, limit: 15 }, { query: 'serve', symbols: true, fileQuery: 'pkg1' }]) {

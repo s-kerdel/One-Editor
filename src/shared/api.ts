@@ -218,7 +218,8 @@ export interface BackendApi {
 
   /** Whole tree, or just the subtree at `path` (used after a folder appears on disk). */
   listTree(path?: RelPath): Promise<TreeNode>;
-  readFile(path: RelPath): Promise<FileData>;
+  /** `maxBytes`: fail with ETOOBIG instead of reading a bigger file (a cheap existence / size probe). */
+  readFile(path: RelPath, opts?: { maxBytes?: number }): Promise<FileData>;
   writeFile(path: RelPath, content: string, opts?: WriteOptions): Promise<{ mtime: number }>;
   createFile(path: RelPath, content?: string): Promise<{ mtime: number }>;
   createDir(path: RelPath): Promise<void>;

@@ -3,11 +3,12 @@
 // opened folder. Before anything is read it must be a normalised workspace-relative POSIX path that
 // stays inside the folder: no absolute paths, drive letters, UNC / backslashes, colons (drive, alternate
 // data streams, URL schemes), control characters or NUL, no `..` above the root, no Windows device
-// names. (The backend's `Workspace.real()` then refuses links leading out; this is the lexical half.)
+// names, no segment ending in a dot or space. (The backend's `Workspace.real()` then refuses links leading out; this is the lexical half.)
 // Attack table: tests/unit/search/goto-paths.test.ts.
 
 const BAD_CHARS = /[\u0000-\u001f\u007f\\:]/;
-const DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)(\..*)?$/i;
+// As backend/pathsafe.ts: device names also with blanks before an extension ("CON .txt", "nul.md").
+const DEVICE = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)\s*(\..*)?$/i;
 const MAX_LEN = 1024;
 const MAX_SEGMENTS = 64;
 
@@ -24,7 +25,8 @@ export function safeRel(p: string): string | null {
       out.pop();
       continue;
     }
-    if (DEVICE.test(seg.replace(/[ .]+$/, ''))) return null;
+    // Win32 strips trailing dots / spaces: "User.php." would be a second name for "User.php".
+    if (/[. ]$/.test(seg) || DEVICE.test(seg)) return null;
     out.push(seg);
   }
   return out.length ? out.join('/') : null;

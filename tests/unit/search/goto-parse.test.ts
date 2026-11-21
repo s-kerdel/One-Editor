@@ -153,6 +153,43 @@ export * as ns from './ns';`;
   });
 });
 
+describe('multi-start inputs: one linear pass, never a window per line start', () => {
+  const time = (fn: () => unknown) => {
+    const t = performance.now();
+    fn();
+    return performance.now() - t;
+  };
+  const cases: Array<[string, () => unknown]> = [
+    ['PHP: 20,000 unfinished `use a`', () => phpContext(`<?php\n${'use a\n'.repeat(20_000)}`)],
+    ['PHP: `use` lines and one `;` at the end', () => phpContext(`<?php\n${'use a\n'.repeat(20_000)};`)],
+    ['PHP: namespace lines', () => phpContext(`<?php\n${'namespace a\n'.repeat(20_000)}`)],
+    ['JS: `import a` lines', () => jsImports('import a\n'.repeat(20_000))],
+    ['JS: `import a` lines, a quote at the end', () => jsImports(`${'import a\n'.repeat(20_000)}'x'`)],
+    ['JS: `import {` lines', () => jsImports('import {\n'.repeat(20_000))],
+    ['JS: `export {` lines', () => jsReexports('export {\n'.repeat(20_000))],
+    ['JS: `export {` lines, closed at the end', () => jsLocalExport(`${'export {\n'.repeat(20_000)}}`, 'x')],
+    ['JS: `export *` lines', () => jsReexports('export * \n'.repeat(20_000))],
+    ['JS: `const {` before a require', () => jsImports(`${'const {\n'.repeat(20_000)}} = require('x')`)],
+    ['JS: requires without bindings', () => jsImports("require('a')".repeat(20_000))],
+    ['JS: default exports', () => jsDefaultExport('export default \n'.repeat(20_000))],
+    ['Python: `from a import (` lines', () => pyImports('from a import (\n'.repeat(20_000))],
+    ['Python: `from a import (` lines, closed at the end', () => pyImports(`${'from a import (\n'.repeat(20_000)})`)],
+  ];
+  for (const [what, fn] of cases) it(what, () => expect(time(fn)).toBeLessThan(150));
+
+  it('a long import clause is read whole (no 2,000-character limit)', () => {
+    const names = Array.from({ length: 600 }, (_, i) => `name${i}`);
+    const imps = jsImports(`import {\n  ${names.join(',\n  ')}\n} from './many';\nimport after from './after';`);
+    expect(imps.find((i) => i.local === 'name599')).toMatchObject({ spec: './many' });
+    expect(imps.find((i) => i.local === 'after')).toMatchObject({ imported: 'default', spec: './after' });
+  });
+
+  it('parses only the head of a huge text (PARSE_MAX)', () => {
+    const huge = `import a from './a';\n${' '.repeat(3_000_000)}\nimport late from './late';`;
+    expect(jsImports(huge).map((i) => i.local)).toEqual(['a']);
+  });
+});
+
 describe('identifier and context hints', () => {
   const at = (line: string, marker = '|', lang = 'php') => {
     const col = line.indexOf(marker);

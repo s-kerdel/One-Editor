@@ -17,8 +17,8 @@ import './gotodef.css';
 
 export type { GotoRequest };
 
-/** Files the resolver may read whole (bigger ones are treated as missing). */
-const MAX_READ_CHARS = 4_000_000;
+/** Files the resolver reads whole; bigger ones are refused by the backend before any byte travels. */
+const MAX_READ_BYTES = 4 << 20;
 /** How long a lookup waits for the index to finish before giving up quietly. */
 const INDEX_WAIT_MS = 20_000;
 /** PSR-4 maps are re-read after this (vendor/ is not watched, `composer install` changes it). */
@@ -83,10 +83,21 @@ async function read(path: string): Promise<string | null> {
   const doc = app.docs.get(path);
   if (doc) return doc.binary ? null : (app.editor?.getContent(path) ?? doc.content);
   try {
-    const f = await app.backend.readFile(path);
-    return f.binary || f.content.length > MAX_READ_CHARS ? null : f.content;
+    const f = await app.backend.readFile(path, { maxBytes: MAX_READ_BYTES });
+    return f.binary ? null : f.content;
   } catch {
     return null;
+  }
+}
+
+/** Does an unlisted path (vendor/, a dot folder) exist? A zero-byte limit: the backend stats it and sends nothing. */
+async function stat(path: string): Promise<boolean> {
+  if (app.docs.has(path)) return true;
+  try {
+    await app.backend.readFile(path, { maxBytes: 0 });
+    return true;
+  } catch (err) {
+    return (err as { code?: string })?.code === 'ETOOBIG';
   }
 }
 
@@ -105,6 +116,7 @@ async function makeEnv(): Promise<GotoEnv> {
   return {
     read,
     known,
+    stat,
     memo: freshMemo(),
     lookup: (q) => searchClient.definitions(q),
     complete: () => searchClient.status.value === 'ready',
@@ -113,11 +125,17 @@ async function makeEnv(): Promise<GotoEnv> {
 
 // ---- actions
 
+/** Bumped by every request: a resolution that finishes after a newer one (F12 auto-repeat) or after the user moved on is dropped. */
+let generation = 0;
+
 /** Go to definition of the name at `req` (line / col 0-based). */
 export async function goToDefinition(req: GotoRequest): Promise<void> {
+  const my = ++generation;
   const from = app.activePath.value;
+  const stale = () => my !== generation || app.activePath.value !== from;
   const env = await makeEnv();
   let r = await resolveDefinition(req, env);
+  if (stale()) return;
   if (!r.ident) return void app.toast('No name at the cursor', 'info', 2200);
   if (r.pending) {
     // The index is still being built: say so (never "not found"), then try once more when it is done.
@@ -126,8 +144,9 @@ export async function goToDefinition(req: GotoRequest): Promise<void> {
     const toast = app.toast(`Indexing${p?.total ? ` ${p.done.toLocaleString()} / ${p.total.toLocaleString()} files` : '…'} — looking for ${short(r.ident.name)}`, 'info', INDEX_WAIT_MS);
     await Promise.race([searchClient.whenReady(), new Promise((res) => setTimeout(res, INDEX_WAIT_MS))]);
     app.dismissToast(toast);
-    if (app.activePath.value !== from) return; // the user moved on
+    if (stale()) return;
     r = await resolveDefinition(req, env);
+    if (stale()) return;
     if (r.pending && !r.hits.length) return void app.toast(`Still indexing — try ${short(r.ident!.name)} again in a moment`, 'info', 3500);
   }
   show(r, req);
@@ -135,7 +154,7 @@ export async function goToDefinition(req: GotoRequest): Promise<void> {
 
 function show(r: GotoResult, req: GotoRequest) {
   const name = short(r.ident!.name);
-  if (!r.hits.length) return void app.toast(`No definition found for ${name}`, 'info', 5000, [{ label: 'Search in files', run: () => findUsages(req) }]);
+  if (!r.hits.length) return void app.toast(`No definition found for ${name}${r.truncated ? ' (stopped: too much to read)' : ''}`, 'info', 5000, [{ label: 'Search in files', run: () => findUsages(req) }]);
   if (r.self) return void app.toast(`${name} is defined here`, 'info', 3500, [{ label: 'Find usages', run: () => findUsages(req) }]);
   if (r.hits.length === 1) return jump(r.hits[0]);
   openPicker(r.ident!.name, r.hits);

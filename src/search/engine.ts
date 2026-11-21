@@ -12,7 +12,7 @@ import { Vocabulary, type Suggestion, type VocabCandidate } from './typo';
 
 const NO_TOKENS = new Uint32Array(0);
 import { fuzzyMatch, fuzzyMatchPath, fuzzyMatcher } from './fuzzy';
-import { DEF_LANGS, DEF_LIMIT, DEF_TEXT_MAX, compareDefHits, extractDefs, type Def } from './symbols';
+import { DEF_LANGS, DEF_LIMIT, DEF_TEXT_MAX, defMatches, defOrder, extractDefs, type Def } from './symbols';
 import type { DefHit, DefQuery } from './defs';
 
 export interface Entry {
@@ -210,11 +210,10 @@ export class SearchEngine {
    */
   flushDefs(budgetMs = Infinity): boolean {
     const t0 = now();
-    let n = 0;
     for (const e of this.defsQueue) {
       this.defsQueue.delete(e);
       this.addDefs(e);
-      if ((++n & 15) === 0 && now() - t0 > budgetMs) break;
+      if (now() - t0 > budgetMs) break; // after every file: one big file must not hold a slice
     }
     return !this.defsQueue.size;
   }
@@ -276,10 +275,14 @@ export class SearchEngine {
       if (!files) continue;
       for (const e of files) {
         if (langs && !langs.has(e.s.fileLang!)) continue;
-        for (const d of e.defs!) if (d.name.length === lower.length && d.name.toLowerCase() === lower) out.push(defHit(e, d));
+        for (const d of e.defs!) {
+          if (d.name.length !== lower.length || d.name.toLowerCase() !== lower) continue;
+          const h = defHit(e, d);
+          if (defMatches(h, q)) out.push(h);
+        }
       }
     }
-    out.sort(compareDefHits);
+    out.sort(defOrder(q.near));
     return out.slice(0, q.limit ?? DEF_LIMIT);
   }
 
