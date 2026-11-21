@@ -24,7 +24,7 @@ export const loadSearch = () => impl.load();
 export const startIndexing = () => impl.load().then((m) => m.searchClient.start());
 
 /** Open the search panel with `q` and run it immediately. */
-export function openSearch(q: string, opts: { replace?: boolean; regex?: boolean } = {}) {
+export function openSearch(q: string, opts: { replace?: boolean; regex?: boolean; wholeWord?: boolean } = {}) {
   return withModule(impl, (m) => m.openSearch(q, opts));
 }
 
@@ -56,7 +56,7 @@ export function installSearch() {
     { id: 'palette.commands', title: 'Show all commands', category: 'View', keys: ['Mod-Shift-p', 'F1'], keywords: ['command palette', 'actions'], run: palette('>') },
     { id: 'palette.files', title: 'Go to file…', category: 'Go', keys: ['Mod-p', 'Mod-o'], keywords: ['quick open', 'open file', 'switcher'], run: palette('') },
     { id: 'search.gotoHeading', title: 'Go to heading / symbol in file…', category: 'Go', keys: ['Mod-Shift-o'], keywords: ['outline', 'symbol', 'toc'], run: palette('@') },
-    { id: 'search.gotoWorkspaceHeading', title: 'Go to heading in workspace…', category: 'Go', keys: ['Mod-t'], keywords: ['symbol', 'section', 'title'], run: palette('#') },
+    { id: 'search.gotoWorkspaceHeading', title: 'Go to heading / symbol in workspace…', category: 'Go', keys: ['Mod-t'], keywords: ['symbol', 'section', 'title', 'class', 'function', 'definition'], run: palette('#') },
     { id: 'search.gotoLine', title: 'Go to line…', category: 'Go', keywords: ['line number', 'jump'], when: () => !!app.activePath.value, run: palette(':') },
     { id: 'search.findInFiles', title: 'Find in files', category: 'Search', keys: ['Mod-Shift-f'], keywords: ['search', 'grep', 'full text'], run: focus(false) },
     { id: 'search.replaceInFiles', title: 'Replace in files', category: 'Search', keys: ['Mod-Shift-h'], keywords: ['substitute', 'rename text'], run: focus(true) },

@@ -275,6 +275,12 @@ export function fuzzyMatch(query: string, target: string, opts: FuzzyOptions = {
   return matchPrepared(prepareQuery(query, opts), target);
 }
 
+/** The query prepared once, for scoring many targets (workspace symbols). */
+export function fuzzyMatcher(query: string, opts: FuzzyOptions = {}): (target: string) => FuzzyMatch | null {
+  const q = prepareQuery(query, opts);
+  return (target) => matchPrepared(q, target);
+}
+
 /** Path-aware: prefers hits in the file name (unless the query contains '/'). */
 export function fuzzyMatchPath(query: string, path: string, opts: FuzzyOptions = {}): FuzzyMatch | null {
   return matchPathPrepared(prepareQuery(query, opts), path);

@@ -16,6 +16,7 @@ import { openSlashMenu } from './slash';
 import { pastePlainText } from './paste';
 import { openPropertiesEditor } from './properties';
 import { focusToolbar } from './toolbar';
+import { findUsagesAt, goToDefinitionAt } from './gotodef';
 
 export interface PaletteContext {
   view: () => EditorView | null;
@@ -47,6 +48,7 @@ export function registerEditorCommands(ctx: PaletteContext) {
   const state = (cmd: StateCommand) => runOn((v) => cmd({ state: v.state, dispatch: v.dispatch }));
   const md = () => ctx.isMarkdown();
   const any = () => !!ctx.view();
+  const code = () => !!ctx.view() && !ctx.isMarkdown();
   const cmd = (id: string, title: string, run: () => void, opts: Partial<Command> = {}): Command => ({ id: `editor.${id}`, title, when: md, run, ...opts });
 
   const cmds: Command[] = [
@@ -87,6 +89,9 @@ export function registerEditorCommands(ctx: PaletteContext) {
     cmd('fold', 'Editor: Fold at cursor', runOn(foldCode), { when: any, displayKeys: ['Ctrl-Shift-['] }),
     cmd('unfold', 'Editor: Unfold at cursor', runOn(unfoldCode), { when: any, displayKeys: ['Ctrl-Shift-]'] }),
     cmd('gotoLine', 'Editor: Go to line…', runOn(gotoLine), { when: any, displayKeys: ['Mod-g'] }),
+    // Code files (name-based, ../search/gotodef): also Ctrl/Cmd+click and the editor's right-click menu.
+    cmd('goToDefinition', 'Go to definition', runOn((v) => goToDefinitionAt(v)), { category: 'Go', when: code, displayKeys: ['F12'], keywords: ['symbol', 'declaration', 'jump', 'navigate', 'implementation'] }),
+    cmd('findUsages', 'Find usages', runOn((v) => findUsagesAt(v)), { category: 'Search', when: code, displayKeys: ['Shift-F12'], keywords: ['references', 'callers', 'where used', 'occurrences'] }),
     cmd('find', 'Editor: Find in file', runOn(openSearchPanel), { when: any, displayKeys: ['Mod-f'] }),
     cmd('replace', 'Editor: Replace in file', runOn(openReplacePanel), { when: any, displayKeys: ['Mod-h'] }),
     cmd('selectNext', 'Editor: Add selection to next match', state(selectNextOccurrence), { when: any, displayKeys: ['Mod-d'], keywords: ['multi cursor'] }),

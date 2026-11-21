@@ -10,6 +10,7 @@
 | Link notes together | [3. Links and knowledge](#3-links-and-knowledge) |
 | Find something | [4. Search](#4-search) |
 | Format code | [5. Code and formatting](#5-code-and-formatting) |
+| Jump to where a function or class is defined | [Go to definition](#go-to-definition) |
 | Read or export a note | [6. Preview and export](#6-preview-and-export) |
 | Make a PDF of a note | [Export to PDF](#export-to-pdf) |
 | Run commands / use Claude Code | [7. Terminal and Claude Code](#7-terminal-and-claude-code) |
@@ -479,7 +480,8 @@ Turn this off in Settings → Links & notes → **Update links on rename**.
 | Find text in **all files** | `Ctrl+Shift+F` |
 | Replace in **all files** | `Ctrl+Shift+H` |
 | Find / replace in **this file** | `Ctrl+F` / `Ctrl+H` |
-| Jump to a heading | `Ctrl+Shift+O` (this file) · `Ctrl+T` (workspace) |
+| Jump to a heading or code symbol | `Ctrl+Shift+O` (this file) · `Ctrl+T` (workspace) |
+| Jump to where a name is defined | `Ctrl+click` / `F12` (see [Go to definition](#go-to-definition)) |
 
 ### When the index is built
 
@@ -547,7 +549,7 @@ With regex on, the replacement understands `$1`, `$<name>`, `\n`, and `\U` `\L` 
 | `name#heading` | A heading inside that file |
 | `name:42` | Line 42 of that file |
 | `>` | Commands |
-| `#` | Headings in the workspace |
+| `#` | Headings and **code symbols** in the workspace (also `Ctrl+T`) |
 | `@` | Headings / symbols in this file |
 | `:` | Go to line |
 
@@ -602,6 +604,45 @@ The nearest config file above the edited file is used.
 | `Shift+Alt+↓` | Duplicate line |
 | `Ctrl+G` | Go to line |
 | `Ctrl+Shift+[` / `]` | Fold / unfold |
+| `F12` / `Ctrl+click` | Go to definition |
+| `Shift+F12` | Find usages |
+
+### Go to definition
+
+**`Ctrl+click` a name, or put the cursor on it and press `F12`.** One jumps to where it is defined, also in another file. **`Alt+←` takes you back.**
+
+| Keys | Does |
+|---|---|
+| `Ctrl+click` (macOS `Cmd+click`) | Go to definition. Hold `Ctrl` first: the name under the pointer gets underlined |
+| `F12` | Go to definition of the name at the cursor |
+| `Shift+F12` | **Find usages**: Find in files for that name (whole word, exact case, same language) |
+| `Alt+←` (macOS `Cmd+[`) | Back to where you were |
+
+Also in the editor's **right-click menu** and the palette: **Go to definition**, **Find usages**. Code files only.
+
+- **Several matches?** A small list opens: name, kind, `file:line` and the line itself. Type to filter, `↑` `↓`, `Enter`.
+- **No match?** A message says so, with a **Search in files** button.
+- **Index still building?** It says **Indexing…** and tries again once the index is ready.
+- **`Ctrl+T`** lists code symbols of the whole folder too (classes, functions, methods), next to headings.
+
+**How it looks for the definition:**
+
+1. **Imports first.**
+   - **PHP:** `use` statements (also `as` aliases and `use App\{A, B}`), the file's `namespace`, fully qualified names. Classes are located through **PSR-4**: `composer.json` (`autoload` and `autoload-dev`) and `vendor/composer/autoload_psr4.php`. So a jump can land **in `vendor/`**, which search never indexes. These files are only read, never run.
+   - **JS / TS:** relative `import … from './x'`, `export … from`, `require('./x')`, `import('./x')`. Package names (`react`) are not followed.
+   - **Python:** `from .module import name`.
+2. **Members.** `$this->save()`, `self::`, `static::`, `parent::`, `this.load()`, `self.run()` look in the current class, its traits, then its parent classes (up to 5 levels). `User::find()` / `Store.create()` look in that class.
+3. **Same file, then the same language** across the folder. `new X` prefers classes, `->x(` methods, `x(` functions. A PHP call never jumps into JavaScript. Blade counts as PHP, `.vue` as JavaScript.
+
+**Languages:** PHP, JavaScript / TypeScript (JSX, TSX, Vue), Python, Go, Rust, Java, C#, Kotlin, Swift, Dart, C / C++, shell, Lua, SQL, Ruby, CSS custom properties (`--x`), SCSS (`$var`, `@mixin`, `@function`), Less variables.
+
+**Limits** (name-based, no language server):
+
+- **No types.** `$order->total()` on a variable of unknown type lists **every** `total()` method to pick from.
+- Definitions are recognised **per line**. A definition split over several lines, or a line over 400 characters, can be missed.
+- Files the search index skips (git-ignored, minified, very large) are reached only through imports / PSR-4, not by name.
+- In **Markdown** notes `Ctrl+click` follows links, as before.
+- **Browser mode:** the browser may keep `F12` for its own developer tools. Use `Ctrl+click` or the right-click menu.
 
 ---
 
@@ -1475,4 +1516,4 @@ After a paste a small **"Paste as…"** chip appears for a few seconds. Ignore i
 | **Compare with Clipboard says the browser blocked it** | Browser mode only: allow clipboard access for the page (address bar → site settings), then try again |
 | **"git refuses this repository (safe.directory)"** | The folder belongs to another user (USB stick, network drive). Run `git config --global --add safe.directory <folder>` in a terminal, if you trust it |
 | **Push / pull says "sign in"** | Click **Open in terminal**, press Enter, log in there once. After that the app can push too |
-| **Everything looks broken** | `F12` opens developer tools (desktop). Check the console |
+| **Everything looks broken** | `Ctrl+Shift+I` (macOS `Cmd+Alt+I`) opens developer tools (desktop). Check the console |

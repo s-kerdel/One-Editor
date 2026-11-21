@@ -11,7 +11,9 @@ import { foldDiacritics, foldTerm, hasDiacritics, isAscii, isWholeWord, lineOfOf
 import { Vocabulary, type Suggestion, type VocabCandidate } from './typo';
 
 const NO_TOKENS = new Uint32Array(0);
-import { fuzzyMatch, fuzzyMatchPath } from './fuzzy';
+import { fuzzyMatch, fuzzyMatchPath, fuzzyMatcher } from './fuzzy';
+import { DEF_LANGS, DEF_LIMIT, DEF_TEXT_MAX, compareDefHits, extractDefs, type Def } from './symbols';
+import type { DefHit, DefQuery } from './defs';
 
 export interface Entry {
   id: number;
@@ -26,6 +28,8 @@ export interface Entry {
   /** Vocabulary ids of the document's unique words. */
   tokens: Uint32Array;
   mtime?: number;
+  /** Definitions of a code file (symbol index; engines built with `defs`). */
+  defs?: Def[];
 }
 
 /** A hit: absolute offsets into the doc, plus which clause produced it. */
@@ -90,11 +94,24 @@ const DEFAULT_ROWS = 60;
 const MAX_HITS_PER_CLAUSE = 2000;
 const LONG_LINE = 360;
 
+/** Symbol hits per file in a workspace-wide symbol list (a generated file must not fill it). */
+const SYMBOLS_PER_FILE = 20;
+
 export class SearchEngine {
   private docs = new Map<string, Entry>();
   private nextId = 1;
   private totalLen = 0;
   readonly vocab = new Vocabulary();
+  /** Symbol index: lower-cased name → files defining it (only with `defs`). */
+  private defNames = new Map<string, Entry[]>();
+  /** Code files whose definitions are not extracted yet: off the build's critical path (see flushDefs). */
+  private defsQueue = new Set<Entry>();
+  private readonly withDefs: boolean;
+
+  /** `defs`: also keep the workspace symbol index (the app's shards; MCP / replace don't need it). */
+  constructor(opts: { defs?: boolean } = {}) {
+    this.withDefs = !!opts.defs;
+  }
 
   get size() {
     return this.docs.size;
@@ -124,6 +141,8 @@ export class SearchEngine {
   clear() {
     this.docs.clear();
     this.vocab.clear();
+    this.defNames.clear();
+    this.defsQueue.clear();
     this.totalLen = 0;
   }
 
@@ -158,8 +177,60 @@ export class SearchEngine {
     // Vocabulary is folded so typo suggestions also work across accents.
     const vocabSrc = ascii ? lower : foldedOf(e).text;
     e.tokens = this.vocab.addText([vocabSrc, isAscii(e.pathLower) ? e.pathLower : foldTerm(e.pathLower)]);
+    if (this.withDefs && e.s.fileLang && DEF_LANGS.has(e.s.fileLang)) this.defsQueue.add(e);
     this.docs.set(doc.path, e);
     this.totalLen += content.length;
+  }
+
+  private addDefs(e: Entry) {
+    let defs: Def[];
+    try {
+      defs = extractDefs(e.path, e.content);
+    } catch {
+      return; // a scanner bug must never cost the file its full-text entry
+    }
+    if (!defs.length) return;
+    e.defs = defs;
+    for (const k of defNameKeys(defs)) {
+      const list = this.defNames.get(k);
+      if (list) list.push(e);
+      else this.defNames.set(k, [e]);
+    }
+  }
+
+  /** Code files still waiting for their definitions. */
+  get pendingDefs(): number {
+    return this.defsQueue.size;
+  }
+
+  /**
+   * Extracts queued definitions — all of them, or until `budgetMs` has passed. Returns true when none are
+   * left. Shards run it in idle slices after a build; every query that reads definitions runs it first,
+   * so answers never depend on how far that got.
+   */
+  flushDefs(budgetMs = Infinity): boolean {
+    const t0 = now();
+    let n = 0;
+    for (const e of this.defsQueue) {
+      this.defsQueue.delete(e);
+      this.addDefs(e);
+      if ((++n & 15) === 0 && now() - t0 > budgetMs) break;
+    }
+    return !this.defsQueue.size;
+  }
+
+  private dropDefs(e: Entry) {
+    this.defsQueue.delete(e);
+    if (!e.defs) return;
+    for (const k of defNameKeys(e.defs)) {
+      const list = this.defNames.get(k);
+      if (!list) continue;
+      const i = list.indexOf(e);
+      if (i < 0) continue;
+      list[i] = list[list.length - 1]; // order is restored by sorting the hits
+      list.pop();
+      if (!list.length) this.defNames.delete(k);
+    }
   }
 
   upsertMany(docs: SearchDoc[]) {
@@ -188,7 +259,28 @@ export class SearchEngine {
 
   private drop(e: Entry) {
     this.vocab.removeDoc(e.tokens);
+    this.dropDefs(e);
     this.totalLen -= e.content.length;
+  }
+
+  // ------------------------------------------------------------------ definitions
+
+  /** Definitions named exactly (case-insensitively) like one of `q.names`, sorted by path / line. O(1) per name. */
+  definitions(q: DefQuery): DefHit[] {
+    this.flushDefs();
+    const out: DefHit[] = [];
+    const langs = q.langs?.length ? new Set(q.langs) : null;
+    for (const name of new Set(q.names)) {
+      const lower = name.toLowerCase();
+      const files = this.defNames.get(lower);
+      if (!files) continue;
+      for (const e of files) {
+        if (langs && !langs.has(e.s.fileLang!)) continue;
+        for (const d of e.defs!) if (d.name.length === lower.length && d.name.toLowerCase() === lower) out.push(defHit(e, d));
+      }
+    }
+    out.sort(compareDefHits);
+    return out.slice(0, q.limit ?? DEF_LIMIT);
   }
 
   // ------------------------------------------------------------------ search
@@ -561,12 +653,20 @@ export class SearchEngine {
 
   // ------------------------------------------------------------------ headings
 
-  /** Headings across the workspace (or in `path`), fuzzy-ranked. `fileQuery` narrows by file (quick open `file#heading`). */
-  headings(query: string, opts: { limit?: number; path?: string; fileQuery?: string } = {}): HeadingHit[] {
+  /**
+   * Headings across the workspace (or in `path`), fuzzy-ranked. `fileQuery` narrows by file (quick open `file#heading`).
+   * `symbols`: code symbols too (Ctrl+T) — only for a non-empty query (or a file query), at most
+   * SYMBOLS_PER_FILE per file across the workspace.
+   */
+  headings(query: string, opts: { limit?: number; path?: string; fileQuery?: string; symbols?: boolean } = {}): HeadingHit[] {
     const out: HeadingHit[] = [];
     const docs = opts.path ? [this.docs.get(opts.path)].filter(Boolean) as Entry[] : [...this.docs.values()];
+    const narrowed = !!(opts.path || opts.fileQuery);
+    const symMatch = opts.symbols && (query || narrowed) ? (query ? fuzzyMatcher(query) : () => ({ score: 0, positions: [] as number[] })) : null;
+    if (symMatch) this.flushDefs();
     for (const e of docs) {
-      if (!e.s.headings.length) continue;
+      const syms = symMatch && e.defs ? e.defs : null;
+      if (!e.s.headings.length && !syms) continue;
       let fileScore = 0;
       if (opts.fileQuery) {
         const fm = fuzzyMatchPath(opts.fileQuery, e.path);
@@ -579,6 +679,18 @@ export class SearchEngine {
         if (!m) continue;
         out.push({ path: e.path, line: h.line, level: h.level, text: h.text, score: m.score + fileScore * 0.25 - h.level * 0.5, positions: m.positions });
       }
+      if (!syms) continue;
+      const mine: HeadingHit[] = [];
+      for (const d of syms) {
+        if (d.extra) continue;
+        const m = symMatch!(d.name);
+        if (!m) continue;
+        const hit: HeadingHit = { path: e.path, line: d.line, level: d.container ? 2 : 1, text: d.name, score: m.score + fileScore * 0.25 - (d.container ? 1 : 0.5), positions: m.positions, kind: d.kind, col: d.col };
+        if (d.container) hit.container = d.container;
+        mine.push(hit);
+      }
+      if (!narrowed && mine.length > SYMBOLS_PER_FILE) mine.sort(compareHeadings).length = SYMBOLS_PER_FILE;
+      for (const h of mine) out.push(h);
     }
     out.sort(compareHeadings);
     return out.slice(0, opts.limit ?? 100);
@@ -586,7 +698,7 @@ export class SearchEngine {
 
   /** Hits of a parsed query in one document (used by replace). */
   matchDoc(path: string, content: string, query: string, opts: SearchOptions): { hits: Array<{ start: number; end: number }>; error?: string; atom?: Atom } {
-    const tmp = new SearchEngine();
+    const tmp = new SearchEngine(); // no symbol index: one-off engine
     tmp.upsert({ path, content });
     const pq = parseQuery(query, { regex: opts.regex, literal: opts.literal, caseSensitive: opts.caseSensitive ?? 'smart' });
     if (pq.error) return { hits: [], error: pq.error };
@@ -764,6 +876,25 @@ function lineText(e: Entry, line: number): string {
   const start = ls[line];
   const end = line + 1 < ls.length ? ls[line + 1] - 1 : e.content.length;
   return e.content.slice(start, end);
+}
+
+/** The distinct lower-cased names of a file's definitions (its keys in the symbol index). */
+function defNameKeys(defs: readonly Def[]): Set<string> {
+  const out = new Set<string>();
+  for (const d of defs) out.add(d.name.toLowerCase());
+  return out;
+}
+
+function defHit(e: Entry, d: Def): DefHit {
+  const text = lineText(e, d.line).trim();
+  const h: DefHit = { path: e.path, name: d.name, kind: d.kind, line: d.line, col: d.col, lang: e.s.fileLang!, text: text.length > DEF_TEXT_MAX ? text.slice(0, DEF_TEXT_MAX) + '…' : text };
+  if (d.container) h.container = d.container;
+  if (d.ns) h.ns = d.ns;
+  if (d.ext) h.ext = d.ext;
+  if (d.uses) h.uses = d.uses;
+  if (d.end !== undefined) h.end = d.end;
+  if (d.extra) h.extra = true;
+  return h;
 }
 
 function classifyOffset(e: Entry, offset: number, spans?: Map<number, InlineSpan[]>): Classification {

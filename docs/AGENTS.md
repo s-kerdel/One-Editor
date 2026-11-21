@@ -72,6 +72,34 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   new list a `count`, `null` = "…" while unknown); `knowledge/graph-canvas.ts`
   is the canvas renderer shared with the graph view. Keyless knowledge commands register from the chunk
   (`addCommandSource`, `registerKnowledgeCommands` in `knowledge/impl.tsx`): only key-bound ones live in the stub.
+- **Code symbols — one extraction** (search, `src/search/symbols.ts`): `outline()` (palette `@`, MCP outline),
+  `codeSymbols()` (the file overview; `overview/symbols.ts` only re-exports) and `extractDefs()` (the symbol index,
+  Go to definition: + enclosing class, class end, `extends`, PHP namespace / traits, and index-only kinds marked
+  `extra` — PHP properties / constants / enum cases, JS/TS fields — that the outline and overview never show). A new
+  language = patterns in `LANG_PATTERNS` (+ `NO_GENERIC` if the generic scan mis-reads it); each pattern anchored,
+  no two adjacent parts able to match the same characters (lines are capped at 400), a cheap gate (`starts` /
+  `sigil` / `needs`) so most lines skip its regex, and a case in `tests/unit/search/symbols.test.ts` (language
+  table + pathological lines). Existing languages' outline must not change (that file pins it). Index contract
+  values (`DEF_LANGS`, language families `familyOf` / `familyLangs`, `compareDefHits`) live in `symbols.ts` too
+  (`search/defs.ts` is types only: a module of its own became one more tiny shared chunk).
+- **Workspace symbol index** (search): the app's shards run `new SearchEngine({ defs: true })` (MCP / replace engines
+  have none): code files are queued at `upsert` and extracted in idle slices once a build is done
+  (`SearchHost.drainDefs`), never on the build's critical path; any query that reads definitions finishes the queue
+  first (`flushDefs`), so answers are exact. Lookup by exact name (`Map`, lower-cased key): `SearchEngine.definitions`,
+  `ShardedSearch.definitions` (merge = `compareDefHits` order + limit, `tests/unit/search/defs-index.test.ts`),
+  `searchClient.definitions(q)`; workspace symbols ride on `headings(…, { symbols: true })` (non-empty query, ≤ 20 per
+  file across the workspace).
+- **Go to definition** (search): pure resolver `src/search/goto/` (`resolve.ts` orchestrates imports → members →
+  same file → same-language index; `php.ts` namespace / `use` / PSR-4 as **text**; `js.ts` imports; `context.ts`
+  identifier + hints; `paths.ts` = `safeRel` / `safeJoin`, through which **every path derived from file contents**
+  passes before a read — attack table `tests/unit/search/goto-paths.test.ts`). It sees the app only through
+  `GotoEnv` (reads, tree, index), so it is unit-tested on a fake workspace (`goto-resolve.test.ts`). The app side is
+  the lazy chunk `renderer/search/gotodef.tsx` (env over `app.backend.readFile` + open docs + `app.tree` +
+  `searchClient`, picker, toasts, Find usages); it loads the search implementation by `import('./impl')`, not via the
+  stub (`./index`: that static import split `app/lazy` into its own startup chunk). The editor chunk holds only the
+  forwarders (`editor/gotodef.ts`: `Mod`+click, `F12` / `Shift-F12`, the underline decoration; `goToDefinitionAt` /
+  `findUsagesAt` for the menu and palette). Same-file jumps call `app.markNavigation?.()`. A new surface that wants
+  "definition of X": call those, don't resolve names yourself.
 - Link hover preview (knowledge, `knowledge/link-preview.ts`, setting `links.hoverPreview`): one popup for every surface.
   The editor reports the link under the pointer via `EditorHost.hoverLink(link | null, from)` (`editor/hover.ts`,
   forwarded by `editor/integration.ts` to `app.knowledge.linkPreview`); rendered Markdown (`.se-preview a`, note embeds)
@@ -277,10 +305,10 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
 ### Global keybinding allocation (avoid conflicts)
 | Owner | Keys |
 |---|---|
-| shell | `Mod-s` save, `Mod-w` close tab, `Mod-n` new note, `Mod-Shift-b` sidebar, `Mod-Alt-k` Bookmarks panel, `Mod-Alt-z` zen mode (also in `APP_KEYS_IN_TERMINAL`), `Mod-e` toggle edit/preview, `Mod-\` split, `Ctrl-Tab`/`Ctrl-Shift-Tab` tabs, `Mod-,` settings, `Mod-=`/`Mod--`/`Mod-0` zoom |
+| shell | `Mod-s` save, `Mod-w` close tab, `Mod-n` new note, `Mod-Shift-b` sidebar, `Mod-Alt-k` Bookmarks panel, `Mod-Alt-z` zen mode (also in `APP_KEYS_IN_TERMINAL`), `Mod-e` toggle edit/preview, `Mod-\` split, `Ctrl-Tab`/`Ctrl-Shift-Tab` tabs, `Mod-,` settings, `Mod-=`/`Mod--`/`Mod-0` zoom, `Mod-Shift-i` developer tools (desktop, Windows/Linux; macOS `Cmd-Alt-i` is the default app menu's, so the command only *displays* it — binding it too would toggle twice). **`F12` is no longer DevTools** (it moved in v0.5.4: Go to definition) |
 | search | `Mod-p`/`Mod-o` quick open, `Mod-Shift-p`/`F1` palette, `Mod-Shift-f` find in files, `Mod-Shift-h` replace in files, `Mod-Shift-o` go to heading, `Mod-t` workspace symbol/heading |
 | format | `Shift-Alt-f` format document, `Mod-Alt-f` format selection/code block |
-| editor (CM-local, not global) | `Mod-b` bold, `Mod-i` italic, `Mod-k` link, `Mod-f`/`Mod-h` in-file find/replace, `Mod-d`, `Mod-/`, `Mod-Enter` toggle checkbox, `Alt-Up/Down` move line, `Mod-Shift-v` paste exactly as copied (plain text, no trailing-whitespace trim, no smart paste), `/` slash menu, `Alt-F10` focus formatting toolbar, … |
+| editor (CM-local, not global) | `Mod-b` bold, `Mod-i` italic, `Mod-k` link, `Mod-f`/`Mod-h` in-file find/replace, `Mod-d`, `Mod-/`, `Mod-Enter` toggle checkbox, `Alt-Up/Down` move line, `Mod-Shift-v` paste exactly as copied (plain text, no trailing-whitespace trim, no smart paste), `/` slash menu, `Alt-F10` focus formatting toolbar, code files only: `F12` go to definition, `Shift-F12` find usages, `Mod`+click go to definition (multi-cursor is `Alt`+click), … |
 | knowledge | `Mod-Alt-o` outline, `Mod-Alt-l` backlinks, `Mod-Alt-g` graph |
 | git | `Mod-Shift-g` Source control panel, `Alt-F5` / `Shift-Alt-F5` next / previous change; pane-local `Mod-Enter` commit; diff view `F7` / `Shift-F7`, `Esc`, editable diff: `Mod-F7` revert the block at the cursor (compare: apply it to the right side), compare: `Mod-Shift-F7` apply the block at the cursor to the left side, `Mod-s` saves the diff's file(s) (key filter while it is open), `Mod-z` / `Mod-y` / `Mod-Shift-z` reach the diff's own undo when no editor in it has focus (window capture, only while a diff with an editable side is open) |
 | overview | `Mod-Alt-b` toggle file overview (right sidebar) |

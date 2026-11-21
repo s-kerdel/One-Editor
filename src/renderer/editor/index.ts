@@ -38,6 +38,7 @@ import { gitEditor } from '../git/gutter';
 import { variableChips, variableCompletion, variablesEditor } from '../variables/cm';
 import { whitespaceEditor } from '../whitespace/cm';
 import { parseAhead } from './parse-ahead';
+import { gotoDefinition } from './gotodef';
 // Git change navigation for the palette (../git/index loads them from this chunk: no extra gutter chunk).
 export { nextChange, previousChange, peekChangeAtCursor, revertChangeAtCursor } from '../git/gutter';
 
@@ -251,6 +252,7 @@ export function createEditor(parent: HTMLElement): EditorController {
     of(gutterComp, CODE_GUTTERS),
     of(gitComp, gitExt(false)),
     indentGuides,
+    gotoDefinition, // Ctrl/Cmd+click, F12 / Shift+F12 (the resolver is a lazy chunk)
     Prec.high(keymap.of([{ key: 'Tab', run: indentOrInsert, shift: indentLess }])),
     EditorView.editorAttributes.of({ class: 'se-codefile' }),
   ];

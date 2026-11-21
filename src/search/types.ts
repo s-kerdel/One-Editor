@@ -100,4 +100,8 @@ export interface HeadingHit {
   text: string;
   score: number;
   positions: number[]; // into text
+  /** A code symbol (Ctrl+T / palette `#`): its kind ('class', 'function', …); absent for headings. */
+  kind?: string;
+  col?: number;
+  container?: string;
 }

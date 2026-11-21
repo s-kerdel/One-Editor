@@ -75,6 +75,7 @@ npm run serve -- ~/notes --open
 |---|---|
 | **Editor** | **Live preview** (syntax hides until the cursor is on it) · source, split and reading view · **`/` slash menu** · smart lists (indent, renumber, checkboxes) · table editing (`Tab` between cells) · **paste images** → saved as attachments · paste rich text → Markdown · `![[embeds]]` · **properties** editor for YAML frontmatter · `[[link]]`, `#tag` and code-language autocomplete |
 | **Code** | Syntax highlighting · line comments, folding, multi-cursor · **formatting** for PHP, SQL, JS/TS, JSON, CSS/SCSS/Less, HTML, Vue, XML, YAML, GraphQL, shell, Markdown · format code blocks inside notes · respects `.prettierrc` and `.editorconfig` |
+| **Go to definition** | **`Ctrl+click`** or **`F12`** on a name in a code file jumps to where it is defined, also in another file · PHP follows **`use`** and **PSR-4** (composer.json), **into `vendor/`** · JS/TS follow **imports** · `$this->x()` / `this.x` look in the class and its parents · several matches → a small list · **`Shift+F12`** finds usages · `Alt+←` goes back. Name-based (no language server): many languages, no setup |
 | **Search** | **Find in files** that takes pasted commands literally (`git push --force-with-lease`) · filters (`path:` `ext:` `lang:` `in:code` `tag:`) · `"phrase"`, `-exclude`, `OR`, `/regex/` · typo-tolerant fallback · **replace in files** · quick open and command palette |
 | **Knowledge** | **Backlinks** + unlinked mentions · **outline** · **tags** · **graph** (global and local) · **renaming a file updates its links** · daily notes · templates |
 | **Preview** | Callouts, footnotes, `==highlight==`, math (KaTeX), Mermaid diagrams · export to HTML · print |
@@ -107,7 +108,7 @@ npm run serve -- ~/notes --open
 | `Ctrl+P` / `Ctrl+O` | Quick open (go to file) |
 | `Ctrl+Shift+P` / `F1` | Command palette |
 | `Ctrl+Shift+O` | Go to heading / symbol in this file |
-| `Ctrl+T` | Go to heading in the workspace |
+| `Ctrl+T` | Go to heading or **code symbol** in the workspace |
 | `Ctrl+G` | Go to line |
 | `Ctrl+Shift+F` | Find in files |
 | `Ctrl+Shift+H` | Replace in files |
@@ -129,7 +130,7 @@ npm run serve -- ~/notes --open
 | `Ctrl+Alt+O` / `Ctrl+Alt+L` / `Ctrl+Alt+G` | Outline / backlinks / graph |
 | `Ctrl+,` | Settings |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom in / out / reset (**desktop only**) |
-| `F12` | Developer tools (**desktop only**) |
+| `Ctrl+Shift+I` (macOS `Cmd+Alt+I`) | Developer tools (**desktop only**) |
 | `` Ctrl+` `` | **Terminal** panel: open / focus / hide (**desktop only**) |
 | `` Ctrl+Shift+` `` | New terminal |
 | `F2` / `Del` in the file tree | Rename / delete |
@@ -177,6 +178,9 @@ npm run serve -- ~/notes --open
 | `Shift+Alt+↓` | Duplicate line |
 | `Ctrl+Shift+[` / `Ctrl+Shift+]` | Fold / unfold at cursor |
 | `Ctrl+Alt+[` / `Ctrl+Alt+]` | Fold all / unfold all |
+| `F12` / `Ctrl+click` | **Go to definition** (code files) |
+| `Shift+F12` | **Find usages** (Find in files, whole word) |
+| `Alt+←` (macOS `Cmd+[`) | Back to where you were (e.g. after a jump) |
 
 ---
 

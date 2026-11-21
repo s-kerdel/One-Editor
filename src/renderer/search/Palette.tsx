@@ -1,7 +1,7 @@
 // Omnibox: one input, several modes chosen by prefix (VS Code-style):
 //   (none)  files (recent first) · `file#heading` · `file:42` · plus "Found in content" from the index
 //   >       commands (title/keywords/category/id, recent first, keybindings shown)
-//   #       headings across the workspace          @  headings/symbols in the current file
+//   #       headings + code symbols across the workspace   @  headings/symbols in the current file
 //   :       go to line in the current file
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { app } from '../app/app';
@@ -19,7 +19,7 @@ import { getRecentCommands, getRecentFiles, touchRecentCommand } from './state';
 type Item =
   | { kind: 'file'; path: string; positions: number[]; recent?: boolean; line?: number; col?: number }
   | { kind: 'command'; cmd: Command; positions: number[]; recent?: boolean; via?: string }
-  | { kind: 'heading'; path: string; line: number; level: number; text: string; positions: number[]; detail?: string; showPath: boolean }
+  | { kind: 'heading'; path: string; line: number; col?: number; level: number; text: string; positions: number[]; detail?: string; showPath: boolean; container?: string }
   | { kind: 'line'; path: string; line: number; col?: number }
   | { kind: 'content'; path: string; m: SearchMatch; fuzzy?: boolean };
 
@@ -146,7 +146,7 @@ function modeOf(q: string): 'commands' | 'wsHeadings' | 'outline' | 'line' | 'fi
 
 const PLACEHOLDER: Record<ReturnType<typeof modeOf>, string> = {
   commands: 'Run a command…',
-  wsHeadings: 'Go to heading in workspace…',
+  wsHeadings: 'Go to heading or symbol in workspace…',
   outline: 'Go to heading / symbol in this file…',
   line: 'Go to line (e.g. :42 or :42:5)…',
   files: 'Go to file…   > commands   # headings   @ in file   : line',
@@ -232,9 +232,10 @@ export function Palette({ initial = '' }: { initial?: string }) {
       let headings: Item[] = [];
       let content: Item[] = [];
       if (wantHeadings) {
-        const hq = fileHash ? { query: fileHash[2].trim(), fileQuery: fileHash[1].trim(), limit: 80 } : { query: body.trim(), limit: 80 };
+        // Code symbols ride along (each file's best few, ranked with the headings).
+        const hq = fileHash ? { query: fileHash[2].trim(), fileQuery: fileHash[1].trim(), limit: 80, symbols: true } : { query: body.trim(), limit: 80, symbols: true };
         const hits: HeadingHit[] = (await searchClient.headings(hq)) ?? [];
-        headings = hits.map((h) => ({ kind: 'heading' as const, path: h.path, line: h.line, level: h.level, text: h.text, positions: h.positions, showPath: true }));
+        headings = hits.map((h) => ({ kind: 'heading' as const, path: h.path, line: h.line, col: h.col, level: h.level, text: h.text, positions: h.positions, showPath: true, detail: h.kind, container: h.container }));
       }
       if (wantContent) {
         const r = await searchClient.search(q.trim(), { limit: 8, maxMatchesPerFile: 1, matchPaths: false }, 'palette');
@@ -281,7 +282,7 @@ export function Palette({ initial = '' }: { initial?: string }) {
         setTimeout(() => void Promise.resolve(it.cmd.run()).then(refocus, refocus), 0);
         break;
       case 'heading':
-        open(it.path, { line: it.line });
+        open(it.path, { line: it.line, col: it.col });
         break;
       case 'line':
         open(it.path, { line: it.line, col: it.col });
@@ -391,7 +392,7 @@ function emptyText(mode: ReturnType<typeof modeOf>, q: string) {
   if (mode === 'commands') return 'No matching commands';
   if (mode === 'outline') return app.activePath.value ? 'No headings or symbols in this file' : 'No file open';
   if (mode === 'line') return app.activePath.value ? 'Type a line number' : 'No file open';
-  if (mode === 'wsHeadings') return 'No matching headings';
+  if (mode === 'wsHeadings') return q.trim().length > 1 ? 'No matching headings or symbols' : 'No headings — type to find code symbols too';
   return q.trim() ? 'No matching files' : 'No files';
 }
 
@@ -460,7 +461,12 @@ function renderItem(it: Item) {
             <span class="se-pal-label">
               <HighlightPositions text={it.text} positions={it.positions} />
             </span>
-            {it.showPath && <span class="se-pal-desc">{it.path}</span>}
+            {it.showPath && (
+              <span class="se-pal-desc">
+                {it.container ? `${it.container} · ` : ''}
+                {it.path}
+              </span>
+            )}
           </span>
           <span class="se-pal-meta">{it.detail ?? `H${it.level}`}</span>
         </>

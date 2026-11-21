@@ -22,6 +22,7 @@ import { isRunnableFence } from '../terminal/run';
 import { codeAction, fenceInfoAt } from '../variables/cm';
 import { trimWhitespaceCommand } from '../whitespace/cm';
 import { compareMenuItems } from '../git/compare-menu';
+import { findUsagesAt, goToDefinitionAt } from './gotodef';
 
 // Menu-only icons, registered from this lazy chunk so they cost nothing at startup.
 // Lucide-style 24×24 stroke paths ('|' separates sub-paths), matching the app's icon set.
@@ -40,6 +41,7 @@ addIcons({
   menuComment: 'm18 16 4-4-4-4|m6 8-4 4 4 4|m14.5 4-5 16',
   exportPdf: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z|M14 3v5h5|M12 11v6|m9 14 3 3 3-3',
   menuClaude: 'M12 3l1.9 5.6L19.5 10.5l-5.6 1.9L12 18l-1.9-5.6L4.5 10.5l5.6-1.9z|M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z',
+  menuDefinition: 'M3 12h12|m11 6 6 6-6 6|M21 5v14',
 });
 
 /** Language word of the fenced code block at `pos` (null outside one). */
@@ -166,6 +168,15 @@ export function buildEditorMenu(view: EditorView, opts: { markdown: boolean; tar
           }
         },
       },
+    );
+    sep();
+  }
+
+  // Code files: the name at the cursor (the right-click moved it there).
+  if (!opts.markdown && state.wordAt(head)) {
+    items.push(
+      { label: 'Go to definition', icon: 'menuDefinition', keys: keys('F12'), run: () => void goToDefinitionAt(view, head) },
+      { label: 'Find usages', icon: 'search', keys: keys('Shift-F12'), run: () => void findUsagesAt(view, head) },
     );
     sep();
   }

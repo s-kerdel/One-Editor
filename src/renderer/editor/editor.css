@@ -95,6 +95,8 @@ html[data-theme='light'] {
 .se-editor .cm-scroller::-webkit-scrollbar-track { background: transparent; }
 .se-editor .cm-scroller::-webkit-scrollbar-corner { background: transparent; }
 .se-editor.se-mod-down .se-mdlink { cursor: pointer; }
+/* Code files: the name under the pointer while Ctrl / Cmd is held (Go to definition on click). */
+.se-def-link { text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 
 /* ---------- syntax tokens ---------- */
 .se-editor .se-t-keyword { color: var(--se-syn-keyword); }

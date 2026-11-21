@@ -203,7 +203,7 @@ class App {
   openLink?: (target: string, fromPath: string, opts?: { newTab?: boolean }) => Promise<void>;
 
   /** Open the search panel with a query, e.g. `app.openSearch?.('tag:foo')` (implemented by search). */
-  openSearch?: (query: string, opts?: { replace?: boolean; regex?: boolean }) => void;
+  openSearch?: (query: string, opts?: { replace?: boolean; regex?: boolean; wholeWord?: boolean }) => void;
 
   /** Desktop only (set by terminal/install): paste a shell code block into the active / a new terminal,
    *  without pressing Enter unless asked. Editor / preview draw "Run in terminal" when this exists. */

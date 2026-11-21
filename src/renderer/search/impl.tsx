@@ -7,7 +7,7 @@ import { searchClient } from './client';
 import { registerCommand } from '../app/commands';
 import { openPalette } from './Palette';
 import { SearchPanel, installPanelEffects, runSearchNow, stepResult } from './SearchPanel';
-import { focusTick, query, showReplace, useRegex } from './state';
+import { focusTick, query, showReplace, useRegex, wholeWord } from './state';
 import '../app/overlays.css'; // palette base (shell; .se-omnibox resizes it)
 import './search.css';
 
@@ -38,10 +38,11 @@ function showPanel() {
 }
 
 /** Open the search panel with `q` and run it immediately. */
-export function openSearch(q: string, opts: { replace?: boolean; regex?: boolean } = {}) {
+export function openSearch(q: string, opts: { replace?: boolean; regex?: boolean; wholeWord?: boolean } = {}) {
   showPanel();
   if (opts.replace !== undefined) showReplace.value = opts.replace;
   if (opts.regex !== undefined) useRegex.value = opts.regex;
+  if (opts.wholeWord !== undefined) wholeWord.value = opts.wholeWord;
   query.value = q;
   focusTick.value++;
   runSearchNow();

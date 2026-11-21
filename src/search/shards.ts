@@ -12,6 +12,8 @@ import { parseQuery } from './query';
 import type { FromWorker, HeadingQuery, ToWorker } from './protocol';
 import type { HeadingHit, SearchDoc, SearchOptions, SearchResponse } from './types';
 import type { Mention } from '../knowledge/index';
+import { DEF_LIMIT, compareDefHits } from './symbols';
+import type { DefHit, DefQuery } from './defs';
 
 // Same order as knowledge's compareMentions (inlined: the search client chunk stays free of knowledge code).
 const compareMentions = (a: Mention, b: Mention) => a.from.localeCompare(b.from) || a.line - b.line || a.col - b.col;
@@ -148,7 +150,7 @@ export class ShardedSearch {
       return true;
     }
     if (m.type === 'error') w.error = m.message;
-    else w.parts[shard] = m.type === 'ranked' ? m.results : m.type === 'headings' ? m.hits : m.type === 'vocab' ? m.info : m.type === 'mentions' ? m.items : m.type === 'result' ? m.response : m;
+    else w.parts[shard] = m.type === 'ranked' ? m.results : m.type === 'headings' || m.type === 'defs' ? m.hits : m.type === 'vocab' ? m.info : m.type === 'mentions' ? m.items : m.type === 'result' ? m.response : m;
     if (--w.left === 0) {
       this.waiting.delete(m.id);
       w.resolve(w.parts);
@@ -289,6 +291,16 @@ export class ShardedSearch {
     const r = await this.gather<Mention[]>((id) => ({ type: 'mentions', id, names, exclude, limit }));
     if (!r) return null;
     return r.parts.flat().sort(compareMentions).slice(0, limit);
+  }
+
+  /** Same contract as SearchEngine.definitions: each shard's first `limit` in (path, line) order, merged. */
+  async definitions(q: DefQuery): Promise<DefHit[] | null> {
+    const r = await this.gather<DefHit[]>((id) => ({ type: 'defs', id, q }));
+    if (!r) return null;
+    return r.parts
+      .flat()
+      .sort(compareDefHits)
+      .slice(0, q.limit ?? DEF_LIMIT);
   }
 
   /** Same contract as SearchEngine.headings (each shard's best `limit`, merged). */

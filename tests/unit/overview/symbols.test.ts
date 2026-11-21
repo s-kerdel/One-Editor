@@ -104,6 +104,10 @@ describe('brace depths', () => {
     expect(Array.from(braceDepths('# {\nx', false))).toEqual([0, 1]);
     expect(Array.from(braceDepths('#[A] {\nx', true))).toEqual([0, 1]);
   });
+
+  it('a backslash before a newline inside a string still counts that line', () => {
+    expect(Array.from(braceDepths("a {\n  x = 'one \\\n  two';\n  b {\n  }\n}"))).toEqual([0, 1, 1, 1, 2, 1]);
+  });
 });
 
 describe('other languages keep the indentation levels from the shared scan', () => {

@@ -2,7 +2,7 @@
 import { app } from './app';
 import * as ui from './ui';
 import { brandTitle } from '@shared/brand';
-import { addCommandSource, loadCommandSources, registerCommands } from './commands';
+import { addCommandSource, isMac, loadCommandSources, registerCommands } from './commands';
 import { newNote, openAbsolutePaths } from './fileops';
 import { toggleEditPreview, toggleSplit, zoom, activeIsMarkdown } from './settings';
 import { afterBootIdle, holdKeys, lazyComponent } from './lazy';
@@ -145,7 +145,9 @@ export function installShell() {
     { id: 'view.zoomIn', title: 'View: Zoom in', keys: isElectron ? ['Mod-=', 'Mod-+', 'Mod-Shift-+', 'Mod-Shift-='] : undefined, when: () => isElectron, run: () => zoom(1) },
     { id: 'view.zoomOut', title: 'View: Zoom out', keys: isElectron ? ['Mod--', 'Mod-_', 'Mod-Shift-_'] : undefined, when: () => isElectron, run: () => zoom(-1) },
     { id: 'view.zoomReset', title: 'View: Reset zoom', keys: isElectron ? ['Mod-0'] : undefined, when: () => isElectron, run: () => zoom(0) },
-    { id: 'app.devtools', title: 'Developer: Toggle developer tools', keys: isElectron ? ['F12'] : undefined, when: () => isElectron, run: () => void app.backend.toggleDevTools?.() },
+    // F12 is Go to definition (the editor's). Developer tools: Electron's own keys — Ctrl+Shift+I; on macOS
+    // Cmd+Alt+I, which the default app menu already handles (bound here too it would toggle twice).
+    { id: 'app.devtools', title: 'Developer: Toggle developer tools', keys: isElectron && !isMac ? ['Mod-Shift-i'] : undefined, displayKeys: isElectron && isMac ? ['Mod-Alt-i'] : undefined, when: () => isElectron, run: () => void app.backend.toggleDevTools?.() },
   ]);
   // Commands without keys (palette / menus only) live in ./shell-commands: no launch bytes.
   addCommandSource(() => import('./shell-commands').then((m) => m.registerShellCommands()));

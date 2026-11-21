@@ -15,6 +15,7 @@ import type { FeedSource } from '../../search/feeder';
 import type { FromWorker, HeadingQuery, NoteItem, ToWorker } from '../../search/protocol';
 import type { Mention } from '../../knowledge/index';
 import type { HeadingHit, SearchDoc, SearchOptions, SearchResponse } from '../../search/types';
+import type { DefHit, DefQuery } from '../../search/defs';
 
 const WATCHDOG_MS = 8000;
 const EDIT_DEBOUNCE_MS = 120;
@@ -648,6 +649,19 @@ class SearchClient {
     this.flushEdits();
     if (!this.shards) return [];
     return (await this.watch(this.shards.headings(q), () => [])) ?? [];
+  }
+
+  /**
+   * Definitions by exact name (Go to definition). Starts the index if needed; `wait` = until it is built,
+   * else from what is indexed so far. null = no shards yet / workers replaced.
+   */
+  async definitions(q: DefQuery, opts: { wait?: boolean } = {}): Promise<DefHit[] | null> {
+    void this.start();
+    if (opts.wait) await this.whenReady();
+    else await this.whenShards();
+    this.flushEdits();
+    if (!this.shards) return null;
+    return this.watch(this.shards.definitions(q), () => null);
   }
 
   private restart() {

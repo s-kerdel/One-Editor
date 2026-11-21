@@ -24,7 +24,7 @@ const SLICE_MS = 8;
 const NOTES_BATCH = 64;
 
 export class SearchHost {
-  readonly engine = new SearchEngine();
+  readonly engine = new SearchEngine({ defs: true });
   private latest = new Map<string, number>();
   private channelOf = new Map<number, string>();
   private cancelled = new Set<number>();
@@ -49,6 +49,7 @@ export class SearchHost {
           else {
             this.building = null;
             this.post({ type: 'indexed', gen: msg.gen, count: this.engine.size, ms });
+            this.drainDefs();
           }
           break;
         }
@@ -62,12 +63,14 @@ export class SearchHost {
           if (msg.done) {
             this.building = null;
             this.post({ type: 'indexed', gen: msg.gen, count: this.engine.size, ms: b.ms });
+            this.drainDefs();
           }
           break;
         }
         case 'upsert': {
           this.engine.upsertMany(msg.docs);
           if (msg.notes) this.postNotes(msg.docs);
+          this.drainDefs();
           break;
         }
         case 'remove':
@@ -76,12 +79,16 @@ export class SearchHost {
           break;
         case 'rename':
           this.engine.rename(msg.from, msg.to);
+          this.drainDefs();
           break;
         case 'cancel':
           this.cancelled.add(msg.id);
           break;
         case 'headings':
           this.post({ type: 'headings', id: msg.id, hits: this.engine.headings(msg.q.query, msg.q) });
+          break;
+        case 'defs':
+          this.post({ type: 'defs', id: msg.id, hits: this.engine.definitions(msg.q) });
           break;
         case 'search':
           this.latest.set(msg.channel, msg.id);
@@ -138,6 +145,26 @@ export class SearchHost {
     } catch (err) {
       this.post({ type: 'error', id: 'id' in msg ? (msg as { id: number }).id : undefined, message: String((err as Error)?.message ?? err) });
     }
+  }
+
+  private draining = false;
+
+  /**
+   * Symbol index: definitions of queued code files, a slice at a time once a build is done (it is not on
+   * the build's critical path; searches interleave). A definitions query finishes the queue itself.
+   */
+  private drainDefs() {
+    if (this.draining || this.building || !this.engine.pendingDefs) return;
+    this.draining = true;
+    void (async () => {
+      try {
+        while (!this.building && !this.engine.flushDefs(SLICE_MS)) await this.yieldFn();
+      } catch (err) {
+        console.warn('[search] symbol index', err);
+      } finally {
+        this.draining = false;
+      }
+    })();
   }
 
   /** Note metadata in small messages: the UI thread deserialises each one in a single task. */

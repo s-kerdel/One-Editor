@@ -4,6 +4,7 @@ import type { CorpusStats, RankedResult, VocabInfo } from './engine';
 import type { FeedSource } from './feeder';
 import type { NoteInfo } from '../knowledge/extract';
 import type { Mention, Snippet } from '../knowledge/index';
+import type { DefHit, DefQuery } from './defs';
 
 /** Note metadata a shard extracted while indexing (the knowledge index needs no text). */
 export interface NoteItem {
@@ -18,6 +19,8 @@ export interface HeadingQuery {
   limit?: number;
   path?: string;
   fileQuery?: string;
+  /** Code symbols too (Ctrl+T / palette `#`). */
+  symbols?: boolean;
 }
 
 export type ToWorker =
@@ -33,6 +36,8 @@ export type ToWorker =
   | { type: 'search'; id: number; channel: string; query: string; options: SearchOptions }
   | { type: 'cancel'; id: number }
   | { type: 'headings'; id: number; q: HeadingQuery }
+  /** Definitions by exact name (symbol index, Go to definition). */
+  | { type: 'defs'; id: number; q: DefQuery }
   // ---- sharded search (see shards.ts): match on every shard, then rank with corpus-wide stats ----
   /** Phase 1: find this shard's candidates (kept until ranked or superseded on the channel).
    *  `fuzzy`: run the typo-corrected query, variants decided from the merged vocabulary. */
@@ -63,6 +68,7 @@ export type FromWorker =
   | { type: 'result'; id: number; response: SearchResponse }
   | { type: 'cancelled'; id: number }
   | { type: 'headings'; id: number; hits: HeadingHit[] }
+  | { type: 'defs'; id: number; hits: DefHit[] }
   | { type: 'matched'; id: number; df: number[]; totalFiles: number; totalMatches: number; N: number; totalLen: number }
   | { type: 'ranked'; id: number; results: RankedResult[] }
   | { type: 'vocab'; id: number; info: VocabInfo[] }
