@@ -12,8 +12,8 @@ export function updateCheckBridge(ipc: IpcRendererLike) {
   return {
     /** The cached result: no request. */
     status: () => ipc.invoke(CH.status),
-    /** force = "Check now"; otherwise main checks only when the last one is a week old. Refused while switched off. */
-    check: (force?: boolean) => ipc.invoke(CH.check, force === true),
+    /** manual = "Check now" (always goes); otherwise automatic: refused while switched off, else weekly. */
+    check: (manual?: boolean) => ipc.invoke(CH.check, manual === true),
     onChange: (cb: (status: unknown) => void) => {
       const fn = (_e: unknown, payload: unknown) => cb(payload);
       ipc.on(CH.changed, fn);

@@ -18,8 +18,9 @@ export const processesOpen = signal(false);
 export const processesHeight = signal(PROCESSES_DEFAULT);
 /** Set by the explorer's chunk when it loads (keeps its import out of startup code). */
 export const processDock = signal<ComponentType | null>(null);
-/** Zen mode (app/zen.tsx): null = off; else the layout to restore on leaving. A panel that opens itself
- *  (not on a user action) must not while this is set. */
+/** Zen mode (app/zen.tsx): null = off; else the layout to restore on leaving. While set, the sidebar and the
+ *  file overview are strips; showing one (sidebarVisible / overviewVisible) is a peek over the text. A panel
+ *  that opens itself (not on a user action) must not while this is set. */
 export interface ZenSaved {
   sidebarVisible: boolean;
   sidebarPanel: string;
@@ -29,8 +30,11 @@ export interface ZenSaved {
   terminal?: boolean;
 }
 export const zen = signal<ZenSaved | null>(null);
-/** `<html data-zen>` (theme-boot.js → skeleton): 'on', 'on status' when zen keeps the status bar, '' = off. */
-export const zenAttr = (keepStatus: boolean) => (zen.value ? (keepStatus ? 'on status' : 'on') : '');
+/** `<html data-zen>` (theme-boot.js → skeleton): 'on', + ' status' when zen keeps the status bar, + ' ov' when
+ *  the file overview has its strip (it was open before zen); '' = off. */
+export const zenAttr = (keepStatus: boolean) => (zen.value ? `on${keepStatus ? ' status' : ''}${zen.value.overviewVisible ? ' ov' : ''}` : '');
+/** Shortcuts shown in the sidebar panel switchers' tooltips (shelf pills, classic icon bar, zen strip). */
+export const PANEL_KEYS: Record<string, string> = { search: 'Mod-Shift-f', outline: 'Mod-Alt-o', backlinks: 'Mod-Alt-l' };
 /** Editor share of the split view. */
 export const splitRatio = signal(0.5);
 /** Expanded folders in the file tree. */

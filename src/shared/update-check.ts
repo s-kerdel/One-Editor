@@ -21,6 +21,8 @@ export const EOL_WARN_DAYS = 45;
 /** Detail requests per check (one per distinct advisory); further hits are listed without details. */
 export const MAX_DETAILS = 25;
 export const MAX_FINDINGS = 100;
+/** Rows a stored summary may list (a build ships ~250): a doctored file stays small. */
+export const MAX_SUMMARY_PACKAGES = 2000;
 
 export type Severity = 'CRITICAL' | 'HIGH' | 'MODERATE' | 'LOW' | 'UNKNOWN';
 /** `high` = red, `warn` = orange, `info` = listed in the panel only (no shield). */
@@ -51,9 +53,44 @@ export interface UpdateStatus {
   lastAttempt: number | null;
   checking: boolean;
   findings: Finding[];
+  /** What the last attempt looked at; null = none yet, or it was about another build. */
+  summary: CheckSummary | null;
 }
 
-export const NO_STATUS: UpdateStatus = { lastChecked: null, lastError: null, lastAttempt: null, checking: false, findings: [] };
+/** The running Electron's release line, as endoflife.date lists it. */
+export interface ElectronSummary {
+  /** The Electron this build runs. */
+  version: string;
+  /** Newest patch of that major; null = the major is not listed. */
+  latest: string | null;
+  /** End of support (YYYY-MM-DD); null = not announced. */
+  eol: string | null;
+  /** false = out of support; null = unknown (the major is not listed). */
+  supported: boolean | null;
+  /** A newer major, when there is one. */
+  newestMajor: string | null;
+}
+
+/** One package sent to OSV and how many advisories OSV has for exactly that version. */
+export interface PackageCheck {
+  name: string;
+  version: string;
+  vulns: number;
+}
+
+/** One attempt, half by half: a failed half has no data, only its error (plain words). */
+export interface CheckSummary {
+  /** When it started (ms) and how long it took. */
+  at: number;
+  ms: number;
+  electron: ElectronSummary | null;
+  electronError: string | null;
+  /** Everything sent to OSV, Electron first. */
+  packages: PackageCheck[] | null;
+  packagesError: string | null;
+}
+
+export const NO_STATUS: UpdateStatus = { lastChecked: null, lastError: null, lastAttempt: null, checking: false, findings: [], summary: null };
 
 export type UpdateReply<T> = { ok: true; result: T } | { ok: false; error: { code: string; message: string } };
 
@@ -97,6 +134,11 @@ export function compareVersions(a: string, b: string): number {
 
 export const majorOf = (v: string): string => String(parseVersion(v)?.[0] ?? '');
 
+/** A version as the build's lockfile has it (parseShipped, a stored summary). */
+export const isShippedVersion = (v: unknown): v is string => typeof v === 'string' && v.length <= 40 && /^\d+\.\d+\.\d+[0-9A-Za-z.+-]*$/.test(v);
+/** A version taken from a reply: plain release or prerelease, nothing after it (it ends up in a link). */
+const isReleaseVersion = (v: unknown): v is string => typeof v === 'string' && v.length <= 40 && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(v);
+
 // ---- schedule ---------------------------------------------------------------------------------------
 
 /** The automatic check after launch: only when switched on and the last complete check is a week old. */
@@ -112,6 +154,9 @@ export function isCheckDue(enabled: boolean, lastChecked: number | null, now: nu
 const str = (v: unknown, max = 200): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
 const LEVEL_ORDER: Record<FindingLevel, number> = { high: 0, warn: 1, info: 2 };
 const ELECTRON_RELEASES = 'https://releases.electronjs.org';
+/** The two sources as the UI links them: fixed pages, nothing from a reply. */
+export const EOL_PAGE = 'https://endoflife.date/electron';
+export const OSV_PAGE = 'https://osv.dev/';
 
 /** Days until `date` (YYYY-MM-DD), rounded up; ≤ 0 = that day has come. NaN when it is no date. */
 export function daysUntil(date: string, now: number): number {
@@ -119,51 +164,67 @@ export function daysUntil(date: string, now: number): number {
   return Math.ceil((t - now) / 86_400_000);
 }
 
-/** Findings for the running Electron from an endoflife.date `products/electron` reply. */
-export function electronFindings(body: unknown, running: string, now: number): Finding[] {
+/** What endoflife.date says about the running Electron's major. A wrong shape is an error. */
+export function electronSummary(body: unknown, running: string, now: number): ElectronSummary {
   const releases = (body as { result?: { releases?: unknown } } | null)?.result?.releases;
   if (!Array.isArray(releases)) throw new Error('Unexpected reply from endoflife.date');
   const major = majorOf(running);
-  const out: Finding[] = [];
-  const rel = releases.find((r) => r && typeof r === 'object' && (r as { name?: unknown }).name === major) as { eolFrom?: unknown; isEol?: unknown; latest?: { name?: unknown; link?: unknown } } | undefined;
-  if (rel) {
-    const latest = str(rel.latest?.name, 40);
-    if (parseVersion(latest) && majorOf(latest) === major && compareVersions(latest, running) > 0) {
-      out.push({
-        id: 'electron-patch',
-        kind: 'electron-patch',
-        level: 'warn',
-        pkg: 'electron',
-        version: running,
-        fixed: latest,
-        summary: `Electron ${latest} is out: patches carry Chromium security fixes.`,
-        // Built from the version, not taken from the reply: only Electron's own release page is opened.
-        url: `${ELECTRON_RELEASES}/release/v${latest}`,
-      });
-    }
-    const eol = str(rel.eolFrom, 20);
-    const days = daysUntil(eol, now);
-    const ended = rel.isEol === true || days <= 0;
-    if (ended || days <= EOL_WARN_DAYS) {
-      out.push({
-        id: 'electron-eol',
-        kind: 'electron-eol',
-        level: 'warn',
-        pkg: 'electron',
-        version: running,
-        fixed: null,
-        summary: ended
-          ? `Electron ${major} is out of support${Number.isFinite(days) ? ` since ${eol}` : ''}: no more security fixes. Move to a newer major.`
-          : `Support for Electron ${major} ends ${eol} (${days} day${days === 1 ? '' : 's'}). Plan the move to a newer major.`,
-        url: 'https://endoflife.date/electron',
-      });
-    }
-  }
+  const rel = releases.find((r) => r && typeof r === 'object' && (r as { name?: unknown }).name === major) as { eolFrom?: unknown; isEol?: unknown; latest?: { name?: unknown } } | undefined;
+  const latest = str(rel?.latest?.name, 40);
+  const eol = str(rel?.eolFrom, 20);
+  const days = daysUntil(eol, now);
   const newest = releases
     .map((r) => str((r as { name?: unknown } | null)?.name, 10))
     .filter((n) => /^\d+$/.test(n) && Number(n) > Number(major))
     .sort((a, b) => Number(b) - Number(a))[0];
-  if (newest) {
+  return {
+    version: running,
+    latest: rel && isReleaseVersion(latest) && majorOf(latest) === major ? latest : null,
+    eol: Number.isFinite(days) ? eol : null,
+    supported: rel ? !(rel.isEol === true || days <= 0) : null,
+    newestMajor: newest ?? null,
+  };
+}
+
+/** Findings for the running Electron from an endoflife.date `products/electron` reply. */
+export function electronFindings(body: unknown, running: string, now: number): Finding[] {
+  return electronFindingsOf(electronSummary(body, running, now), now);
+}
+
+export function electronFindingsOf(e: ElectronSummary, now: number): Finding[] {
+  const { version: running, eol } = e;
+  const major = majorOf(running);
+  const out: Finding[] = [];
+  if (e.latest && compareVersions(e.latest, running) > 0) {
+    out.push({
+      id: 'electron-patch',
+      kind: 'electron-patch',
+      level: 'warn',
+      pkg: 'electron',
+      version: running,
+      fixed: e.latest,
+      summary: `Electron ${e.latest} is out: patches carry Chromium security fixes.`,
+      // Built from the version, not taken from the reply: only Electron's own release page is opened.
+      url: `${ELECTRON_RELEASES}/release/v${e.latest}`,
+    });
+  }
+  const days = eol ? daysUntil(eol, now) : NaN;
+  const ended = e.supported === false;
+  if (e.supported !== null && (ended || days <= EOL_WARN_DAYS)) {
+    out.push({
+      id: 'electron-eol',
+      kind: 'electron-eol',
+      level: 'warn',
+      pkg: 'electron',
+      version: running,
+      fixed: null,
+      summary: ended
+        ? `Electron ${major} is out of support${eol ? ` since ${eol}` : ''}: no more security fixes. Move to a newer major.`
+        : `Support for Electron ${major} ends ${eol} (${days} day${days === 1 ? '' : 's'}). Plan the move to a newer major.`,
+      url: EOL_PAGE,
+    });
+  }
+  if (e.newestMajor) {
     out.push({
       id: 'electron-major',
       kind: 'electron-major',
@@ -171,7 +232,7 @@ export function electronFindings(body: unknown, running: string, now: number): F
       pkg: 'electron',
       version: running,
       fixed: null,
-      summary: `Electron ${newest} is available. No hurry while ${major} is supported.`,
+      summary: `Electron ${e.newestMajor} is available. No hurry while ${major} is supported.`,
       url: ELECTRON_RELEASES,
     });
   }
@@ -313,6 +374,13 @@ export function vulnFinding(hit: OsvHit, detail: unknown): Finding {
   };
 }
 
+/** One row per package sent to OSV; `vulns` = distinct advisories for exactly that version. */
+export function packageChecks(queries: OsvQuery[], hits: OsvHit[]): PackageCheck[] {
+  const n = new Map<string, number>();
+  for (const h of hits) n.set(`${h.pkg}@${h.version}`, (n.get(`${h.pkg}@${h.version}`) ?? 0) + 1);
+  return queries.map((q) => ({ name: q.package.name, version: q.version, vulns: n.get(`${q.package.name}@${q.version}`) ?? 0 }));
+}
+
 export function sortFindings(list: Finding[]): Finding[] {
   const sev = (f: Finding) => (f.severity ? ['CRITICAL', 'HIGH', 'MODERATE', 'LOW', 'UNKNOWN'].indexOf(f.severity) : 5);
   return [...list].sort((a, b) => LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level] || sev(a) - sev(b) || a.pkg.localeCompare(b.pkg) || a.id.localeCompare(b.id));
@@ -326,13 +394,52 @@ export function stillShipped(findings: Finding[], deps: ShippedDeps): Finding[] 
   return findings.filter((f) => (f.pkg === 'electron' ? f.version === deps.electron : shipped.has(`${f.pkg}@${f.version}`)));
 }
 
+/** A summary describes one build: after an update it no longer says what runs, so it is dropped. */
+export function sameBuild(s: CheckSummary, deps: ShippedDeps): boolean {
+  if (s.electron && s.electron.version !== deps.electron) return false;
+  if (!s.packages) return true;
+  const now = osvQueries(deps);
+  return s.packages.length === now.length && s.packages.every((p, i) => p.name === now[i].package.name && p.version === now[i].version);
+}
+
 const KINDS: FindingKind[] = ['vuln', 'electron-patch', 'electron-eol', 'electron-major'];
+const time = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
+
+/** A stored summary: the same checks as a fresh reply, every field typed and capped. */
+export function parseSummary(raw: unknown): CheckSummary | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const at = time(o.at);
+  if (at === null) return null;
+  const e = (o.electron && typeof o.electron === 'object' ? o.electron : null) as Record<string, unknown> | null;
+  const electron: ElectronSummary | null =
+    e && isShippedVersion(e.version)
+      ? {
+          version: e.version,
+          latest: isReleaseVersion(e.latest) ? e.latest : null,
+          eol: typeof e.eol === 'string' && Number.isFinite(daysUntil(e.eol, 0)) ? e.eol : null,
+          supported: typeof e.supported === 'boolean' ? e.supported : null,
+          newestMajor: typeof e.newestMajor === 'string' && /^\d{1,4}$/.test(e.newestMajor) ? e.newestMajor : null,
+        }
+      : null;
+  let packages: PackageCheck[] | null = null;
+  if (Array.isArray(o.packages)) {
+    packages = [];
+    for (const p of o.packages.slice(0, MAX_SUMMARY_PACKAGES)) {
+      const r = (p && typeof p === 'object' ? p : {}) as Record<string, unknown>;
+      if (!isPackageName(r.name) || !isShippedVersion(r.version)) continue;
+      const vulns = typeof r.vulns === 'number' && Number.isInteger(r.vulns) && r.vulns > 0 ? Math.min(r.vulns, 999) : 0;
+      packages.push({ name: r.name, version: r.version, vulns });
+    }
+  }
+  const ms = typeof o.ms === 'number' && Number.isFinite(o.ms) && o.ms > 0 ? Math.min(Math.round(o.ms), 3_600_000) : 0;
+  return { at, ms, electron, electronError: str(o.electronError, 200) || null, packages, packagesError: str(o.packagesError, 200) || null };
+}
 
 /** update-check.json is only a file: take nothing from it that the UI would not accept from a check. */
 export function parseStatus(raw: unknown): UpdateStatus {
   if (!raw || typeof raw !== 'object') return { ...NO_STATUS };
   const o = raw as Record<string, unknown>;
-  const time = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
   const findings: Finding[] = [];
   for (const f of Array.isArray(o.findings) ? o.findings.slice(0, MAX_FINDINGS) : []) {
     if (!f || typeof f !== 'object') continue;
@@ -344,7 +451,7 @@ export function parseStatus(raw: unknown): UpdateStatus {
     const severity = ([...SEVERITIES, 'UNKNOWN'] as Severity[]).find((s) => s === r.severity);
     findings.push({ id: str(r.id, 200), kind, level, pkg: r.pkg, version: str(r.version, 40), fixed: str(r.fixed, 40) || null, ...(severity ? { severity } : {}), summary: str(r.summary, 200), url });
   }
-  return { lastChecked: time(o.lastChecked), lastError: str(o.lastError, 200) || null, lastAttempt: time(o.lastAttempt), checking: false, findings };
+  return { lastChecked: time(o.lastChecked), lastError: str(o.lastError, 200) || null, lastAttempt: time(o.lastAttempt), checking: false, findings, summary: parseSummary(o.summary) };
 }
 
 /** What the shield counts: red and orange rows (a newer major alone stays quiet). */

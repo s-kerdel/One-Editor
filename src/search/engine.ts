@@ -248,7 +248,7 @@ export class SearchEngine {
   }
 
   parse(query: string, opts: SearchOptions): ParsedQuery {
-    return parseQuery(query, { regex: opts.regex, literal: opts.literal, caseSensitive: opts.caseSensitive ?? 'smart' });
+    return parseQuery(query, { regex: opts.regex, literal: opts.literal, caseSensitive: opts.caseSensitive ?? 'smart', noRegex: opts.noRegex });
   }
 
   get corpus(): { N: number; totalLen: number } {
@@ -866,29 +866,57 @@ function buildRows(e: Entry, hits: Hit[], max: number): SearchMatch[] {
   return rows;
 }
 
-function globToRegExp(glob: string): RegExp {
-  let re = '';
+function pathMatcher(value: string): (s: string) => boolean {
+  const v = value.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+  if (/[*?]/.test(v)) return (s) => globSearch(v, s.toLowerCase());
+  return (s) => s.toLowerCase().includes(v);
+}
+
+type GlobTok = 0 | 1 | 2 | string; // 0 = ?, 1 = * (not across /), 2 = ** (anything), else one literal char
+
+/**
+ * Does the glob occur anywhere in `s` (unanchored, like the regex it replaces)? A state-set simulation:
+ * O(|s| × |glob|) whatever the input. The regex form (`[^/]*a[^/]*b…`) backtracked: `path:*a*a*a*b`
+ * over 10k paths could stall a search for minutes.
+ */
+export function globSearch(glob: string, s: string): boolean {
+  const toks: GlobTok[] = [];
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
     if (c === '*') {
       if (glob[i + 1] === '*') {
-        re += '.*';
+        toks.push(2);
         i++;
         if (glob[i + 1] === '/') i++;
-      } else re += '[^/]*';
-    } else if (c === '?') re += '[^/]';
-    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      } else toks.push(1);
+    } else toks.push(c === '?' ? 0 : c);
   }
-  return new RegExp(re, 'i');
-}
-
-function pathMatcher(value: string): (s: string) => boolean {
-  const v = value.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
-  if (/[*?]/.test(v)) {
-    const re = globToRegExp(v);
-    return (s) => re.test(s);
+  const m = toks.length;
+  let cur = new Uint8Array(m + 1);
+  let next = new Uint8Array(m + 1);
+  // A star may match nothing: carry each live state across the stars after it.
+  const close = (a: Uint8Array) => {
+    for (let j = 0; j < m; j++) if (a[j] && (toks[j] === 1 || toks[j] === 2)) a[j + 1] = 1;
+    return a[m] === 1;
+  };
+  cur[0] = 1;
+  if (close(cur)) return true;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    next.fill(0);
+    next[0] = 1; // unanchored: a match may start at any position
+    for (let j = 0; j < m; j++) {
+      if (!cur[j]) continue;
+      const t = toks[j];
+      if (t === 1) {
+        if (ch !== '/') next[j] = 1;
+      } else if (t === 2) next[j] = 1;
+      else if (t === 0 ? ch !== '/' : t === ch) next[j + 1] = 1;
+    }
+    if (close(next)) return true;
+    [cur, next] = [next, cur];
   }
-  return (s) => s.toLowerCase().includes(v);
+  return false;
 }
 
 function buildFileFilter(filters: Filter[]): (e: Entry) => boolean {

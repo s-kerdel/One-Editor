@@ -40,7 +40,8 @@ const [outDir] = await packager({
   // node-pty must be real files: its .node binaries, ConPTY's OpenConsole.exe and its worker scripts.
   // The web server + the UI it serves are real files too: the start scripts run them with the exe in
   // Node mode (ELECTRON_RUN_AS_NODE), where loading ESM from inside an asar is not reliable.
-  asar: { unpackDir: '{node_modules/node-pty,node_modules/node-pty/**,dist/server,dist/server/**,dist/renderer,dist/renderer/**}' },
+  // The MCP server too: MCP clients start it the same way (One MCP.cmd / one-mcp.sh, or the exe directly).
+  asar: { unpackDir: '{node_modules/node-pty,node_modules/node-pty/**,dist/server,dist/server/**,dist/renderer,dist/renderer/**,dist/mcp,dist/mcp/**}' },
   overwrite: true,
   prune: false, // nothing to prune: the staged app has no package dependencies (node-pty is staged by hand)
   derefSymlinks: true,
@@ -72,14 +73,14 @@ if (platform !== 'darwin' && fs.existsSync(locales)) {
 writeLicences(root, outDir, { product: 'One' });
 if (platform === 'linux') {
   fs.copyFileSync(path.join(root, 'build/icon.png'), path.join(outDir, 'one.png'));
-  // Browser mode launcher (start-web.sh).
+  // Browser mode launcher (start-web.sh) and the MCP server's stdio launcher (one-mcp.sh).
   for (const f of fs.readdirSync(path.join(root, 'build/linux'))) {
     fs.copyFileSync(path.join(root, 'build/linux', f), path.join(outDir, f));
     fs.chmodSync(path.join(outDir, f), 0o755);
   }
 }
 if (platform === 'win32') {
-  // Optional Explorer integration (HKCU, no admin) + "Start web server.cmd" for browser mode.
+  // Optional Explorer integration (HKCU, no admin) + "Start web server.cmd" for browser mode + "One MCP.cmd" (stdio).
   for (const f of fs.readdirSync(path.join(root, 'build/windows'))) fs.copyFileSync(path.join(root, 'build/windows', f), path.join(outDir, f));
 }
 

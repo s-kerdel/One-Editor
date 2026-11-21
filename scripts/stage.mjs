@@ -1,4 +1,4 @@
-// Stages a minimal production app folder:  <out>/package.json + <out>/dist/{main,renderer,server}
+// Stages a minimal production app folder:  <out>/package.json + <out>/dist/{main,renderer,server,mcp}
 // + <out>/node_modules/node-pty (the one native module: runtime JS + the target's binaries only).
 // Everything else is bundled, so packages ship exactly what runs.
 //   node scripts/stage.mjs [--out release/app] [--platform win32|linux|darwin] [--arch x64|arm64]

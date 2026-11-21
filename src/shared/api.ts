@@ -268,6 +268,9 @@ export interface BackendApi {
   readonly frame?: 'integrated' | 'native';
   /** Integrated frame: colour/height of the native window controls (Window Controls Overlay). */
   setTitleBarOverlay?(o: { color: string; symbolColor: string; height: number }): void;
+  /** Zen mode: hold the window full screen (true) / give it back (false). Main restores the state from before
+   *  and never leaves a full screen the user had already (main/zen-fullscreen.ts). */
+  zenFullScreen?(on: boolean): void;
   /** Restart the app through the normal close flow (unsaved changes are flushed / asked about first). */
   relaunch?(): Promise<void>;
   /** How Chromium uses the GPU in this window ("Developer: Show GPU status"); null if unavailable. */

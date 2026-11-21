@@ -1,11 +1,13 @@
 // "Security updates" (main process): the opt-in check for a newer Electron patch, end of support and
 // known vulnerabilities in what this build ships.
-//  - Off by default: while the setting is off, check() refuses and no request is ever made.
+//  - "Check now" (manual: one boolean from our own page) always goes: the user clicked. The automatic
+//    check (once after launch, the 7-day rule) needs the setting on, read here, never the page's word.
 //  - Two hosts only (shared/update-check.ts UPDATE_HOSTS); every URL is checked before it is fetched.
 //  - Sent: GET endoflife.date (nothing about this app) and POST api.osv.dev with package names + versions
 //    from dist/main/shipped-deps.json. No ids, no paths, no cookies; main.ts gives it a session of its own.
 //  - No timer: the renderer asks once after launch (and on "Check now"); failures are quiet.
-//  - The result is cached in <app data>/update-check.json, so the shield shows at launch without a request.
+//  - The result (findings + a summary of what was checked) is cached in <app data>/update-check.json,
+//    so the shield and the Settings panel show at launch without a request.
 // No electron import: main.ts injects fetch / files (unit-testable).
 import {
   EOL_PATH,
@@ -14,15 +16,20 @@ import {
   OSV_BATCH_PATH,
   OSV_VULN_PATH,
   UPDATE_CHECK_CHANNELS as CH,
-  electronFindings,
+  electronFindingsOf,
+  electronSummary,
   isCheckDue,
   isPackageName,
+  isShippedVersion,
   osvHits,
   osvQueries,
+  packageChecks,
   parseStatus,
+  sameBuild,
   sortFindings,
   stillShipped,
   vulnFinding,
+  type CheckSummary,
   type Finding,
   type ShippedDeps,
   type UpdateReply,
@@ -43,7 +50,7 @@ export interface ResponseLike {
 }
 
 export interface UpdateCheckDeps {
-  /** The setting `updates.check` as main reads it (never the page's word). */
+  /** The setting `updates.check` (automatic checks) as main reads it (never the page's word). */
   isEnabled(): Promise<boolean> | boolean;
   electronVersion: string;
   /** dist/main/shipped-deps.json, parsed; null when the build has none (then only Electron is checked). */
@@ -77,7 +84,7 @@ export function parseShipped(raw: unknown, electron: string): ShippedDeps {
   const packages: ShippedDeps['packages'] = [];
   for (const p of Array.isArray(list) ? list : []) {
     const { name, version } = (p ?? {}) as { name?: unknown; version?: unknown };
-    if (isPackageName(name) && typeof version === 'string' && /^\d+\.\d+\.\d+[0-9A-Za-z.+-]*$/.test(version) && version.length <= 40) packages.push({ name, version });
+    if (isPackageName(name) && isShippedVersion(version)) packages.push({ name, version });
   }
   // The Electron that runs, not the one the list was written for.
   return { electron, packages };
@@ -121,17 +128,23 @@ export class UpdateCheckService {
         raw = await this.deps.readState();
       } catch {}
       const s = parseStatus(raw);
-      this.s ??= { ...s, findings: stillShipped(s.findings, await this.shipped()) };
+      const deps = await this.shipped();
+      this.s ??= { ...s, findings: stillShipped(s.findings, deps), summary: s.summary && sameBuild(s.summary, deps) ? s.summary : null };
     }
-    return { ...this.s, checking: !!this.running, findings: this.s.findings.map((f) => ({ ...f })) };
+    return { ...this.s, checking: !!this.running, findings: this.s.findings.map((f) => ({ ...f })), summary: this.s.summary && structuredClone(this.s.summary) };
   }
 
-  /** `force` = "Check now" / just switched on; otherwise only when a week has passed. One at a time. */
-  async check(force: unknown): Promise<UpdateStatus> {
-    if (!(await this.deps.isEnabled())) throw new UpdateCheckError('EDISABLED', 'Security update checks are switched off');
+  /**
+   * `manual` = "Check now": always goes, whatever the setting (the user clicked; it sends what an automatic
+   * check sends). Otherwise automatic: refused while the setting is off, and only when a week has passed.
+   * One at a time.
+   */
+  async check(manual: unknown): Promise<UpdateStatus> {
+    const isManual = manual === true;
+    if (!isManual && !(await this.deps.isEnabled())) throw new UpdateCheckError('EDISABLED', 'Automatic security update checks are switched off');
     const cur = await this.status();
     if (this.running) return this.running;
-    if (force !== true && !isCheckDue(true, cur.lastChecked, this.now())) return cur;
+    if (!isManual && !isCheckDue(true, cur.lastChecked, this.now())) return cur;
     this.running = this.run().finally(() => (this.running = null));
     this.deps.onChange(await this.status());
     const done = await this.running;
@@ -147,13 +160,22 @@ export class UpdateCheckService {
     const [electron, libs] = await Promise.allSettled([this.checkElectron(deps.electron, now), this.checkLibraries(deps)]);
     const failed = [electron, libs].find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined;
     const keep = (vuln: boolean) => prev.findings.filter((f) => (f.kind === 'vuln') === vuln);
-    const findings = sortFindings([...(electron.status === 'fulfilled' ? electron.value : keep(false)), ...(libs.status === 'fulfilled' ? libs.value : keep(true))]).slice(0, MAX_FINDINGS);
-    this.s = { lastChecked: failed ? prev.lastChecked : now, lastAttempt: now, lastError: failed ? reason(failed.reason) : null, checking: false, findings };
+    const findings = sortFindings([...(electron.status === 'fulfilled' ? electron.value.findings : keep(false)), ...(libs.status === 'fulfilled' ? libs.value.findings : keep(true))]).slice(0, MAX_FINDINGS);
+    // What this attempt looked at, for Settings. Local only: never sent anywhere.
+    const summary: CheckSummary = {
+      at: now,
+      ms: Math.max(0, this.now() - now),
+      electron: electron.status === 'fulfilled' ? electron.value.summary : null,
+      electronError: electron.status === 'rejected' ? reason(electron.reason) : null,
+      packages: libs.status === 'fulfilled' ? libs.value.packages : null,
+      packagesError: libs.status === 'rejected' ? reason(libs.reason) : null,
+    };
+    this.s = { lastChecked: failed ? prev.lastChecked : now, lastAttempt: now, lastError: failed ? reason(failed.reason) : null, checking: false, findings, summary };
     try {
       const { checking: _c, ...file } = this.s;
       await this.deps.writeState({ v: 1, ...file });
     } catch {}
-    return { ...this.s, findings: findings.map((f) => ({ ...f })) };
+    return { ...this.s, findings: findings.map((f) => ({ ...f })), summary: structuredClone(summary) };
   }
 
   private async json(url: string, body?: unknown): Promise<unknown> {
@@ -175,11 +197,12 @@ export class UpdateCheckService {
     }
   }
 
-  private async checkElectron(running: string, now: number): Promise<Finding[]> {
-    return electronFindings(await this.json(this.deps.endpoints.eol + EOL_PATH), running, now);
+  private async checkElectron(running: string, now: number) {
+    const summary = electronSummary(await this.json(this.deps.endpoints.eol + EOL_PATH), running, now);
+    return { summary, findings: electronFindingsOf(summary, now) };
   }
 
-  private async checkLibraries(deps: ShippedDeps): Promise<Finding[]> {
+  private async checkLibraries(deps: ShippedDeps): Promise<{ packages: CheckSummary['packages']; findings: Finding[] }> {
     const queries = osvQueries(deps);
     const hits = osvHits(queries, await this.json(this.deps.endpoints.osv + OSV_BATCH_PATH, { queries }));
     // One detail request per advisory (it may hit several packages), capped; a failed one still gives a row.
@@ -195,7 +218,7 @@ export class UpdateCheckService {
       }
     };
     await Promise.all(Array.from({ length: Math.min(DETAIL_PARALLEL, ids.length) }, worker));
-    return hits.map((h) => vulnFinding(h, details.get(h.id) ?? null));
+    return { packages: packageChecks(queries, hits), findings: hits.map((h) => vulnFinding(h, details.get(h.id) ?? null)) };
   }
 }
 
@@ -203,7 +226,7 @@ interface IpcLike {
   handle(channel: string, fn: (e: unknown, ...args: unknown[]) => unknown): void;
 }
 
-/** updates:* handlers: our own UI only; `check` takes one boolean. */
+/** updates:* handlers: our own UI only; `check` takes one boolean (true = "Check now"). */
 export function registerUpdateCheckIpc(ipc: IpcLike, svc: UpdateCheckService, o: { isTrusted: (e: unknown) => boolean }): void {
   const denied: UpdateReply<never> = { ok: false, error: { code: 'EACCES', message: 'Untrusted sender' } };
   const guard = (fn: (...a: unknown[]) => Promise<UpdateStatus>) => async (e: unknown, ...a: unknown[]): Promise<UpdateReply<UpdateStatus>> => {
@@ -215,5 +238,5 @@ export function registerUpdateCheckIpc(ipc: IpcLike, svc: UpdateCheckService, o:
     }
   };
   ipc.handle(CH.status, guard(() => svc.status()));
-  ipc.handle(CH.check, guard((force) => svc.check(force === true)));
+  ipc.handle(CH.check, guard((manual) => svc.check(manual === true)));
 }

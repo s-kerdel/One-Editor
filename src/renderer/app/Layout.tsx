@@ -7,11 +7,11 @@ import { TabBar, TabDocTools } from './Tabs';
 import { EditorArea } from './EditorArea';
 import { StatusBar, StatusDocStart, StatusDocEnd } from './StatusBar';
 import { afterBootIdle, lazyComponent, onIdle } from './lazy';
-import { ShelfTop, ShelfFoot, ShelfReveal } from './Shelf';
+import { ShelfTop, ShelfFoot, ShelfReveal, ZenButton } from './Shelf';
 import { loadClassic, setClassicPrimer } from './classic-loader';
 import { panelOpen as terminalOpen, TerminalPanelSlot } from '../terminal/install';
 import { OverviewPanelLazy as OverviewPanel } from '../overview';
-import { ZenBar, zenKeepsStatus } from './zen';
+import { ZenStrip, zenKeepsStatus } from './zen';
 
 const ActivityBar = lazyComponent(() => loadClassic().then((m) => m.ActivityBar));
 
@@ -94,16 +94,16 @@ function Sash({ of }: { of: keyof typeof SASHES }) {
   );
 }
 
-function Sidebar({ classic, zen }: { classic: boolean; zen: boolean }) {
+function Sidebar({ classic, peek }: { classic: boolean; peek?: boolean }) {
   const panels = app.panels.value;
   const current = panels.find((p) => p.id === app.sidebarPanel.value) ?? panels[0];
   const Panel = current?.component;
   return (
-    <aside class={`se-sidebar${classic ? '' : ' se-shelf'}`} style={{ width: `${ui.sidebarWidth.value}px` }} data-panel={current?.id} aria-label={current?.title}>
-      {/* Zen ("Keep the file tree"): just the panel, without the shelf's chrome. */}
-      {!classic && !zen && <ShelfTop />}
+    <aside class={`se-sidebar${classic ? '' : ' se-shelf'}${peek ? ' se-zen-peek' : ''}`} style={{ width: `${ui.sidebarWidth.value}px` }} data-panel={current?.id} aria-label={current?.title}>
+      {/* Zen peek: just the panel; its strip has the panel switcher and the zen toggle. */}
+      {!classic && !peek && <ShelfTop />}
       <div class="se-sidebar-body">{Panel && <Panel />}</div>
-      {!classic && !zen && <ShelfFoot />}
+      {!classic && !peek && <ShelfFoot />}
       <Sash of="sidebar" />
     </aside>
   );
@@ -113,25 +113,29 @@ export function Layout() {
   const Overlay = app.overlay.value;
   const ProcessDock = ui.processDock.value;
   const classic = isClassic();
-  // Zen (app/zen.tsx): no tab strip, activity bar or status bar (unless kept); panels are closed by their own state.
-  const zen = !!ui.zen.value;
+  // Zen (app/zen.tsx): tabs stay; the sidebar and the overview (if it was open) are strips at the edges, a
+  // shown panel is a peek over the text; no activity bar, status bar only if kept.
+  const zen = ui.zen.value;
+  const ovStrip = !!zen?.overviewVisible;
   const status = !zen || zenKeepsStatus();
+  const sidebar = app.sidebarVisible.value;
   return (
     // frame-integrated: the desktop window has no OS title bar; the tab strip is the title bar (styles/app.css).
-    <div class={`se-root theme-${app.settings.value.theme} ${classic ? 'ui-classic' : 'ui-shelf'}${app.backend?.frame === 'integrated' ? ' frame-integrated' : ''}${ui.overviewVisible.value ? ' ov-open' : ''}${zen ? ' se-zen' : ''}`} data-os={app.backend?.os}>
-      <div class={`se-main${app.sidebarVisible.value ? '' : ' shelf-hidden'}`}>
-        {classic && !zen && <ActivityBar />}
-        {app.sidebarVisible.value && <Sidebar classic={classic} zen={zen} />}
+    <div class={`se-root theme-${app.settings.value.theme} ${classic ? 'ui-classic' : 'ui-shelf'}${app.backend?.frame === 'integrated' ? ' frame-integrated' : ''}${ui.overviewVisible.value && !zen ? ' ov-open' : ''}${zen ? ` se-zen${ovStrip ? ' zen-ov' : ''}` : ''}`} data-os={app.backend?.os}>
+      <div class={`se-main${sidebar ? '' : ' shelf-hidden'}`}>
+        {zen ? (
+          <ZenStrip>
+            <ZenButton cls="se-zen-strip-btn" size={18} />
+          </ZenStrip>
+        ) : (
+          classic && <ActivityBar />
+        )}
+        {sidebar && !zen && <Sidebar classic={classic} />}
         <section class="se-content">
           <div class="se-topline">
-            {zen ? (
-              <ZenBar />
-            ) : (
-              <>
-                {!app.sidebarVisible.value && !classic && <ShelfReveal />}
-                <TabBar />
-              </>
-            )}
+            {!sidebar && !classic && !zen && <ShelfReveal />}
+            {/* Zen: leave it from the top right too (full screen has no window controls there). */}
+            <TabBar end={zen && <ZenButton cls="se-width-btn" />} />
           </div>
           <EditorArea />
           {/* "Developer: Process explorer", docked (non-modal); its chunk fills ui.processDock when loaded. */}
@@ -140,13 +144,16 @@ export function Layout() {
           {terminalOpen.value && <TerminalPanelSlot />}
           {!classic && status && <StatusBar />}
         </section>
-        {/* File overview (Ctrl+Alt+B): right column, mirroring the shelf. */}
+        {/* Zen peek: after the card in the DOM (drag regions: the last box wins), over the text. */}
+        {sidebar && zen && <Sidebar classic={classic} peek />}
+        {/* File overview (Ctrl+Alt+B): right column, mirroring the shelf (zen: a peek). */}
         {ui.overviewVisible.value && (
-          <aside class="se-overview" style={{ width: `${ui.overviewWidth.value}px` }} aria-label="File overview">
+          <aside class={`se-overview${zen ? ' se-zen-peek' : ''}`} style={{ width: `${ui.overviewWidth.value}px` }} aria-label="File overview">
             <OverviewPanel />
             <Sash of="overview" />
           </aside>
         )}
+        {ovStrip && <ZenStrip right />}
       </div>
       {/* Classic keeps the full-width status bar; the shelf puts it inside the editor card. */}
       {classic && status && <StatusBar />}

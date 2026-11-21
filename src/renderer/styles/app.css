@@ -380,8 +380,8 @@ html[data-folders='one'] .se-root .se-ficon-folder { color: var(--folder-color, 
 .se-crumb:hover { background: var(--bg-hover); color: var(--text); }
 .se-crumb.file { color: var(--text); }
 .se-status-item { display: inline-flex; align-items: center; gap: 5px; height: calc(var(--status-h) - 4px); padding: 0 7px; border-radius: var(--radius-sm); }
-.se-status-btn, .se-status-sidebar { border: 0; background: transparent; color: inherit; font-size: 12px; }
-.se-status-btn:hover, .se-status-sidebar:hover, .se-status-btn[aria-expanded='true'] { background: var(--bg-hover); color: var(--text); }
+.se-status-btn { border: 0; background: transparent; color: inherit; font-size: 12px; }
+.se-status-btn:hover, .se-status-btn[aria-expanded='true'] { background: var(--bg-hover); color: var(--text); }
 .se-status-ws { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
 .se-status-spacer { flex: 1; }
 .se-status-sel { color: var(--text-faint); }
@@ -458,19 +458,7 @@ html.se-dragging .frame-integrated .se-topline { -webkit-app-region: no-drag; ap
 .frame-integrated.ui-shelf[data-os='darwin'] .shelf-hidden .se-topline { padding-left: max(0px, env(titlebar-area-x, 0px) - 8px); }
 .frame-integrated.ui-classic[data-os='darwin'] .shelf-hidden .se-topline { padding-left: max(0px, env(titlebar-area-x, 0px) - 48px); }
 
-/* ---------- zen mode (View: Toggle zen mode, app/zen.tsx) ----------
-   Only the text: the card goes flush; the tab strip's place stays as an empty band — the window's drag
-   area with the integrated frame (the .se-topline rules above) — and shows "Exit zen" on hover. */
-.se-zen .se-content, .se-zen .se-main.shelf-hidden .se-content { margin: 0; border-width: 0; border-radius: 0; box-shadow: none; }
-.se-zen .se-topline { background: var(--bg); }
-.se-zen-bar { flex: 1; display: flex; align-items: center; justify-content: flex-end; height: 28px; padding: 0 8px; }
-/* Same height as the tab strip above its rule: the window controls keep their size. */
-.frame-integrated .se-zen-bar { height: calc(var(--tab-h) - 1px); padding-right: calc(var(--wco-right) + 8px); }
-.frame-integrated.ov-open .se-zen-bar { padding-right: 8px; }
-.se-zen-exit { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 4px 0 10px; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-muted); font-size: 12px; opacity: 0; transition: opacity 0.15s; }
-.se-zen-bar:hover .se-zen-exit, .se-zen-exit:focus-visible { opacity: 1; }
-.se-zen-exit:hover { background: var(--bg-hover); color: var(--text); }
-.se-zen-exit kbd { font-size: 10px; line-height: 14px; }
+/* zen mode: app/zen.css (lazy, with the zen chunk) */
 
 @keyframes se-fade { from { opacity: 0; } }
 @keyframes se-pop { from { opacity: 0; transform: translateY(-4px) scale(0.985); } }

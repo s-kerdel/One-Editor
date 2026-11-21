@@ -1,6 +1,7 @@
 // "Security updates" in the real desktop app, against a local stub of the two services (never the internet):
-// off by default = no request at all; switch on → one check → shield + findings; the cache shows the shield
-// at the next launch without a request; offline = quiet; "Check now"; findings of versions no longer shipped go.
+// off by default = no automatic request at all; switch on → one check → shield + findings; the cache shows the
+// shield at the next launch without a request; offline = quiet; "Check now" works with the switch off too and
+// shows what was checked (summary); findings of versions no longer shipped go.
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { ElectronApplication, Page } from '@playwright/test';
@@ -100,7 +101,7 @@ const writeUserData = (dir: string, file: string, data: unknown) => {
   fs.writeFileSync(path.join(dir, file), JSON.stringify(data));
 };
 
-test('off by default: no request, no shield; switch on → check → shield and findings; cached for the next launch', async ({ el }) => {
+test('off by default: no automatic request, no shield; switch on → check → shield and findings; cached for the next launch', async ({ el }) => {
   const version = await versionOf(el);
   const stub = await startStub(version);
   const [maj, min, pat] = version.split('.').map(Number);
@@ -115,12 +116,12 @@ test('off by default: no request, no shield; switch on → check → shield and 
     await openSettings(page);
     const toggle = page.locator('[data-setting="updates.check"]');
     await expect(toggle).toHaveAttribute('aria-checked', 'false');
-    await expect(page.locator('[data-testid="updates-last-checked"]')).toHaveText('Off. Nothing is sent.');
-    await expect(page.locator('[data-testid="updates-check-now"]')).toBeDisabled();
+    await expect(page.locator('[data-testid="updates-last-checked"]')).toHaveText('Automatic check off: nothing is sent until you click Check now.');
+    await expect(page.locator('[data-testid="updates-check-now"]')).toBeEnabled();
     await expect(page.locator('[data-testid="updates-privacy"]')).toContainText('endoflife.date');
     await expect(page.locator('[data-testid="updates-privacy"]')).toContainText('api.osv.dev');
-    // Even asked directly, main refuses while it is off.
-    const refused = await page.evaluate(() => (window as any).secEditBridge.updates.check(true));
+    // An automatic check, even asked directly: main refuses while it is off.
+    const refused = await page.evaluate(() => (window as any).secEditBridge.updates.check(false));
     expect(refused).toMatchObject({ ok: false, error: { code: 'EDISABLED' } });
     await page.waitForTimeout(1500);
     expect(stub.seen).toEqual([]);
@@ -193,11 +194,12 @@ test('off by default: no request, no shield; switch on → check → shield and 
     await second.page.waitForTimeout(1500);
     expect(stub.seen.length).toBe(before);
 
-    // Switched off again: the shield goes, and nothing is asked.
+    // Switched off again: nothing is asked, and the last check's problems still show (the user decided:
+    // a found problem keeps its shield, automatic check or not).
     await openSettings(second.page);
     await second.page.locator('[data-setting="updates.check"]').click();
     await second.page.keyboard.press('Escape');
-    await expect(shield(second.page)).toHaveCount(0);
+    await expect(shield(second.page)).toHaveText('3');
     expect(stub.seen.length).toBe(before);
   } finally {
     await stub.close();
@@ -210,13 +212,18 @@ test('offline: the launch check fails quietly; Settings says so', async ({ el })
   writeUserData(el.userData, 'settings.json', { 'updates.check': true });
   const { page } = await el.launch([el.ws], { env: { SEC_EDIT_TEST_UPDATE_API: stub.origin } });
   await ready(page);
-  await expect.poll(async () => (await status(page)).lastError, { timeout: 20000 }).toBeTruthy();
+  // Settled = failed and not checking: main's "changed" broadcasts may land after the invoke reply.
+  await expect.poll(async () => { const s = await status(page); return !!s.lastError && !s.checking; }, { timeout: 20000 }).toBe(true);
   expect(await status(page)).toMatchObject({ lastChecked: null, findings: [], checking: false });
   await expect(shield(page)).toHaveCount(0);
   await expect(page.locator('.se-toast')).toHaveCount(0);
   await openSettings(page);
   await expect(page.locator('[data-testid="updates-last-checked"]')).toHaveAttribute('data-state', 'failed');
   await expect(page.locator('[data-testid="updates-last-checked"]')).toContainText('Last check failed');
+  // The summary says what failed, half by half, in plain words.
+  await expect(page.locator('[data-testid="updates-sum-electron"]')).toContainText('Not checked: endoflife.date failed (');
+  await expect(page.locator('[data-testid="updates-sum-packages"]')).toContainText('Not checked: OSV.dev failed (');
+  await expect(page.locator('[data-testid="updates-summary"]')).toContainText('Findings from the last complete check are kept');
 });
 
 test('"Check now" asks again although the last check is fresh; findings of versions no longer shipped are gone', async ({ el }) => {
@@ -254,6 +261,83 @@ test('"Check now" asks again although the last check is fresh; findings of versi
     const saved = JSON.parse(fs.readFileSync(path.join(el.userData, 'update-check.json'), 'utf8'));
     expect(saved.findings.map((f: any) => f.id)).toEqual(['electron-major']);
     expect(Date.now() - saved.lastChecked).toBeLessThan(60_000);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('switch off: "Check now" still checks and shows what was checked; the automatic check stays refused; the summary survives a restart', async ({ el }) => {
+  const version = await versionOf(el);
+  const stub = await startStub(version);
+  stub.vulns = { dompurify: 'GHSA-aaaa-bbbb-cccc' };
+  try {
+    const env = { SEC_EDIT_TEST_UPDATE_API: stub.origin };
+    const first = await el.launch([el.ws], { env });
+    const page = first.page;
+    await ready(page);
+    await page.waitForTimeout(1200);
+    expect(stub.seen).toEqual([]); // off: nothing after launch
+    expect(await page.evaluate(() => (window as any).secEditBridge.updates.check(false))).toMatchObject({ ok: false, error: { code: 'EDISABLED' } });
+    expect(stub.seen).toEqual([]);
+
+    await openSettings(page);
+    const section = page.locator('[data-section="updates"]');
+    await expect(section).toContainText('Check automatically every week');
+    await expect(page.locator('[data-setting="updates.check"]')).toHaveAttribute('aria-checked', 'false');
+    await page.locator('[data-testid="updates-check-now"]').click();
+    await expect(page.locator('[data-testid="updates-last-checked"]')).toContainText('1 finding');
+    expect(stub.seen.map((s) => `${s.method} ${s.url}`).sort()).toEqual(['GET /api/v1/products/electron/', 'POST /v1/querybatch', 'GET /v1/vulns/GHSA-aaaa-bbbb-cccc'].sort());
+    for (const s of stub.seen) expect(s.headers['user-agent']).toBe('update-check');
+    const sent = JSON.parse(stub.seen.find((s) => s.method === 'POST')!.body);
+    expect(Object.keys(sent)).toEqual(['queries']);
+    const n: number = sent.queries.length;
+    expect(n).toBeGreaterThan(50);
+    // Still off: the manual check did not switch anything on.
+    await expect(page.locator('[data-setting="updates.check"]')).toHaveAttribute('aria-checked', 'false');
+
+    // The summary: Electron line by line, the package count, sources and timing.
+    const sum = page.locator('[data-testid="updates-summary"]');
+    await expect(sum.locator('[data-testid="updates-sum-electron"]')).toContainText(`${version} (shipped)`);
+    await expect(sum.locator('[data-testid="updates-sum-patch"]')).toContainText(`${version}: up to date`);
+    await expect(sum.locator('[data-testid="updates-sum-patch"]')).toHaveAttribute('data-mark', 'ok');
+    await expect(sum.locator('[data-testid="updates-sum-support"]')).toContainText('Supported until 2099-01-01');
+    await expect(sum.locator('[data-testid="updates-sum-support"]')).toHaveAttribute('data-mark', 'ok');
+    await expect(sum.locator('[data-testid="updates-sum-packages"]')).toContainText(`${n} packages checked against OSV.dev, 1 with known vulnerabilities`);
+    await expect(sum.locator('[data-testid="updates-sum-packages"]')).toHaveAttribute('data-mark', 'high');
+    await expect(sum.locator('[data-testid="updates-sum-sources"]')).toContainText('endoflife.date (Electron releases) · OSV.dev (known vulnerabilities)');
+    await expect(sum.locator('[data-testid="updates-sum-time"]')).toContainText('took');
+    // Every package, collapsed until asked; the finding first; a filter.
+    const rows = sum.locator('[data-testid="updates-package"]');
+    await expect(rows).toHaveCount(0);
+    await sum.locator('[data-testid="updates-packages-toggle"]').click();
+    await expect(rows).toHaveCount(n);
+    await expect(rows.nth(0)).toHaveAttribute('data-mark', 'high');
+    await expect(rows.nth(0)).toContainText('dompurify');
+    await expect(rows.nth(0)).toContainText('GHSA-aaaa-bbbb-cccc · High · fixed in 999.0.0');
+    await expect(rows.nth(1)).toContainText(`electron${version}OK`);
+    await sum.locator('[data-testid="updates-packages-filter"]').fill('markdown-it');
+    await expect(rows.first()).toContainText('markdown-it');
+    for (const r of await rows.all()) await expect(r).toContainText(/^✓markdown-it.*OK$/);
+    await sum.locator('[data-testid="updates-packages-filter"]').fill('dompurify@');
+    await expect(rows).toHaveCount(1);
+
+    // A manual check that finds a problem shows the shield too, with the automatic check off.
+    await page.keyboard.press('Escape');
+    await expect(shield(page)).toBeVisible();
+    const saved = JSON.parse(fs.readFileSync(path.join(el.userData, 'update-check.json'), 'utf8'));
+    expect(saved.summary.packages).toHaveLength(n);
+    expect(saved.summary.electron.version).toBe(version);
+    await first.app.close();
+
+    // Next launch: the summary comes from the cache; off = nothing is asked.
+    const before = stub.seen.length;
+    const second = await el.launch([el.ws], { env });
+    await ready(second.page);
+    await openSettings(second.page);
+    await expect(second.page.locator('[data-testid="updates-sum-packages"]')).toContainText(`${n} packages checked against OSV.dev, 1 with known vulnerabilities`);
+    await expect(second.page.locator('[data-testid="updates-sum-electron"]')).toContainText(`${version} (shipped)`);
+    await second.page.waitForTimeout(1200);
+    expect(stub.seen.length).toBe(before);
   } finally {
     await stub.close();
   }

@@ -131,29 +131,34 @@ test('folder colours: per top-level folder by default; one colour = classic grey
   await expect.poll(() => folderColours(page)).toEqual(hued.map(() => greyDark));
 });
 
-test('combined: zen + keep file tree + git colours off + one folder colour = a calm tree; each stays independent', async ({ page, ws }) => {
+test('combined: zen (tree peek) + git colours off + one folder colour = a calm tree; each stays independent', async ({ page, ws }) => {
   await repoWithChanges(page, ws);
   await page.evaluate(() => (window as any).__secEdit.openFile('README.md'));
   await page.keyboard.press('Control+,');
   const dlg = page.getByTestId('settings');
-  await dlg.locator('[data-setting="zen.keepFileTree"]').click();
   await dlg.locator('[data-setting="tree.folderColors"] [data-value="one"]').click();
   await page.keyboard.press('Escape');
   await page.keyboard.press('Control+Alt+z');
-  await expect(page.locator('.se-root.se-zen .se-sidebar[data-panel="files"]')).toBeVisible();
+  const peekTree = async () => {
+    await page.locator('.se-zen-strip [data-panel="files"]').click();
+    await expect(page.locator('.se-root.se-zen .se-sidebar.se-zen-peek[data-panel="files"] .se-tree-row').first()).toBeVisible();
+  };
+  await peekTree();
   await expect(page.locator(MARKS).first()).toBeVisible();
-  // Toggling the colours in zen applies at once.
+  // Toggling the colours in zen applies at once (the palette hands focus back to the text: peek again).
   await runFromPalette(page, 'toggle git colours in file tree');
+  await expect.poll(async () => ((await saved(ws)) as any)['git.treeColors']).toBe(false);
+  if (!(await page.locator('.se-zen-peek').count())) await peekTree();
   await expect(page.locator(MARKS)).toHaveCount(0);
   expect(new Set(await folderColours(page)).size).toBe(1);
   // Leaving zen keeps the colour choice; zen again keeps it too.
   await page.keyboard.press('Control+Alt+z');
-  await expect(page.locator('.se-tabbar')).toBeVisible();
+  await expect(page.locator('.se-root:not(.se-zen) .se-tabbar')).toBeVisible();
   await expect(page.locator(MARKS)).toHaveCount(0);
   await page.keyboard.press('Control+Alt+z');
-  await expect(page.locator('.se-root.se-zen .se-tree-row').first()).toBeVisible();
+  await peekTree();
   await expect(page.locator(MARKS)).toHaveCount(0);
   await runFromPalette(page, 'toggle git colours in file tree');
+  if (!(await page.locator('.se-zen-peek').count())) await peekTree();
   await expect(page.locator(MARKS).first()).toBeVisible();
-  expect((await page.evaluate(() => (window as any).__secEdit.settings.value))['zen.keepFileTree']).toBe(true);
 });

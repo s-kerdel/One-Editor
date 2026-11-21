@@ -1,8 +1,9 @@
-// Bundles the Node-side entry points (Electron main/preload, server CLI) with esbuild.
-//   node scripts/build-node.mjs [--outdir dist] [--watch] [--only electron|server]
+// Bundles the Node-side entry points (Electron main/preload, server CLI, MCP server) with esbuild.
+//   node scripts/build-node.mjs [--outdir dist] [--watch] [--only electron|server|mcp]
 // Everything is bundled except node-pty (native; staged next to dist/ by stage.mjs).
 import { build, context } from 'esbuild';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { writeShippedDeps } from './shipped-deps.mjs';
 
@@ -19,19 +20,32 @@ const indexer = await build({ ...common, logLevel: 'warning', entryPoints: ['src
 common.define = { __SEC_EDIT_INDEXER_SRC__: JSON.stringify(indexer.outputFiles[0].text) };
 
 const jobs = [];
-if (only !== 'server') {
+if (only === 'all' || only === 'electron') {
   // node-pty is native: loaded at runtime from node_modules (dev) or app.asar.unpacked (packaged).
   jobs.push({ ...common, entryPoints: ['src/main/main.ts'], outfile: `${outdir}/main/main.cjs`, format: 'cjs', external: ['electron', 'node-pty'] });
   jobs.push({ ...common, entryPoints: ['src/main/preload.ts'], outfile: `${outdir}/main/preload.cjs`, format: 'cjs', external: ['electron'] });
   // What this build ships (names + versions from the lockfile), read by the opt-in "Security updates" check.
   writeShippedDeps(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), path.resolve(outdir, 'main/shipped-deps.json'));
 }
-if (only !== 'electron') {
+if (only === 'all' || only === 'server') {
   jobs.push({
     ...common,
     entryPoints: ['src/server/cli.ts'],
     outfile: `${outdir}/server/cli.mjs`,
     format: 'esm',
+    banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
+  });
+}
+
+if (only === 'all' || only === 'mcp') {
+  // The MCP server MCP clients start over stdio (src/mcp/cli.ts). Packaged: app.asar.unpacked/dist/mcp.
+  const { version } = JSON.parse(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../package.json'), 'utf8'));
+  jobs.push({
+    ...common,
+    entryPoints: ['src/mcp/cli.ts'],
+    outfile: `${outdir}/mcp/cli.mjs`,
+    format: 'esm',
+    define: { ...common.define, __ONE_VERSION__: JSON.stringify(version) },
     banner: { js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);" },
   });
 }

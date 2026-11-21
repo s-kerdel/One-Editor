@@ -25,6 +25,7 @@ import { installTerminal } from './terminal/install';
 import { installGitLazy } from './git/install';
 import { installNav } from './nav/install';
 import { brandTitle } from '@shared/brand';
+import { preloadZenUi } from './app/zen';
 
 const marks: Record<string, number> = { start: performance.now() };
 const mark = (k: string) => (marks[k] = Math.round(performance.now() * 10) / 10);
@@ -33,6 +34,8 @@ void loadEditorModule();
 if (document.documentElement.dataset.ui === 'classic') void loadClassic();
 // File overview open last time (theme-boot.js set data-ov): fetch its chunk alongside the bootstrap.
 const overviewP = document.documentElement.dataset.ov === '1' ? preloadOverview().catch(() => {}) : null;
+// Zen last time (data-zen): its edge strips are a lazy chunk; fetch it alongside the bootstrap too.
+const zenP = document.documentElement.dataset.zen ? preloadZenUi().catch(() => {}) : null;
 
 async function boot() {
   app.backend = await connectBackend();
@@ -69,6 +72,7 @@ async function boot() {
   if (b.settings.sidebarStyle === 'classic') await preloadClassicUi().catch(() => {});
   // Same for the file overview column: its panel is in the first frame, nothing pops in.
   if (ui.overviewVisible.value) await (overviewP ?? preloadOverview().catch(() => {}));
+  if (ui.zen.value) await (zenP ?? preloadZenUi().catch(() => {}));
   const root = document.getElementById('app')!;
   root.textContent = ''; // drop the static skeleton in the same frame we render
   render(<Layout />, root);

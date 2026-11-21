@@ -33,6 +33,8 @@ const PATHS: Record<string, string> = {
   terminal: 'm4 17 6-6-6-6|M12 19h8',
   hash: 'M9.5 3 7 21|M17 3l-2.5 18|M4 8.5h17|M3 15.5h17',
   lock: 'M5 11h14v10H5z|M8 11V7a4 4 0 0 1 8 0v4',
+  // zen mode toggle (shelf foot, classic icon bar, zen strips): four corners = the screen
+  zen: 'M3 8V3h5|M16 3h5v5|M21 16v5h-5|M8 21H3v-5',
 };
 
 export type IconName = keyof typeof PATHS;

@@ -66,6 +66,7 @@
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@playwright/test": "^1.65.1",
     "@types/dompurify": "^3.0.5",
     "@types/katex": "^0.16.8",

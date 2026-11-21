@@ -6,8 +6,7 @@ import { persistSession } from './documents';
 import { runCommand, prettyKey } from './commands';
 import { updateSettings } from './settings';
 import { newNote } from './fileops';
-
-const PANEL_KEYS: Record<string, string> = { search: 'Mod-Shift-f', outline: 'Mod-Alt-o', backlinks: 'Mod-Alt-l' };
+import { PANEL_KEYS, zen } from './ui';
 
 /** Stable hue per name, so a workspace / top-level folder always gets "its" colour. */
 export function hueOf(name: string): number {
@@ -100,6 +99,7 @@ function ShelfFoot() {
         <Icon name="plus" size={15} />
         New note
       </button>
+      <ZenButton />
       <button class="se-icon-btn" title={dark ? 'Switch to light theme' : 'Switch to dark theme'} aria-label="Toggle theme" onClick={() => updateSettings({ theme: dark ? 'light' : 'dark' })}>
         <Icon name={dark ? 'sun' : 'moon'} size={16} />
       </button>
@@ -121,6 +121,18 @@ export function ShelfTop() {
 }
 
 export { ShelfFoot };
+
+/** The zen toggle (here, the classic icon bar; in zen the strip's foot and the tab strip's end). Runs the command: importing the zen stub
+ *  (its import()) from here — or any new module from here or Tabs — made the bundler split startup code into an
+ *  extra chunk (a few hundred bytes more, measured). */
+export function ZenButton({ cls = 'se-icon-btn', size = 16 }: { cls?: string; size?: number }) {
+  const on = !!zen.value;
+  return (
+    <button class={`${cls} se-zen-btn${on ? ' on' : ''}`} aria-pressed={on} aria-label="Zen mode" data-testid="zen-toggle" title={`${on ? 'Leave zen mode' : 'Zen mode'} (${prettyKey('Mod-Alt-z')})`} onClick={() => void runCommand('view.toggleZen')}>
+      <Icon name="zen" size={size} />
+    </button>
+  );
+}
 
 /** Shown at the start of the tab strip while the shelf is hidden. */
 export function ShelfReveal() {

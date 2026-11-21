@@ -93,7 +93,7 @@ const DEFAULT_LIMIT = { bytes: MAX_BODY, message: 'Request too large' };
 const DESKTOP_ONLY = new Set(['exportPdf', 'showExportedFile']);
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
 /** A pinned server's settings writes never touch these (shared with the desktop app; browser mode has neither). */
-const DESKTOP_SETTING = /^(terminal|webserver)\./;
+const DESKTOP_SETTING = /^(terminal|webserver|mcp)\./;
 const LAUNCH_TTL_MS = 120_000;
 const EVENTS_SUBJECT = '\u0000events';
 

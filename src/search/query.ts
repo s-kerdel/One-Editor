@@ -57,6 +57,9 @@ export interface ParseOptions {
   literal?: boolean;
   /** true = case-sensitive, false = insensitive, 'smart'/undefined = sensitive only if the atom has uppercase. */
   caseSensitive?: boolean | 'smart';
+  /** No regular expressions at all: `/…/` is plain text and `regex` is ignored (MCP: a client's regex
+   *  would run unbounded on this thread). */
+  noRegex?: boolean;
 }
 
 export const VALID_IN = ['code', 'block', 'fence', 'inline', 'text', 'heading', 'frontmatter', 'fm', 'meta', 'yaml', 'link', 'path'] as const;
@@ -138,7 +141,7 @@ function readPhrase(q: string, s: number): { value: string; end: number } {
   return { value: out, end: j };
 }
 
-function tokenize(q: string): Tok[] {
+function tokenize(q: string, noRegex = false): Tok[] {
   const toks: Tok[] = [];
   let i = 0;
   while (i < q.length) {
@@ -158,7 +161,7 @@ function tokenize(q: string): Tok[] {
       i = p.end;
       continue;
     }
-    if (q[s] === '/') {
+    if (q[s] === '/' && !noRegex) {
       const r = readRegex(q, s);
       if (r) {
         toks.push({ kind: 'regex', value: r.source, flags: r.flags, negated, start, end: r.end });
@@ -249,7 +252,7 @@ export function parseQuery(raw: string, opts: ParseOptions = {}): ParsedQuery {
   };
   const caseFor = (value: string, isRegex = false) => forcedCase ?? (isRegex ? regexHasUpper(value) : hasUpper(value));
 
-  if (opts.regex || opts.literal) {
+  if ((opts.regex && !opts.noRegex) || opts.literal) {
     const ex = extractFilters(raw);
     // Without filters keep the text exactly (a trailing space can matter when replacing).
     const rest = ex.filters.length || !raw.trim() ? ex.rest : raw;
@@ -258,7 +261,7 @@ export function parseQuery(raw: string, opts: ParseOptions = {}): ParsedQuery {
     pq.text = rest;
     finishFilters();
     if (!rest) return pq;
-    if (opts.regex) {
+    if (opts.regex && !opts.noRegex) {
       const atom: RegexAtom = { kind: 'regex', source: rest, flags: '', caseSensitive: caseFor(rest, true) };
       const err = validateRegex(atom);
       if (err) pq.error = err;
@@ -269,7 +272,7 @@ export function parseQuery(raw: string, opts: ParseOptions = {}): ParsedQuery {
     return pq;
   }
 
-  const toks = tokenize(raw);
+  const toks = tokenize(raw, opts.noRegex);
   let text = '';
   let prevEnd = -1;
   for (const t of toks) {

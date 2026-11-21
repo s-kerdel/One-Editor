@@ -14,7 +14,8 @@ export interface OutlineItem {
 const SYMBOL_RES: Array<[RegExp, string]> = [
   [/^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+|final\s+)?(class|interface|trait|enum|struct|type)\s+([A-Za-z_$][\w$]*)/, '$1'],
   [/^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/, 'function'],
-  [/^\s*(?:public|private|protected|static|final|abstract|\s)*function\s+&?\s*([A-Za-z_]\w*)/, 'function'], // PHP
+  // PHP. Each modifier takes its own blank: `\s*` next to `(…|\s)*` was ambiguous (quadratic on a line of spaces).
+  [/^\s*(?:(?:public|private|protected|static|final|abstract)\s+)*function\s+&?\s*([A-Za-z_]\w*)/, 'function'],
   [/^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)/, 'def'], // Python
   [/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)/, 'fn'], // Rust
   [/^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)/, 'func'], // Go

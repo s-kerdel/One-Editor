@@ -101,8 +101,8 @@ for (const style of ['shelf', 'classic'] as const) {
     await page.keyboard.type('toggle sidebar');
     await page.keyboard.press('Enter');
     await reloadExpect(false);
-    // 3. the status bar toggle
-    await page.getByRole('button', { name: 'Toggle sidebar' }).click();
+    // 3. Ctrl+Shift+B (the status bar has no sidebar button any more)
+    await page.keyboard.press('Control+Shift+B');
     await reloadExpect(true);
     // 4. dragging the sash shut
     const sb = (await page.locator('.se-sidebar').boundingBox())!;

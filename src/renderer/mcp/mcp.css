@@ -1,0 +1,30 @@
+/* Settings → MCP server (lazy mcp-ui chunk): on/off, shared folders, client setup, activity. */
+.se-mcp-panel { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elev); }
+.se-mcp-panel .se-set-group { margin: 8px 0 0; }
+.se-mcp-head { display: flex; align-items: center; gap: 10px; }
+.se-mcp-headline { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text-muted); }
+.se-mcp-headline[data-on='yes'] { color: var(--text); }
+.se-mcp-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.se-mcp-row .se-set-group { flex: 1; }
+.se-mcp-note { margin: 0; color: var(--text-muted); font-size: 11.5px; line-height: 1.45; flex: 1; min-width: 180px; }
+
+.se-mcp-folders { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.se-mcp-folder { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 8px; border-radius: var(--radius); background: var(--bg-hover); }
+.se-mcp-folder-what { flex: 1; min-width: 160px; display: flex; flex-direction: column; gap: 1px; }
+.se-mcp-alias { font-weight: 600; font-size: 12.5px; }
+.se-mcp-path { color: var(--text-muted); font: 11.5px var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.se-mcp-setup { display: flex; flex-direction: column; gap: 6px; }
+.se-mcp-setup .se-seg { align-self: flex-start; flex-wrap: wrap; }
+.se-mcp-snippet { margin: 0; padding: 8px 10px; border-radius: var(--radius); background: var(--code-bg); font: 11.5px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; max-height: 220px; overflow: auto; }
+
+.se-mcp-table { width: 100%; border-collapse: collapse; font-size: 11.5px; table-layout: fixed; }
+.se-mcp-table td { padding: 3px 6px; border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.se-mcp-time { width: 72px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.se-mcp-tool { font-family: var(--font-mono); }
+.se-mcp-target { width: 34%; color: var(--text-muted); }
+.se-mcp-result { width: 64px; text-align: right; }
+.se-mcp-table tr[data-ok='no'] .se-mcp-result { color: var(--danger); }
+.se-mcp-undo { width: 64px; text-align: right; }
+.se-mcp-undo .se-link-btn { padding: 0; font-size: 11.5px; }
+.se-mcp-reverted { color: var(--text-muted); font-style: italic; }

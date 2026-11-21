@@ -1,9 +1,8 @@
-// Status bar: sidebar toggle · folder · [crumbs · save state] · git / variables / web server pills ·
+// Status bar: folder · [crumbs · save state] · git / variables / web server pills ·
 // activity · [cursor · words · EOL · encoding · language · mode]. The bracketed parts belong to the open
 // file and live in the lazy ./doc-chrome chunk (Layout.preloadDocChrome: in time for the first file).
 import { app } from './app';
 import { Icon } from './icons';
-import { runCommand } from './commands';
 import { lazyComponent } from './lazy';
 import { absolutePath, copyText, revealInOs, revealLabel } from './fileops';
 import { openWorkspaceMenu } from './Shelf';
@@ -29,14 +28,6 @@ export function StatusBar() {
 
   return (
     <footer class="se-status">
-      <button
-        class="se-status-item se-status-sidebar"
-        title={`${app.sidebarVisible.value ? 'Hide' : 'Show'} sidebar (Ctrl+Shift+B)`}
-        aria-label="Toggle sidebar"
-        onClick={() => void runCommand('view.toggleSidebar')}
-      >
-        <Icon name="sidebar" size={13} />
-      </button>
       {ws && (
         <button
           class="se-status-item se-status-btn se-status-ws"

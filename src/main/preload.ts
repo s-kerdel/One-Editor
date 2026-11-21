@@ -4,6 +4,7 @@ import { terminalBridge } from './terminal-bridge';
 import { vaultBridge } from './vault-bridge';
 import { webServerBridge } from './web-server-bridge';
 import { updateCheckBridge } from './update-check-bridge';
+import { mcpBridge } from './mcp-bridge';
 
 const CHANNELS = new Set(['fs:events', 'app:openRequest', 'app:closeRequest', 'git:changed', 'settings:changed', 'app:navigate']);
 // The frame main created this window with (webPreferences.additionalArguments): the renderer styles
@@ -45,6 +46,8 @@ contextBridge.exposeInMainWorld('secEditBridge', {
   // Validated again in main (shape, #rrggbb colours, height range).
   setTitleBarOverlay: (o: { color: string; symbolColor: string; height: number }) =>
     ipcRenderer.send('app:titleBarOverlay', { color: String(o?.color), symbolColor: String(o?.symbolColor), height: Number(o?.height) }),
+  // Zen mode: hold / give back full screen (main/zen-fullscreen.ts restores the state from before).
+  zenFullScreen: (on: boolean) => ipcRenderer.send('app:zenFullScreen', on === true),
   relaunch: () => ipcRenderer.invoke('app:relaunch'),
   gpuStatus: () => ipcRenderer.invoke('app:gpuStatus'),
   // Integrated terminal (term:* channels, validated in main/terminal.ts).
@@ -55,4 +58,6 @@ contextBridge.exposeInMainWorld('secEditBridge', {
   webServer: webServerBridge(ipcRenderer),
   // Opt-in "Security updates" check (updates:* channels, validated in main/update-check.ts).
   updates: updateCheckBridge(ipcRenderer),
+  // Settings → MCP server (mcp:* channels, validated in main/mcp.ts).
+  mcp: mcpBridge(ipcRenderer),
 });

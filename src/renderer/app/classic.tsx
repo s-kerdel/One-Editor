@@ -8,9 +8,8 @@ import { persistSession } from './documents';
 import { runCommand, prettyKey } from './commands';
 import { newNote, startCreate } from './fileops';
 import { collapseAll } from './FileTree';
-import { openWorkspaceMenu } from './Shelf';
-
-const PANEL_KEYS: Record<string, string> = { search: 'Mod-Shift-f', outline: 'Mod-Alt-o', backlinks: 'Mod-Alt-l' };
+import { openWorkspaceMenu, ZenButton } from './Shelf';
+import { PANEL_KEYS } from './ui';
 
 export function ActivityBar() {
   const current = app.sidebarPanel.value;
@@ -50,6 +49,7 @@ export function ActivityBar() {
       >
         <Icon name="folderOpen" size={20} />
       </button>
+      <ZenButton cls="se-activity-btn" size={20} />
       <button class="se-activity-btn" title={`Settings (${prettyKey('Mod-,')})`} aria-label="Settings" data-testid="open-settings" onClick={() => void runCommand('app.settings')}>
         <Icon name="settings" size={20} />
       </button>

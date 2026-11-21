@@ -1,5 +1,6 @@
 // Tab strip: drag to reorder, middle-click to close, context menu, dirty dot, overflow scrolling,
-// and on the right the markdown view-mode switch + the file overview toggle.
+// and on the right the markdown view-mode switch + the file overview toggle (+ leave zen, in zen).
+import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { basename, dirname } from '@shared/paths';
 import { app } from './app';
@@ -50,7 +51,8 @@ function OverviewToggle() {
 // both clicks landed on it (not when closing its neighbour slid it under the pointer).
 let lastDown: string | null = null;
 
-export function TabBar() {
+/** `end`: after the tools (zen: Layout's leave-zen button; passed in because a new import here splits startup code, see Shelf.tsx). */
+export function TabBar({ end }: { end?: ComponentChildren }) {
   const strip = useRef<HTMLDivElement>(null);
   const [drop, setDrop] = useState<{ index: number } | null>(null);
   const dragFrom = useRef<number>(-1);
@@ -181,6 +183,7 @@ export function TabBar() {
       <div class="se-tabbar-tools">
         {ui.isMarkdownView(active) && <TabDocTools />}
         <OverviewToggle />
+        {end}
       </div>
     </div>
   );

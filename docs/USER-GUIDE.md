@@ -14,9 +14,10 @@
 | Make a PDF of a note | [Export to PDF](#export-to-pdf) |
 | Run commands / use Claude Code | [7. Terminal and Claude Code](#7-terminal-and-claude-code) |
 | See changes, commit, push | [8. Git](#8-git) |
-| Hide everything but the text | [Zen mode](#zen-mode) |
+| Write full screen, without distractions | [Zen mode](#zen-mode) |
 | Change how it behaves | [9. Settings](#9-settings) |
 | Open this folder in a web browser (phone, tablet, another PC) | [Browser mode](#browser-mode-web-server) |
+| Let an AI app (LM Studio, Codex CLI, Claude) read or edit my notes | [MCP server](#mcp-server-ai-apps) |
 | Know when One itself needs a security rebuild | [Security updates](#security-updates) |
 | Put `{{host}}`, `{{user}}`… in commands | [10. Variables & targets](#10-variables--targets) |
 | Turn a pasted curl / JSON / log into a clean block | [11. Smart paste](#11-smart-paste) |
@@ -54,7 +55,7 @@
 | **Shelf** (default) | Workspace card on top, a **Jump to…** pill (`Ctrl+P`), Recent notes, a colour per top-level folder, the editor as a raised card | Pills under the jump pill; the active pill shows its name |
 | **Classic** | IDE-style: icon bar on the far left, dense tree with guides, full-width status bar | Icon bar; click the open panel again to hide the sidebar |
 
-Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at the top (or at the start of the tab strip when hidden) does the same.
+Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at the top (or at the start of the tab strip when hidden) does the same. Classic: click the open panel's icon.
 
 **Hidden stays hidden.** The sidebar comes back the way you left it after a restart or refresh — shown or hidden, same width.
 
@@ -68,18 +69,25 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 
 ### Zen mode
 
-**`Ctrl+Alt+Z` shows only the text.** Again to leave. Palette: "Toggle zen mode".
+**`Ctrl+Alt+Z` goes full screen and folds the panels away.** Again to leave. Or the **zen button** bottom left (next to the theme and settings buttons; Classic: in the icon bar).
 
 | | |
 |---|---|
-| **Hidden** | Sidebar, file overview, terminal, tab strip, status bar (Classic: also the icon bar) |
-| **Still works** | Every shortcut: `Ctrl+P`, `Ctrl+Shift+P`, `Ctrl+F`, `Ctrl+,`… A panel you open yourself shows |
-| **Leave with the mouse** | Hover the **top edge** → **Exit zen** (top right) |
-| **Keep some of it** | Settings → Appearance → Zen mode: **Keep the file tree**, **Keep the status bar** (both off by default) |
+| **Stays** | Your tabs. The status bar only if you keep it |
+| **Thin strips** | Sidebar on the left. File overview on the right (only if it was open) |
+| **Peek at a panel** | Click its icon on a strip, or use its shortcut (`Ctrl+Shift+F`, `Ctrl+Alt+B`…). It opens over the text |
+| **Close the peek** | Click back in the text, press `Esc`, or click the icon again |
+| **Hidden** | Terminal, process explorer (Classic: also the icon bar) |
+| **Leave** | `Ctrl+Alt+Z` · zen button at the **bottom of the left strip** · zen button at the **right end of the tab strip** |
+| **Options** | Settings → Appearance → Zen mode: **Full screen** (on), **Keep the status bar** (off) |
 
-- **Leaving puts everything back** exactly as it was: sidebar, its width and panel, overview, terminal.
-- **Remembered:** still in zen after a refresh or restart.
-- **No title bar?** The empty strip at the top still **moves the window**; the window buttons stay at the right.
+- **Leaving puts everything back** exactly as it was: sidebar, width, panel, overview, terminal, window size.
+- **Left full screen another way** (the OS, or holding `Esc` in a browser)? Zen stays and keeps working. Leave it as usual.
+- **Already full screen** before zen? It stays full screen when you leave zen.
+- **Remembered:** still in zen after a refresh or restart. The desktop app goes full screen again.
+- **Browser mode:** full screen only starts from a key press or click, so after a refresh zen comes back without it. In Chrome / Edge a short `Esc` stays the editor's (close find, palette): **hold `Esc`** to leave full screen.
+- **"Keep the file tree" is gone.** The left strip opens the tree in one click. An old setting is ignored.
+- **No title bar and Full screen off?** The tab strip still **moves the window**; the window buttons stay at the right.
 
 ### File overview (right sidebar)
 
@@ -800,7 +808,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | Content width | Readable |
 | | Zoom (desktop only) | 100% |
 | | Window frame (desktop only) | Integrated (no title bar) |
-| | Zen mode: Keep the file tree / Keep the status bar | Off / Off |
+| | Zen mode: Full screen / Keep the status bar | On / Off |
 | **Editor** | View mode | Live |
 | | Formatting toolbar in live mode | On |
 | | Line numbers in Markdown source & split mode | On |
@@ -813,7 +821,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | **Files** | Autosave | On |
 | | Autosave delay | 800 ms |
 | | Show hidden files | Off |
-| | Excluded folders | `node_modules`, `.git`, `dist`, `build`, `vendor`, `.next`, `.cache`, `__pycache__` |
+| | Excluded folders | `node_modules`, `.git`, `dist`, `build`, `vendor`, `.next`, `.cache`, `__pycache__` (names, `*.log`, `docs/build`, `**/secrets`, `private/*.md`) |
 | | Confirm before deleting | On |
 | | Git colours in the file tree | On |
 | **Formatting** | Format on save | Off |
@@ -850,7 +858,12 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | GPU acceleration | Automatic (only on a hardware GPU) |
 | **Browser mode** (desktop only) | Port | Automatic (4317, else the next free one) |
 | | Who can connect | This computer |
-| **Security updates** (desktop only) | Check for security updates | Off |
+| **MCP server** (desktop only) | Text per read | 16 kB |
+| | Results per call | 25 |
+| | Also allow code and config files | Off |
+| | Keep undo copies of AI edits | On |
+| | Keep undo copies for | 30 days |
+| **Security updates** (desktop only) | Check automatically every week | Off |
 
 ### Make it yours (Appearance)
 
@@ -914,9 +927,122 @@ Settings are **global**, not per folder.
 - **In the browser:** no terminal · secrets of `{{variables}}` stay in that tab's memory only · PDF export = the browser's print dialog · one server at a time.
 - **Without the desktop app:** `Start web server.cmd` (Windows) or `start-web.sh` (Linux) next to the program. Started that way on this computer, the browser can switch folders; with `--host` (another address) it serves that one folder only.
 
+### MCP server (AI apps)
+
+**Let AI apps search, read and (if you allow it) edit the folders you share.** LM Studio, Codex CLI, Claude Desktop and Claude Code talk to One over the Model Context Protocol (MCP). Off by default, **read-only** unless you allow changes per folder, every change undoable. Desktop app only. Works with One closed too.
+
+**Set it up (3 steps)**
+
+1. Settings → **MCP server** → switch it **on** (One asks once).
+2. **Add folder…** → pick a notes folder. It is shared **Read-only**.
+3. **Client setup** → pick your app → **Copy** → paste it where it says → **restart that app**.
+
+| App | Where the snippet goes |
+|---|---|
+| **LM Studio** | `~/.lmstudio/mcp.json` (Windows: `%USERPROFILE%\.lmstudio\mcp.json`). In LM Studio: Program → Install → Edit mcp.json |
+| **Codex CLI** | `~/.codex/config.toml` (Windows: `%USERPROFILE%\.codex\config.toml`) |
+| **Claude Desktop** | `%APPDATA%\Claude\claude_desktop_config.json` |
+| **Claude Code** | Run the copied `claude mcp add …` line once in a terminal |
+
+Example for One in `C:\Apps\One` (Settings shows your real paths):
+
+```json
+{
+  "mcpServers": {
+    "one": {
+      "command": "C:\\Apps\\One\\One.exe",
+      "args": ["C:\\Apps\\One\\resources\\app.asar.unpacked\\dist\\mcp\\cli.mjs", "--stdio"],
+      "env": { "ELECTRON_RUN_AS_NODE": "1" }
+    }
+  }
+}
+```
+
+```toml
+# Codex CLI: ~/.codex/config.toml
+[mcp_servers.one]
+command = 'C:\Apps\One\One.exe'
+args = ['C:\Apps\One\resources\app.asar.unpacked\dist\mcp\cli.mjs', '--stdio']
+env = { ELECTRON_RUN_AS_NODE = '1' }
+```
+
+- **No Node.js needed:** One's own program runs the server (`ELECTRON_RUN_AS_NODE=1` = "run as a script runner, no window").
+- **Launchers** next to the program do the same: `One MCP.cmd` (Windows), `one-mcp.sh` (Linux).
+- **Claude Code inside WSL** (One on Windows): `claude mcp add --scope user one -- cmd.exe /c "C:\Apps\One\One MCP.cmd"`
+- **Options** (add after `--stdio`): `--folder <name>` = only that folder · `--read-only` = never writes, whatever Settings say.
+
+**What the AI can do**
+
+| Tool | Does |
+|---|---|
+| `list_folders` · `list_files` | The shared folders · files and subfolders (paged) |
+| `read_file` | A file's text, in pages (`offset_line`) |
+| `read_section` | One heading section, `^block`, or frontmatter key |
+| `get_outline` | Headings with line ranges, blocks, frontmatter keys (code: functions) |
+| `search_text` | Full text, same syntax as Find in files (`"phrase"`, `-word`, `path:`, `tag:`, `in:`) |
+| `search_files` · `search_headings` | File names (fuzzy) · headings across notes |
+| `list_tags` · `get_links` · `get_related` | Tags · links and backlinks · neighbours and related notes |
+
+> **This build is read-only.** AI apps can search and read; **Read-write** (the tools below) comes with the next build. The control is shown but switched off.
+
+Only in **Read-write** folders (next build):
+
+| Tool | Does |
+|---|---|
+| `write_file` | Creates a file, or replaces a whole one (only with the `etag` from `read_file`: never over a newer version) |
+| `append_file` | Adds text at the end, or at the start (after the frontmatter) |
+| `patch_file` | Changes one heading section, `^block` or frontmatter key: append · prepend · replace · delete |
+| `replace_text` | Replaces one exact piece of text (it must occur once) |
+| `move_file` | Renames / moves a file or folder, never overwrites; updates links to it (**Update links on rename**) |
+| `create_folder` · `delete_file` | New folder · a file to the **Recycle Bin** (never deleted for good; no Recycle Bin → nothing is deleted) |
+
+**Let it make changes (Read-write)**
+
+1. Settings → **MCP server** → **Shared folders** → **Read-write** on that folder.
+2. One asks once (native dialog). **Read-only** again is one click, no question.
+3. Restart nothing: running AI apps see the change within a second.
+
+- **Read-only is the default** for every folder you add.
+- **Notes only by default:** `.md`, `.markdown`, `.txt`. Code and config files (`.json`, `.ts`, `.py`…) only with **Also allow code and config files** (off by default).
+- **Never, whatever you allow:** scripts, programs and shortcuts (`.bat`, `.cmd`, `.ps1`, `.vbs`, `.exe`, `.lnk`, `.url`, `desktop.ini`…), images, PDFs and other binaries, hidden files, key files and excluded folders.
+- **No new `{{placeholders}}`:** an AI edit that would add a `{{name}}` is refused. In One those fill in your values and secrets when you copy or run a block, so a planted one could leak a secret later. Existing ones may stay.
+- **Links are never followed** (symlinks, junctions): the AI only sees and changes files where they really are.
+- **A limit per session:** at most 60 changes a minute and 500 per connection, so a runaway AI cannot rewrite a whole folder.
+- **Your encoding stays:** CRLF line ends, a BOM, UTF-16 and Windows-1252 files are written back the same way. Text a Windows-1252 file cannot hold is refused instead of mangled.
+- **Open tabs follow:** a change shows up in an open tab right away. With unsaved edits in that tab you get the usual **changed on disk** banner (keep yours or take the AI's).
+- Big edits are refused (2 MB per `write_file`, 256 kB per smaller edit).
+
+**Undo an AI change (Revert)**
+
+- **Recent activity** shows a **Revert** button on every change. It puts back exactly what was there before (a move: the move *and* the links it updated).
+- Only while the file is still as the AI left it. Edited since? Revert says so and changes **nothing**.
+- A reverted row says *reverted*. Revert of a new file moves it to the Recycle Bin.
+- **Keep undo copies of AI edits** (on by default): One keeps the old text of each change in `mcp-history` in the app data folder, for **30 days** (setting) and at most 100 MB.
+- **Off:** changes made from then on keep no copy and get no Revert. Copies already kept stay until they age out.
+
+**What stays private**
+
+- **Only the folders you list.** Never the rest of the computer, your secrets (the `{{variables}}` vault), settings, git or the terminal.
+- **Always invisible:** hidden files and folders (`.git`, `.env`, `.obsidian`…), key files (`*.pem`, `*.key`, `id_rsa`, `*.kdbx`, `*.gpg`, `wallet.dat`, `*.tfstate`…), your **Excluded folders** (also patterns like `**/secrets` or `private/*.md`), and links. The AI gets "not found", the same as for a file that does not exist. Hidden files and key files stay invisible even with an empty exclude list.
+- **A broken settings file never opens things up:** if `settings.json` cannot be read, a starting MCP server refuses to run and a running one keeps your last exclusions.
+- **A secret typed into a normal note *is* readable.** Keep secrets in the vault.
+- **Read-only unless you say so**, per folder (see above). `--read-only` in the client setup keeps an AI app read-only whatever the folder says.
+- **Off = off:** running servers stop within a second. A removed folder is gone at once.
+
+**Answer size** (Settings → MCP server → Answer size)
+
+| Setting | Default | Meaning |
+|---|---|---|
+| **Text per read** | 16 kB (≈ 4,000 tokens) | Longer files come in pages |
+| **Results per call** | 25 | Search hits, files, headings, tags, links per call (file lists: 4×) |
+
+Small local model (8k context)? Keep the defaults or go lower. Big context (128k)? Raise both.
+
+**Recent activity:** the last 50 calls (time, app, tool, file, result), refreshed while Settings is open. Never the text or your search words. Kept in `mcp-audit.jsonl` in the app data folder (1 MB, then rotated).
+
 ### Security updates
 
-**Off by default. Switch it on and One tells you when *this build* needs a rebuild.** Settings → **Security updates** → **Check for security updates**. Desktop app only.
+**One tells you when *this build* needs a rebuild.** Settings → **Security updates** → **Check now** (any time), or switch on **Check automatically every week** (off by default). Desktop app only.
 
 | It checks | Where | You see |
 |---|---|---|
@@ -927,15 +1053,30 @@ Settings are **global**, not per folder.
 
 **Reading the shield**
 
-- **No shield** in the status bar = nothing found (or the check is off).
+- **No shield** in the status bar = the last check found nothing (or no check has run yet).
 - **Shield + number** = that many 🔴 / 🟠 findings. **Red** shield: at least one high / critical.
 - **Click it** → the list: library, **shipped version → fixed version**, one line, **Details** (opens the advisory).
 - A library finding **may not affect One** (it depends on how the library is used): check the link.
 - **What to do:** rebuild One with updated Electron / libraries (e.g. ask Claude: *"update Electron and release"*). Findings **disappear on their own** in a build that ships the fixed versions.
 
+**What was checked** (Settings → Security updates, under Check now)
+
+| Line | Shows | Mark |
+|---|---|---|
+| **Electron** | the version this build ships | ✓ / ! |
+| **Newest patch** | newest patch of that line, "up to date" or "a newer patch is out" | ✓ / ! / ? (not listed) |
+| **Support** | "Supported until *date* (*n* days left)", or "Ended" | ✓ / ! (45 days or less, or ended) |
+| **Packages** | "*N* packages checked against OSV.dev, *X* with known vulnerabilities" | ✓ / ! |
+| **Sources** / **Checked** | endoflife.date and OSV.dev (links), the time of the check and how long it took | |
+
+- **Show all *N* packages** → every package + version: **OK**, or the advisory, its severity and the fixed version. Problems first; type to filter.
+- A part that **failed** says so in plain words (e.g. *"Not checked: OSV.dev failed (No answer in time)"*).
+- Kept with the result: still there after a restart. A build with other versions shows it again after the next check.
+
 **When it runs**
 
-- **Once after launch**, only if the last check is **7 days** old. Right after you switch it on. And on **Check now**.
+- **Check now:** always, whether the switch is on or off. Nothing else changes.
+- **Check automatically every week** on: **once after launch**, only if the last check is **7 days** old (also right after you switch it on).
 - No background timer. Offline or an error: **nothing pops up**; Settings shows "Last check failed".
 - Palette: **"Security updates: Show findings"** / **"Security updates: Check now"**.
 
@@ -945,7 +1086,7 @@ Settings are **global**, not per folder.
 - **api.osv.dev:** the **names and versions** of Electron and the libraries in this build (the same for everyone on this version).
 - Both see your **IP address**, like any website.
 
-The last result is kept in `update-check.json` in the app's data folder, so the shield is there at launch without a request.
+The last result (findings + what was checked) is kept in `update-check.json` in the app's data folder, so the shield and the summary are there at launch without a request. The **shield** shows the last check's problems, whether that check ran automatically or from **Check now**.
 
 ---
 
@@ -1109,6 +1250,11 @@ After a paste a small **"Paste as…"** chip appears for a few seconds. Ignore i
 | **Zoom keys do nothing** | Browser mode uses the browser's zoom |
 | **Phone / other PC cannot open the web server link** | Settings → Browser mode → **Network (LAN)**, then use the **network** address (not `127.0.0.1`), same Wi-Fi. Windows: allow One through the firewall (Windows Security → Firewall → Allow an app) |
 | **"Port … is in use"** (web server) | Leave **Port** empty (automatic), or pick another one |
+| **AI app: MCP server "failed" or "exited"** | Settings → **MCP server** must be **on** with at least one folder. Restart the app after pasting the snippet. Its MCP log shows One's message (e.g. "switched off") |
+| **AI app: "is read-only"** | Settings → **MCP server** → that folder → **Read-write** (One asks once) |
+| **AI app: "changed since you read it"** | The file was edited meanwhile (in One or elsewhere). Normal: the AI reads it again and retries; nothing was overwritten |
+| **Revert: "changed after the MCP change"** | The file was edited after the AI's change, so Revert leaves it alone. Undo by hand, or use the editor's history |
+| **AI app finds nothing / "not found"** | The file may be hidden (dot file, key file, Excluded folders) or outside the shared folders. Search needs a moment on the first call in a big folder: try again |
 | **I want the Windows title bar back** | Settings → Appearance → **Window frame: Native** → **Restart now** |
 | **Can't drag the window** | Drag the **empty** part of the tab strip (not a tab or button) |
 | **Spellcheck did not turn on** | Restart the desktop app |

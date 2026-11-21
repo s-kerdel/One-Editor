@@ -64,6 +64,8 @@ export interface SearchOptions {
   fuzzy?: boolean;
   /** Let terms match file paths too (default true). */
   matchPaths?: boolean;
+  /** No regular expressions: `/…/` is plain text, `regex` is ignored (MCP server). */
+  noRegex?: boolean;
 }
 
 export interface SearchResponse {

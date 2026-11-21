@@ -28,7 +28,11 @@ import { WEB_SERVER_CHANNELS } from '../shared/web-server';
 import { UpdateCheckService, registerUpdateCheckIpc } from './update-check';
 import { UPDATE_CHECK_CHANNELS, UPDATE_ENDPOINTS, isAllowedUpdateUrl } from '../shared/update-check';
 import { NAV_CHANNEL, navFromAppCommand } from '../shared/nav';
+import { McpService, mcpLaunch, registerMcpIpc } from './mcp';
+import { platformTrash } from '../backend/trash';
+import { MCP_CHANNELS } from '../shared/mcp';
 import os from 'node:os';
+import { ZenFullScreen } from './zen-fullscreen';
 import { createRelaunch, frameOf, frameWindowOptions, initialOverlay, isDarkColor, parseOverlay, rememberOverlay, type TitleBarCache, type WindowFrame } from './frame';
 
 const tMainStart = performance.now(); // ms since process start (Node's timeOrigin)
@@ -106,6 +110,7 @@ function main() {
   let frame: WindowFrame = 'native'; // what the window was created with (settings may change until a restart)
   let titleBar: TitleBarCache | undefined;
   let queueStateSave = () => {};
+  const zenFs = new ZenFullScreen(); // zen mode's full screen: what to give back when it ends
   const relaunch = createRelaunch({
     close: () => win?.close(),
     // SEC_EDIT_TEST_RELAUNCH: E2E checks the whole restart path without spawning a process it cannot drive.
@@ -174,8 +179,8 @@ function main() {
   });
   if (isTest) (globalThis as any).__secEditWebServer = webServer; // E2E: child pid (no orphan after quit)
 
-  // "Security updates" (opt-in, Settings): nothing here runs until the renderer asks, and check() refuses
-  // while the setting is off. Requests go through a session of their own — in memory, no cookies, no cache,
+  // "Security updates" (Settings): nothing here runs until the renderer asks; the automatic check refuses
+  // while the setting is off ("Check now" always goes). Requests go through a session of their own — in memory, no cookies, no cache,
   // a generic User-Agent — and only to the two allowlisted hosts (tests: one local stub, SEC_EDIT_TEST only).
   const updateStub = isTest && /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.SEC_EDIT_TEST_UPDATE_API ?? '') ? process.env.SEC_EDIT_TEST_UPDATE_API! : null;
   const updateUrlAllowed = (url: string) => (updateStub ? url.startsWith(`${updateStub}/`) : isAllowedUpdateUrl(url));
@@ -200,6 +205,48 @@ function main() {
     readState: () => readJson<unknown>(updateFile, null),
     writeState: (s) => writeJson(updateFile, s),
     onChange: (s) => win && !win.isDestroyed() && win.webContents.send(UPDATE_CHECK_CHANNELS.changed, s),
+  });
+
+  // Settings → MCP server: main owns mcp.json; nothing runs here (MCP clients start dist/mcp/cli.mjs
+  // themselves). Turning it on, sharing a folder and allowing writes are native dialogs the page cannot answer.
+  const mcpCli = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'mcp', 'cli.mjs') : path.join(__dirname, '../mcp/cli.mjs');
+  // Tests: SEC_EDIT_TEST_MCP_CONFIRM = allow | deny (default deny), SEC_EDIT_TEST_MCP_FOLDER = the folder the dialog "picks" (SEC_EDIT_TEST only).
+  const mcpConfirm = async (o: Electron.MessageBoxOptions) => {
+    if (isTest) return process.env.SEC_EDIT_TEST_MCP_CONFIRM === 'allow';
+    if (!win || win.isDestroyed()) return false;
+    return (await dialog.showMessageBox(win, { type: 'question', defaultId: 1, cancelId: 1, noLink: true, ...o })).response === 0;
+  };
+  const mcp = new McpService({
+    configDir: app.getPath('userData'),
+    homedir: os.homedir(),
+    platform: process.platform,
+    launch: () => mcpLaunch({ execPath: process.execPath, cli: mcpCli, exists: (p) => fs.existsSync(p) }),
+    confirmEnable: () =>
+      mcpConfirm({
+        buttons: ['Turn on', 'Cancel'],
+        title: 'Turn on the MCP server?',
+        message: 'Let MCP clients read the folders you share?',
+        detail: 'Apps you set up yourself (LM Studio, Codex CLI, Claude…) can then start One’s MCP server and read the folders you list in Settings: read-only unless you allow changes per folder. Nothing listens on the network. Your secrets and other folders stay out of reach.',
+      }),
+    confirmWrite: (f) =>
+      mcpConfirm({
+        buttons: ['Allow changes', 'Cancel'],
+        title: 'Allow changes?',
+        message: `Let MCP clients change files in “${f.alias}”?`,
+        detail: `${f.path}\n\nAn AI model can then create, edit and move text files there, and delete them to the ${process.platform === 'win32' ? 'Recycle Bin' : 'trash'} (never permanently). Each change can be reverted in Settings → MCP server. Hidden files, key files and excluded folders stay off limits.`,
+      }),
+    pickFolder: async () => {
+      if (isTest) return process.env.SEC_EDIT_TEST_MCP_FOLDER && process.env.SEC_EDIT_TEST_MCP_FOLDER !== 'cancel' ? process.env.SEC_EDIT_TEST_MCP_FOLDER : null;
+      const r = await dialog.showOpenDialog(win!, { title: 'Share a folder with MCP clients', properties: ['openDirectory'] });
+      return r.canceled ? null : (r.filePaths[0] ?? null);
+    },
+    realpath: (abs) => fsp.realpath(abs),
+    isDirectory: (abs) => fsp.stat(abs).then((st) => st.isDirectory(), () => false),
+    randomId: () => crypto.randomBytes(8).toString('hex'),
+    onChange: (s) => win && !win.isDestroyed() && win.webContents.send(MCP_CHANNELS.changed, s),
+    settings: () => service.getSettings(),
+    // Revert of a file MCP created: to the trash, like a delete from the tree (tests: SEC_EDIT_TRASH_DIR).
+    trash: (abs) => (process.env.SEC_EDIT_TRASH_DIR ? platformTrash(abs) : shell.trashItem(abs)),
   });
 
   const rendererDir = path.resolve(process.env.SEC_EDIT_RENDERER_DIR || path.join(__dirname, '../renderer'));
@@ -287,6 +334,7 @@ function main() {
   registerGpuIpc(ipcMain, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   registerWebServerIpc(ipcMain, webServer, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   registerUpdateCheckIpc(ipcMain, updates, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
+  registerMcpIpc(ipcMain, mcp, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   // A file / folder dropped on the window: the preload read its path from the File object (page script
   // cannot fabricate one) and reports it here, so the open that follows passes the gate.
   ipcMain.on('app:vouchPath', (e, abs: unknown) => void (trustedSender(e) && gate.vouch(abs)));
@@ -298,6 +346,7 @@ function main() {
     return true;
   });
   // Integrated frame: the renderer reports the tab strip's real colours/height (theme, accent, density, zoom).
+  ipcMain.on('app:zenFullScreen', (e, on: unknown) => void (trustedSender(e) && win && zenFs.set(win, on === true)));
   ipcMain.on('app:titleBarOverlay', (e, raw: unknown) => {
     const o = parseOverlay(raw);
     if (!o || !trustedSender(e) || frame !== 'integrated' || process.platform === 'darwin' || !win || win.isDestroyed()) return;
@@ -374,6 +423,7 @@ function main() {
       },
     });
     const w = win;
+    zenFs.attach(w);
     w.once('ready-to-show', () => {
       mark('readyToShow');
       if (st.maximized) w.maximize();
@@ -405,7 +455,7 @@ function main() {
     let saveTimer: NodeJS.Timeout | null = null;
     const saveState = () => {
       if (w.isDestroyed() || w.isMinimized()) return;
-      const maximized = w.isMaximized() || w.isFullScreen();
+      const maximized = zenFs.maximized(w);
       const normal = w.getNormalBounds(); // pre-maximize geometry, so un-maximizing next launch looks right
       void writeJson(stateFile, { x: normal.x, y: normal.y, width: normal.width, height: normal.height, maximized, titleBar } satisfies WindowState).catch(() => {});
     };

@@ -9,7 +9,7 @@ try {
   if (l && l.sb === false) d.setAttribute('data-sb', '0'); // sidebar hidden: skeleton without it
   if (l && l.ov) d.setAttribute('data-ov', '1'); // file overview open: skeleton with the right column
   if (l && l.ow) d.style.setProperty('--skel-ov', l.ow + 'px');
-  if (l && l.z) d.setAttribute('data-zen', String(l.z)); // zen mode: skeleton without the chrome ('on' / 'on status')
+  if (l && l.z) d.setAttribute('data-zen', String(l.z)); // zen mode: skeleton with the edge strips ('on' [+ ' status'] [+ ' ov'])
   // Window frame the desktop window really has (the preload bridge says; browser mode has none):
   // 'integrated' = no OS title bar, the tab strip hosts the window controls → its skeleton.
   if (window.secEditBridge && window.secEditBridge.frame === 'integrated') d.setAttribute('data-frame', 'integrated');

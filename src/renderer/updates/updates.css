@@ -31,3 +31,26 @@
 .se-upd-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .se-upd-last { flex: 1; min-width: 180px; font-size: 12.5px; color: var(--text-muted); }
 .se-upd-last[data-state='failed'] { color: var(--danger); }
+
+/* Settings → Security updates: what the last check looked at (summary.tsx). */
+.se-upd-summary { display: flex; flex-direction: column; gap: 6px; }
+.se-upd-lines { display: grid; grid-template-columns: 16px max-content minmax(0, 1fr); gap: 4px 10px; margin: 0; padding: 0; list-style: none; font-size: 12.5px; }
+.se-upd-line { display: contents; }
+.se-upd-mark { width: 16px; height: 16px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700; line-height: 1; color: var(--text-muted); }
+[data-mark='ok'] > .se-upd-mark { color: var(--success); }
+[data-mark='warn'] > .se-upd-mark { background: var(--warning-soft); color: var(--warning); }
+[data-mark='high'] > .se-upd-mark { background: var(--danger-soft); color: var(--danger); }
+[data-mark='unknown'] > .se-upd-mark, [data-mark='info'] > .se-upd-mark { background: var(--bg-hover); }
+.se-upd-key { color: var(--text-muted); }
+.se-upd-val { min-width: 0; overflow-wrap: anywhere; }
+.se-upd-summary .se-link-btn { padding: 0; font-size: inherit; }
+.se-upd-pkgs .se-upd-val { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.se-upd-filter { height: 26px; max-width: 280px; font-size: 12px; }
+.se-upd-pkglist { width: 100%; max-height: 280px; overflow: auto; margin: 0; padding: 4px 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+.se-upd-pkg { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; align-items: baseline; gap: 0 10px; padding: 2px 8px; font-size: 12px; }
+.se-upd-pkg + .se-upd-pkg { border-top: 1px solid var(--border); }
+.se-upd-pkg .se-upd-mark { align-self: center; }
+.se-upd-pkgname { min-width: 0; overflow-wrap: anywhere; }
+.se-upd-pkgok { font-size: 11.5px; color: var(--text-muted); }
+.se-upd-pkg:not([data-mark='ok']) .se-upd-pkgok { color: var(--text); font-weight: 600; }
+.se-upd-pkgstate { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 0 12px; font-size: 11.5px; }

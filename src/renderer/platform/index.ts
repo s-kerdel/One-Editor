@@ -24,6 +24,7 @@ type Bridge = {
   approveClose(ok: boolean): void;
   setTitleBarOverlay?(o: { color: string; symbolColor: string; height: number }): void;
   relaunch?(): Promise<unknown>;
+  zenFullScreen?(on: boolean): void;
   gpuStatus?(): Promise<unknown>;
 };
 
@@ -57,6 +58,7 @@ function electronBackend(bridge: Bridge): BackendApi {
       frame: bridge.frame === 'integrated' ? 'integrated' : 'native',
       setTitleBarOverlay: bridge.setTitleBarOverlay && ((o) => bridge.setTitleBarOverlay!(o)),
       relaunch: bridge.relaunch && (async () => void (await bridge.relaunch!())),
+      zenFullScreen: bridge.zenFullScreen && ((on) => bridge.zenFullScreen!(on)),
       // Older main processes have no handler: invoke rejects → null (the dialog still shows the renderer's view).
       gpuStatus: bridge.gpuStatus && (() => bridge.gpuStatus!().then((r) => (r as GpuStatus | null) ?? null, () => null)),
     },

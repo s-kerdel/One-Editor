@@ -36,8 +36,7 @@ export function paintedBackground(el: Element | null): string {
 
 /** What the overlay should look like now, or null when the strip is not rendered. */
 export function measureTitleBar(): { color: string; symbolColor: string; height: number } | null {
-  // Zen mode: an empty band takes the strip's place (app/zen.tsx), painted like the editor behind it.
-  const bar = document.querySelector<HTMLElement>('.se-tabbar, .se-zen-bar');
+  const bar = document.querySelector<HTMLElement>('.se-tabbar');
   if (!bar) return null;
   const cs = getComputedStyle(bar);
   // File overview open: the controls sit over its top band (shelf: the backdrop; classic: the panel).

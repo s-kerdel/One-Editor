@@ -1,0 +1,41 @@
+/* Zen mode (app/zen-impl.ts; loads with its chunk, which is resolved before any zen frame). The tab strip
+   stays; the sidebar and the file overview (if it was open) fold into thin strips at the window's edges,
+   and a panel shown in zen is a peek over the text (closes when you go back to the editor). */
+.se-zen { --zen-strip: 44px; }
+.se-zen.ui-classic { --zen-strip: 48px; }
+.se-zen .se-main { position: relative; }
+/* The strips take the place of the card's side margins: nothing moves when a peek opens. */
+.se-zen .se-main .se-content { margin-left: 0; }
+.se-zen.zen-ov .se-main .se-content { margin-right: 0; }
+.frame-integrated.ui-shelf.se-zen.zen-ov .se-content { border-right-width: 1px; border-bottom-right-radius: var(--radius-xl); }
+/* Window controls (integrated frame, not full screen) reach over the right strip into the tab strip. */
+.frame-integrated.se-zen.zen-ov .se-tabbar { padding-right: max(0px, calc(var(--wco-right) - var(--zen-strip))); }
+
+.se-zen-strip { flex: none; width: var(--zen-strip); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0 8px; }
+.ui-classic .se-zen-strip { padding-top: 8px; background: var(--bg-activity); }
+.ui-classic .se-zen-strip.left { border-right: 1px solid var(--border); }
+.ui-classic .se-zen-strip.right { border-left: 1px solid var(--border); }
+/* Nothing under the window controls: the right strip starts below them (WCO hidden in full screen → 0);
+   macOS keeps its traffic lights top left. */
+.frame-integrated .se-zen-strip.right,
+.frame-integrated[data-os='darwin'] .se-zen-strip.left { padding-top: max(10px, calc(env(titlebar-area-height, 0px) + 6px)); }
+.se-zen-strip-spacer { flex: 1; }
+.se-zen-strip-btn { flex: none; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-faint); transition: background 0.12s, color 0.12s; }
+.se-zen-strip-btn:hover { background: var(--bg-hover); color: var(--text); }
+.se-zen-strip-btn.on { background: var(--bg-shelf-raised); color: var(--accent); box-shadow: inset 0 0 0 1px var(--border); }
+.ui-classic .se-zen-strip-btn { width: 36px; height: 36px; }
+.ui-classic .se-zen-strip-btn.on { background: var(--accent-soft); box-shadow: none; }
+
+/* Peeks: the panel over the text, next to its strip. After .se-content in the DOM and no-drag, so the
+   tab strip's drag region under it never steals a click (Chromium: the last region box wins). */
+.se-zen .se-zen-peek { position: absolute; top: 0; bottom: 0; z-index: 30; background: var(--bg-shelf); box-shadow: var(--shadow); animation: se-zen-peek 0.12s ease-out; }
+.se-zen .se-sidebar.se-zen-peek { left: var(--zen-strip); border-right: 1px solid var(--border); }
+.se-zen .se-overview.se-zen-peek { right: 0; border-left: 1px solid var(--border); --peek-from: 6px; }
+.se-zen.zen-ov .se-overview.se-zen-peek { right: var(--zen-strip); }
+.se-zen.ui-classic .se-zen-peek { background: var(--bg-sunken); }
+.frame-integrated .se-zen-peek { -webkit-app-region: no-drag; app-region: no-drag; }
+/* A floating panel never moves the window: not even its header (classic Files head, overview band). */
+.frame-integrated.se-zen .se-zen-peek :is(.se-panel-head, .se-ov-head) { -webkit-app-region: no-drag; app-region: no-drag; }
+@keyframes se-zen-peek { from { opacity: 0; transform: translateX(var(--peek-from, -6px)); } }
+/* The tab strip's "leave zen" (top right): lit like the strip's toggle. */
+.se-zen .se-tabbar-tools .se-zen-btn.on { color: var(--accent); }

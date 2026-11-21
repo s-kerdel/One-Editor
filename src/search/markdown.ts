@@ -3,6 +3,7 @@
 // blockquotes count) — it classifies matches, it doesn't render.
 import { languageForFence, languageForPath } from '@shared/languages';
 import { isMarkdown } from '@shared/paths';
+import { blankCodeSpans, codeSpans, parseAtxHeading, parseQuotedFence } from '@shared/markdown-lines';
 import { computeLineStarts } from './text';
 import type { MatchContext } from './types';
 
@@ -46,8 +47,7 @@ export interface DocStructure {
   langs: Set<string>;
 }
 
-const FENCE_RE = /^(\s*(?:>\s?)*\s*)(`{3,}|~{3,})(.*)$/;
-const ATX_RE = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+// Fences and ATX headings: single-scan parsers (the regexes were quadratic on crafted lines).
 const SETEXT_RE = /^ {0,3}(=+|-+)[ \t]*$/;
 const LIST_RE = /^\s*(?:[-*+]|\d+[.)])\s/;
 const TAG_RE = /(^|[\s(\[,;])#([\p{L}\p{N}_\-\/]*[\p{L}_\-\/][\p{L}\p{N}_\-\/]*)/gu;
@@ -120,8 +120,8 @@ export function parseStructure(path: string, content: string): DocStructure {
     const l = lineAt(i);
     if (fence) {
       block[i] = fence.block;
-      const m = FENCE_RE.exec(l);
-      if (m && m[2][0] === fence.ch && m[2].length >= fence.len && !m[3].trim()) {
+      const m = parseQuotedFence(l);
+      if (m && m.fence[0] === fence.ch && m.fence.length >= fence.len && !m.info.trim()) {
         kinds[i] = K_FENCE;
         blocks[fence.block].endLine = i;
         fence = null;
@@ -131,27 +131,27 @@ export function parseStructure(path: string, content: string): DocStructure {
     const c0 = l.trimStart()[0];
     if (c0 === undefined) continue;
     if (c0 === '`' || c0 === '~' || c0 === '>') {
-      const m = FENCE_RE.exec(l);
-      if (m && !(m[2][0] === '`' && m[3].includes('`'))) {
-        const info = m[3].trim();
+      const m = parseQuotedFence(l);
+      if (m && !(m.fence[0] === '`' && m.info.includes('`'))) {
+        const info = m.info.trim();
         const word = info.split(/[\s{,]/)[0].replace(/^\./, '').toLowerCase();
         const li = word ? languageForFence(word) : null;
         const b: CodeBlock = { lang: word, langId: li?.id ?? word, startLine: i, endLine: n - 1 };
         if (b.langId) langs.add(b.langId);
         blocks.push(b);
-        fence = { ch: m[2][0], len: m[2].length, block: blocks.length - 1 };
+        fence = { ch: m.fence[0], len: m.fence.length, block: blocks.length - 1 };
         kinds[i] = K_FENCE;
         block[i] = fence.block;
         continue;
       }
     }
     if (c0 === '#') {
-      const m = ATX_RE.exec(l);
+      const m = parseAtxHeading(l);
       if (m) {
         kinds[i] = K_HEADING;
-        const text = (m[2] ?? '').trim();
-        headings.push({ line: i, level: m[1].length, text });
-        if (!title && m[1].length === 1 && text) title = text;
+        const text = m.text.trim();
+        headings.push({ line: i, level: m.level, text });
+        if (!title && m.level === 1 && text) title = text;
         collectTags(text, tags);
         continue;
       }
@@ -175,7 +175,7 @@ export function parseStructure(path: string, content: string): DocStructure {
 
 function collectTags(line: string, out: Set<string>) {
   if (line.indexOf('#') === -1) return;
-  const stripped = line.indexOf('`') === -1 ? line : line.replace(/(`+)[^`]*?\1/g, (s) => ' '.repeat(s.length));
+  const stripped = blankCodeSpans(line);
   TAG_RE.lastIndex = 0;
   for (let m = TAG_RE.exec(stripped); m; m = TAG_RE.exec(stripped)) out.add(m[2].toLowerCase());
 }
@@ -192,37 +192,20 @@ export function inlineSpans(line: string): InlineSpan[] {
   const out: InlineSpan[] = [];
   if (line.indexOf('`') === -1 && line.indexOf('[') === -1 && line.indexOf('://') === -1) return out;
   // 1) code spans (take precedence: links inside backticks are code)
-  const codeMask: Array<[number, number]> = [];
-  for (let i = 0; i < line.length; ) {
-    if (line[i] !== '`') {
-      i++;
-      continue;
+  // Linear (a table of backtick runs): an unclosed run no longer scans the rest of the line each time.
+  const codeMask = codeSpans(line);
+  for (const [a, b] of codeMask) out.push({ start: a, end: b, kind: 'inline-code' });
+  const inCode = (s: number) => {
+    let lo = 0;
+    let hi = codeMask.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (s < codeMask[mid][0]) hi = mid - 1;
+      else if (s >= codeMask[mid][1]) lo = mid + 1;
+      else return true;
     }
-    let j = i;
-    while (line[j] === '`') j++;
-    const runLen = j - i;
-    let k = j;
-    let close = -1;
-    while (k < line.length) {
-      const p = line.indexOf('`', k);
-      if (p === -1) break;
-      let q = p;
-      while (line[q] === '`') q++;
-      if (q - p === runLen) {
-        close = p;
-        break;
-      }
-      k = q;
-    }
-    if (close === -1) {
-      i = j;
-      continue;
-    }
-    out.push({ start: i, end: close + runLen, kind: 'inline-code' });
-    codeMask.push([i, close + runLen]);
-    i = close + runLen;
-  }
-  const inCode = (s: number) => codeMask.some(([a, b]) => s >= a && s < b);
+    return false;
+  };
   // 2) links: [[wiki]], [text](url), <url>, bare urls
   const linkRe = /!?\[\[[^\]\n]*\]\]|!?\[[^\]\n]*\]\([^)\n]*\)|<https?:\/\/[^>\s]+>|https?:\/\/[^\s<>()\]]+/g;
   for (let m = linkRe.exec(line); m; m = linkRe.exec(line)) {

@@ -1,10 +1,11 @@
 // Declarative list of every user setting: one entry drives the control, its description, the
 // search index and reset-to-default. Pure (no DOM, no app singleton) so it is unit-testable.
 import { DEFAULT_SETTINGS } from '@shared/api';
+import { MCP_WRITES_ENABLED } from '@shared/mcp';
 import { normalizeKey } from './commands';
 import { TERMINAL_SECTION, TERMINAL_SETTING_DEFS } from '../terminal/settings';
 
-export type SectionId = 'appearance' | 'editor' | 'files' | 'search' | 'formatting' | 'links' | 'attachments' | 'preview' | 'export' | 'variables' | 'terminal' | 'webserver' | 'updates' | 'shortcuts';
+export type SectionId = 'appearance' | 'editor' | 'files' | 'search' | 'formatting' | 'links' | 'attachments' | 'preview' | 'export' | 'variables' | 'terminal' | 'webserver' | 'mcp' | 'updates' | 'shortcuts';
 
 export interface SectionDef {
   id: SectionId;
@@ -29,6 +30,8 @@ export const SECTIONS: SectionDef[] = [
   { ...TERMINAL_SECTION },
   // Settings.tsx shows the live server state + Start / Stop above the rows (src/renderer/webserver).
   { id: 'webserver', title: 'Browser mode', icon: 'globe', blurb: 'Open this folder in a web browser: on this computer, or from other devices on your network.', desktopOnly: true },
+  // Settings.tsx shows on/off, the shared folders, client setup and activity above the rows (src/renderer/mcp).
+  { id: 'mcp', title: 'MCP server', icon: 'plug', blurb: 'Let AI apps (LM Studio, Codex CLI, Claude…) read the folders you share, through the Model Context Protocol.', desktopOnly: true },
   // Settings.tsx shows the last check + "Check now" + what is sent above the row (src/renderer/updates).
   { id: 'updates', title: 'Security updates', icon: 'shield', blurb: 'Tells you when this build needs a rebuild: a newer Electron patch, a known vulnerability, end of support.', desktopOnly: true },
   { id: 'shortcuts', title: 'Keyboard shortcuts', icon: 'keyboard' },
@@ -270,14 +273,15 @@ const defs: Draft[] = [
     },
   },
   // ---- Appearance → Zen mode (View: Toggle zen mode, app/zen.tsx) ----
+  // `zen.keepFileTree` (zen before the strips) is gone on purpose: a stored value is ignored (app/zen-impl.ts).
   {
-    key: 'zen.keepFileTree',
+    key: 'zen.fullScreen',
     section: 'appearance',
     group: 'Zen mode',
-    label: 'Keep the file tree',
-    description: 'Zen mode (Ctrl+Alt+Z) shows only the text. On: the file tree stays beside it.',
-    keywords: ['zen', 'distraction free', 'focus', 'sidebar', 'files', 'tree', 'writing'],
-    default: false,
+    label: 'Full screen',
+    description: 'Zen mode (Ctrl+Alt+Z) fills the screen. Off: the window keeps its size.',
+    keywords: ['zen', 'distraction free', 'focus', 'fullscreen', 'full screen', 'f11', 'writing'],
+    default: true,
     control: { type: 'toggle' },
   },
   {
@@ -285,7 +289,7 @@ const defs: Draft[] = [
     section: 'appearance',
     group: 'Zen mode',
     label: 'Keep the status bar',
-    description: 'Zen mode hides the status bar too. On: it stays at the bottom.',
+    description: 'Zen mode hides the status bar. On: it stays at the bottom.',
     keywords: ['zen', 'distraction free', 'focus', 'status', 'word count', 'writing'],
     default: false,
     control: { type: 'toggle' },
@@ -456,10 +460,10 @@ const defs: Draft[] = [
     key: 'excludeGlobs',
     section: 'files',
     label: 'Excluded folders',
-    description: 'Hidden from the tree and from search. Names or globs, comma-separated.',
-    keywords: ['ignore', 'node_modules', 'glob', 'exclude'],
+    description: 'Hidden from the tree and search. Names, *.log, docs/build, **/secrets, private/*.md.',
+    keywords: ['ignore', 'node_modules', 'glob', 'exclude', '**'],
     default: D.excludeGlobs,
-    control: { type: 'list', placeholder: 'node_modules, *.log, docs/build' },
+    control: { type: 'list', placeholder: 'node_modules, *.log, docs/build, **/secrets' },
   },
   { key: 'confirmDelete', section: 'files', label: 'Confirm before deleting', description: 'Ask before moving files to the trash.', keywords: ['trash', 'recycle bin', 'remove'], default: D.confirmDelete ?? true, control: { type: 'toggle' } },
   {
@@ -891,13 +895,72 @@ const defs: Draft[] = [
     },
     desktopOnly: true,
   },
-  // ---- Security updates (opt-in; main reads it before every check: src/main/update-check.ts) ----
+  // ---- MCP server: result sizes (read by the server on every call: shared/mcp.ts limitsFromSettings) ----
+  {
+    key: 'mcp.maxReadKB',
+    section: 'mcp',
+    label: 'Text per read',
+    description: 'Most text one read returns (longer files come in pages). Small = fits small local models.',
+    keywords: ['mcp', 'ai', 'llm', 'context', 'tokens', 'lm studio', 'codex', 'claude', 'read_file', 'page'],
+    default: 16,
+    control: { type: 'number', min: 4, max: 256, step: 4, stepper: true, unit: 'kB' },
+    desktopOnly: true,
+    group: 'Answer size',
+  },
+  {
+    key: 'mcp.maxResults',
+    section: 'mcp',
+    label: 'Results per call',
+    description: 'Most search hits, files, headings, tags or links one call returns.',
+    keywords: ['mcp', 'ai', 'llm', 'context', 'tokens', 'search', 'limit'],
+    default: 25,
+    control: { type: 'number', min: 5, max: 200, step: 5, stepper: true },
+    desktopOnly: true,
+    group: 'Answer size',
+  },
+  {
+    key: 'mcp.allowCode',
+    section: 'mcp',
+    label: 'Also allow code and config files',
+    description: 'Off: AI apps write notes only (.md, .markdown, .txt). Scripts and programs: never.',
+    keywords: ['mcp', 'ai', 'write', 'code', 'config', 'json', 'yaml', 'file types', 'extensions'],
+    default: false,
+    control: { type: 'toggle' },
+    desktopOnly: true,
+    group: 'Changes',
+    enabledWhen: () => MCP_WRITES_ENABLED, // greyed out while this build ships MCP read-only
+  },
+  {
+    key: 'mcp.journal',
+    section: 'mcp',
+    label: 'Keep undo copies of AI edits',
+    description: 'Off: AI changes made from now on keep no copy and cannot be reverted here. Old copies stay.',
+    keywords: ['mcp', 'ai', 'undo', 'revert', 'history', 'journal', 'backup', 'restore'],
+    default: true,
+    control: { type: 'toggle' },
+    desktopOnly: true,
+    group: 'Undo',
+    enabledWhen: () => MCP_WRITES_ENABLED,
+  },
+  {
+    key: 'mcp.journalDays',
+    section: 'mcp',
+    label: 'Keep undo copies for',
+    description: 'Older copies are removed (at most 100 MB in all).',
+    keywords: ['mcp', 'ai', 'undo', 'revert', 'history', 'days'],
+    default: 30,
+    control: { type: 'number', min: 1, max: 365, stepper: true, unit: 'days' },
+    desktopOnly: true,
+    group: 'Undo',
+    enabledWhen: (s) => MCP_WRITES_ENABLED && s['mcp.journal'] !== false,
+  },
+  // ---- Security updates (opt-in automatic check; main reads it before every automatic check: src/main/update-check.ts) ----
   {
     key: 'updates.check',
     section: 'updates',
-    label: 'Check for security updates',
-    description: 'Off: nothing is sent. On: asks endoflife.date and api.osv.dev, at most once a week.',
-    keywords: ['security', 'update', 'electron', 'chromium', 'vulnerability', 'cve', 'patch', 'outdated', 'osv', 'privacy', 'network'],
+    label: 'Check automatically every week',
+    description: 'Checks once a week after launch. Off: nothing is sent unless you click Check now.',
+    keywords: ['security', 'update', 'electron', 'chromium', 'vulnerability', 'cve', 'patch', 'outdated', 'osv', 'privacy', 'network', 'automatic', 'weekly'],
     default: false,
     control: { type: 'toggle' },
     desktopOnly: true,

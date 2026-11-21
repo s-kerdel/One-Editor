@@ -1,7 +1,8 @@
 // "Security updates" UI (lazy chunk, desktop only — loaded after the idle Popups chunk, nothing at startup
 // but the status-bar slot): the shield, the findings dialog, the Settings panel and two palette commands.
 // The check itself runs in main (src/main/update-check.ts); this side asks over `secEditBridge.updates`
-// and shows what main reports. Opt-in: while the setting is off nothing is asked and nothing is shown.
+// and shows what main reports. The setting = automatic checks: while it is off nothing is asked on its own;
+// "Check now" always works (the user clicked). The shield shows the last check's problems either way.
 import { effect, signal } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import { app } from '../app/app';
@@ -12,6 +13,7 @@ import { flushSettings } from '../app/settings';
 import { BRAND } from '@shared/brand';
 import { NO_STATUS, alerting, type Finding, type UpdateReply, type UpdateStatus } from '@shared/update-check';
 import { updatesShield } from './slot';
+import { SEVERITY_LABEL, Summary, when } from './summary';
 import '../app/overlays.css'; // dialog base
 import './updates.css';
 
@@ -39,16 +41,17 @@ export const status = signal<UpdateStatus>(NO_STATUS);
 const enabled = () => app.settings.value['updates.check'] === true;
 const KEYWORDS = ['security', 'update', 'electron', 'chromium', 'vulnerability', 'cve', 'patch', 'outdated', 'osv'];
 
-/** Asks main for a check. Automatic ones stay quiet whatever happens; the result lands in `status`. */
-async function check(force: boolean) {
+/** Asks main for a check: `manual` = "Check now" (any time), else automatic (setting on, main applies the
+ *  weekly rule). Automatic ones stay quiet whatever happens; the result lands in `status`. */
+async function check(manual: boolean) {
   const b = bridge();
-  if (!b || !enabled() || status.value.checking) return;
+  if (!b || (!manual && !enabled()) || status.value.checking) return;
   status.value = { ...status.value, checking: true };
   try {
-    status.value = await call(b.check(force));
+    status.value = await call(b.check(manual));
   } catch (err) {
     status.value = { ...status.value, checking: false };
-    if (force) app.toast(`Security updates: ${(err as Error).message}`, 'error');
+    if (manual) app.toast(`Security updates: ${(err as Error).message}`, 'error');
   }
 }
 
@@ -76,56 +79,50 @@ export function install() {
     .then(() => {
       // Once per launch, and main only goes out when the last check is a week old.
       if (enabled()) whenVisible(() => void check(false));
-      // Switched on (here or in another window): check right away — after main has the setting.
+      // Switched on (here or in another window): the automatic check right away when due (never checked,
+      // or a week old) — after main has the setting.
       let was = enabled();
       effect(() => {
         const on = enabled();
         // A microtask later: updateSettings() queues the patch only after this signal fired.
-        if (on && !was) void Promise.resolve().then(flushSettings).then(() => whenVisible(() => void check(true)));
+        if (on && !was) void Promise.resolve().then(flushSettings).then(() => whenVisible(() => void check(false)));
         was = on;
       });
     });
   updatesShield.value = Shield;
   registerCommands([
     { id: 'updates.show', title: 'Security updates: Show findings', keywords: KEYWORDS, run: openFindings },
-    { id: 'updates.check', title: 'Security updates: Check now', keywords: KEYWORDS, when: enabled, run: () => void check(true).then(openFindings) },
+    { id: 'updates.check', title: 'Security updates: Check now', keywords: KEYWORDS, run: () => void check(true).then(openFindings) },
   ]);
   (globalThis as { __secEditUpdates?: unknown }).__secEditUpdates = { status: () => status.value }; // E2E
 }
 
 // ---- pieces shared by the dialog and the Settings panel ------------------------------------------
 
-const when = (t: number) => new Date(t).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
-
 function lastLine(s: UpdateStatus): { state: 'off' | 'never' | 'ok' | 'failed' | 'checking'; text: string } {
   if (s.checking) return { state: 'checking', text: 'Checking…' };
   if (s.lastError) return { state: 'failed', text: `Last check failed (${s.lastAttempt ? when(s.lastAttempt) : 'just now'}): ${s.lastError}.${s.lastChecked ? ` Last complete check: ${when(s.lastChecked)}.` : ''}` };
-  if (!s.lastChecked) return { state: enabled() ? 'never' : 'off', text: enabled() ? 'Not checked yet.' : 'Off. Nothing is sent.' };
+  if (!s.lastChecked) return { state: enabled() ? 'never' : 'off', text: enabled() ? 'Not checked yet.' : 'Automatic check off: nothing is sent until you click Check now.' };
   const n = alerting(s.findings).length;
   return { state: 'ok', text: `Last checked ${when(s.lastChecked)}: ${n ? `${n} finding${n === 1 ? '' : 's'}` : 'nothing found'}.` };
 }
 
 function CheckNow({ primary = false }: { primary?: boolean }) {
-  const on = enabled();
   return (
-    <button
-      class={`se-btn small${primary ? ' primary' : ''}`}
-      data-testid="updates-check-now"
-      disabled={!on || status.value.checking}
-      title={on ? undefined : 'Switch on “Check for security updates” first'}
-      onClick={() => void check(true)}
-    >
+    <button class={`se-btn small${primary ? ' primary' : ''}`} data-testid="updates-check-now" disabled={status.value.checking} onClick={() => void check(true)}>
       <Icon name="refresh" size={13} />
       Check now
     </button>
   );
 }
 
-const SEVERITY_LABEL: Record<string, string> = { CRITICAL: 'Critical', HIGH: 'High', MODERATE: 'Moderate', LOW: 'Low', UNKNOWN: 'Severity unknown' };
 const KIND_LABEL: Record<Finding['kind'], string> = { vuln: 'Known vulnerability', 'electron-patch': 'Newer patch', 'electron-eol': 'End of support', 'electron-major': 'Newer major' };
 
+/** Opens a link of a row / the summary in the OS browser (only URLs main built or fixed source pages). */
+const openLink = (url: string) => void app.backend.openExternal(url).catch((err) => app.toast(`Could not open the link: ${(err as Error).message}`, 'error'));
+
 function Row({ f }: { f: Finding }) {
-  const open = () => void app.backend.openExternal(f.url).catch((err) => app.toast(`Could not open the link: ${(err as Error).message}`, 'error'));
+  const open = () => openLink(f.url);
   return (
     <li class="se-upd-row" data-level={f.level} data-kind={f.kind} data-testid="updates-row">
       <span class="se-upd-dot" aria-hidden="true" />
@@ -228,8 +225,9 @@ function FindingsDialog() {
 
 function Shield() {
   const alerts = alerting(status.value.findings);
-  // Quiet unless there is something to do; switched off = no shield, even with an old result.
-  if (!alerts.length || !enabled()) return null;
+  // Quiet unless the last check (manual or automatic) found something to do. Findings about versions this
+  // build no longer ships are already dropped in main, so an old result can't warn about an updated app.
+  if (!alerts.length) return null;
   const high = alerts.some((f) => f.level === 'high');
   return (
     <button
@@ -265,8 +263,13 @@ export function SettingsPanel() {
         )}
         <CheckNow primary />
       </div>
+      {s.summary ? (
+        <Summary s={s.summary} findings={s.findings} open={openLink} />
+      ) : (
+        s.lastChecked && !s.checking && <p class="se-upd-note">Check now to see what is checked, line by line.</p>
+      )}
       <p class="se-upd-note" data-testid="updates-privacy">
-        <strong>What is sent:</strong> a check asks endoflife.date for the public list of Electron releases (nothing about you or this app is sent), and sends api.osv.dev the names and versions of the libraries this build of {BRAND} ships. Both see your IP address, as any website does. Nothing else: no ids, no file or folder names, no cookies. When on: once after launch if the last check is a week old, and when you click Check now.
+        <strong>What is sent:</strong> a check asks endoflife.date for the public list of Electron releases (nothing about you or this app is sent), and sends api.osv.dev the names and versions of the libraries this build of {BRAND} ships. Both see your IP address, as any website does. Nothing else: no ids, no file or folder names, no cookies. <strong>When:</strong> whenever you click Check now; with the switch below on, also once after launch if the last check is a week old.
       </p>
     </div>
   );

@@ -70,7 +70,7 @@ test('startup bundle stays within budget and contains no lazy feature code', () 
     .filter((a) => a.file.endsWith('.js'))
     .map((a) => fs.readFileSync(path.join(RENDERER_DIR, a.file), 'utf8'))
     .join('\n');
-  for (const marker of ['se-search-summary', 'se-palette-input', 'se-kn-', 'sec-edit-search', 'Document changed while formatting', 'se-settings', 'se-menu-item', 'se-welcome', 'se-ov-sec']) {
+  for (const marker of ['se-search-summary', 'se-palette-input', 'se-kn-', 'sec-edit-search', 'Document changed while formatting', 'se-settings', 'se-menu-item', 'se-welcome', 'se-ov-sec', 'zen-strip-overview']) {
     expect(startupSrc.includes(marker), `"${marker}" leaked into the startup chunks`).toBe(false);
   }
   // Browser mode's transport (token, launch code, RPC over fetch, SSE, media HMAC) is a chunk of its own

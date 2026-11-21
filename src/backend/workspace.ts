@@ -76,6 +76,12 @@ export interface WorkspaceOptions {
   warmIndexer?: boolean;
   /** Skip the probe (tests). true = names differ by case. */
   caseSensitive?: boolean;
+  /** 'skip': symlinks / junctions are not listed, watched or read in bulk at all (the MCP server: a link
+   *  must not become a second name for an excluded or hidden place). Default 'follow' (inside ones). */
+  links?: 'follow' | 'skip';
+  /** Folders whose content is never listed, read or written, whatever the open folder (One's own data
+   *  folder: settings, mcp.json, the vault, git trust). A page taken over must not rewrite them. */
+  deny?: string[];
 }
 
 /** Only a guess, used when a folder gives nothing to probe with (no letters in any name). */
@@ -121,6 +127,13 @@ export async function probeCaseSensitive(root: string): Promise<boolean | null> 
   return null;
 }
 
+/**
+ * Optional last check of a mutation, run inside the path's exclusive slot right before the disk changes
+ * (the MCP server re-checks where the path really leads, its precondition, and journals the old bytes).
+ * Throwing cancels the operation. `abs` is the lexical path; `role` says which end of a rename it is.
+ */
+export type WriteGuard = (abs: string, role: 'target' | 'from' | 'to') => Promise<void>;
+
 /** How long the first walk's tree may answer the next full listTree (the renderer asks within ~1 s). */
 const BOOT_TREE_MS = 5_000;
 
@@ -161,6 +174,9 @@ export class Workspace {
   private readonly cacheFile: string | null;
   private readonly readThreads: number;
   private readonly warmIndexer: boolean;
+  private readonly skipLinks: boolean;
+  /** deny: as given and with links resolved. */
+  private readonly denyDirs: string[];
   /** Indexing I/O (pass, cache, filters, decoding) lives here — a worker thread in the app. */
   private host: IndexerHost | null = null;
   private sentVersion = '';
@@ -211,6 +227,15 @@ export class Workspace {
     this.cacheFile = opts.cacheDir ? cacheFileFor(opts.cacheDir, this.root) : null;
     this.readThreads = opts.readThreads ?? defaultReadThreads(this.root);
     this.warmIndexer = opts.warmIndexer !== false;
+    this.skipLinks = opts.links === 'skip';
+    const deny = (opts.deny ?? []).filter(Boolean).map((d) => path.resolve(d));
+    this.denyDirs = [...new Set([...deny, ...deny.map((d) => {
+      try {
+        return fs.realpathSync(d);
+      } catch {
+        return d;
+      }
+    })])];
     if (opts.caseSensitive !== undefined) {
       this.caseSensitive = opts.caseSensitive;
       this.caseProbe = Promise.resolve(opts.caseSensitive);
@@ -324,6 +349,7 @@ export class Workspace {
    */
   async real(rel: string, leaf: 'follow' | 'entry' = 'follow'): Promise<string> {
     const abs = this.abs(rel);
+    if (this.denyDirs.length) await this.refuseDenied(abs, rel);
     if (abs === this.root) return abs;
     let at = leaf === 'follow' ? abs : path.dirname(abs);
     for (;;) {
@@ -332,6 +358,46 @@ export class Workspace {
       if (w === 'out') throw new BackendFailure('OUTSIDE_WORKSPACE', `Path leads outside the folder (through a link): ${rel}`);
       at = path.dirname(at);
     }
+  }
+
+  /** Inside a denied folder (as written, or where its nearest existing part really is)? */
+  private isDenied(abs: string): boolean {
+    return this.denyDirs.some((d) => isInsideDir(abs, d, path, this.foldsCase));
+  }
+
+  /** Is `rel` in a denied folder, as written or where its nearest existing part really is? */
+  private async deniedPath(rel: string): Promise<boolean> {
+    try {
+      await this.refuseDenied(this.abs(rel), rel);
+      return false;
+    } catch (err) {
+      return err instanceof BackendFailure && err.code === 'EACCES';
+    }
+  }
+
+  private async refuseDenied(abs: string, rel: string) {
+    const refuse = () => new BackendFailure('EACCES', `One's own data folder is off limits: ${rel}`);
+    if (this.isDenied(abs)) throw refuse();
+    for (let cur = abs; ; cur = path.dirname(cur)) {
+      const real = await fsp.realpath(cur).catch(() => null);
+      if (real !== null) {
+        if (this.isDenied(real)) throw refuse();
+        return;
+      }
+      if (path.dirname(cur) === cur) return;
+    }
+  }
+
+  /** links: 'skip' — is `rel` or any folder above it a link? */
+  private async throughLink(rel: string): Promise<boolean> {
+    let cur = this.root;
+    for (const seg of normalize(rel).split('/')) {
+      cur = path.join(cur, seg);
+      const st = await fsp.lstat(cur).catch(() => null);
+      if (!st) return false;
+      if (st.isSymbolicLink()) return true;
+    }
+    return false;
   }
 
   /** A link met while listing: its target, when that is inside the folder (else null: not listed). */
@@ -500,6 +566,7 @@ export class Workspace {
         }
         const abs = path.join(absDir, e.name);
         if (e.isDirectory()) {
+          if (this.denyDirs.length && this.isDenied(abs)) continue; // One's own data folder: never listed
           const node: TreeNode = { name: e.name, path: rel, kind: 'dir', children: [] };
           index.set(rel, { kind: 'dir' });
           nodes.push(node);
@@ -508,12 +575,14 @@ export class Workspace {
           nodes.push({ name: e.name, path: rel, kind: 'file' });
           const old = known.get(rel);
           index.set(rel, old?.kind === 'file' ? old : { kind: 'file' });
-        } else if (e.isSymbolicLink()) {
+        } else if (e.isSymbolicLink() && !this.skipLinks) {
           pending.push(
             (async () => {
               // Broken links are skipped — and so are links to somewhere outside the folder: neither
               // listed nor followed (the index only ever holds what is really in here).
-              const real = await this.linkTarget(abs);
+              // A link into One's data folder is not listed (nor read in bulk) either.
+              const target = await this.linkTarget(abs);
+              const real = target && this.denyDirs.length && this.isDenied(target) ? null : target;
               const st = real ? await fsp.stat(abs).catch(() => null) : null;
               if (!st) return;
               if (st.isFile()) {
@@ -600,7 +669,7 @@ export class Workspace {
     }
   }
 
-  async writeFile(rel: string, content: string, opts: WriteOptions = {}): Promise<{ mtime: number }> {
+  async writeFile(rel: string, content: string, opts: WriteOptions = {}, guard?: WriteGuard): Promise<{ mtime: number }> {
     const key = normalize(rel);
     if (!key) throw new BackendFailure('EINVAL', 'Empty path');
     const abs = this.abs(key);
@@ -612,6 +681,7 @@ export class Workspace {
         throw new BackendFailure('EXTERNAL_CHANGE', `File changed on disk: ${rel}`);
       }
       if (st && !(st.mode & 0o200)) throw new BackendFailure('EACCES', `File is read-only: ${rel}`);
+      await guard?.(abs, 'target');
       let { eol, bom, encoding } = opts as { eol?: Eol; bom?: boolean; encoding?: TextEncoding };
       if (st && (eol === undefined || bom === undefined || encoding === undefined)) {
         const d = decode(await fsp.readFile(abs));
@@ -627,7 +697,7 @@ export class Workspace {
    * Raw bytes (pasted images, attachments): same guarantees as writeFile — contained path, serialised
    * with every other mutation of the path, atomic, no watcher echo. Creates parent folders, overwrites.
    */
-  async writeBinary(rel: string, data: Uint8Array): Promise<{ mtime: number }> {
+  async writeBinary(rel: string, data: Uint8Array, guard?: WriteGuard): Promise<{ mtime: number }> {
     const key = normalize(rel);
     if (!key) throw new BackendFailure('EINVAL', 'Empty path');
     const abs = this.abs(key);
@@ -637,6 +707,7 @@ export class Workspace {
       await this.refuseCaseClash(key);
       const st = await this.statForWrite(abs, rel);
       if (st && !(st.mode & 0o200)) throw new BackendFailure('EACCES', `File is read-only: ${rel}`);
+      await guard?.(abs, 'target');
       return this.commit(key, abs, st, Buffer.from(data.buffer, data.byteOffset, data.byteLength));
     });
   }
@@ -674,13 +745,14 @@ export class Workspace {
     return { mtime: after.mtimeMs };
   }
 
-  async createFile(rel: string, content = ''): Promise<{ mtime: number }> {
+  async createFile(rel: string, content = '', guard?: WriteGuard): Promise<{ mtime: number }> {
     const key = normalize(rel);
     if (!key) throw new BackendFailure('EINVAL', 'Empty path');
     const abs = this.abs(key);
     return this.withInflight(key, async () => {
       await this.real(key);
       await this.refuseCaseClash(key);
+      await guard?.(abs, 'target');
       await fsp.mkdir(path.dirname(abs), { recursive: true });
       this.noteParents(key);
       try {
@@ -695,7 +767,7 @@ export class Workspace {
     });
   }
 
-  async createDir(rel: string): Promise<void> {
+  async createDir(rel: string, guard?: WriteGuard): Promise<void> {
     const key = normalize(rel);
     if (!key) throw new BackendFailure('EINVAL', 'Empty path');
     const abs = this.abs(key);
@@ -704,13 +776,14 @@ export class Workspace {
       await this.refuseCaseClash(key);
       const st = await fsp.stat(abs).catch(() => null);
       if (st) throw new BackendFailure('EEXIST', `Already exists: ${rel}`);
+      await guard?.(abs, 'target');
       await fsp.mkdir(abs, { recursive: true });
       this.noteEntry(key, { kind: 'dir' });
       this.watchDir(key);
     });
   }
 
-  async rename(from: string, to: string): Promise<void> {
+  async rename(from: string, to: string, guard?: WriteGuard): Promise<void> {
     const src = normalize(from);
     const dst = normalize(to);
     if (!src || !dst) throw new BackendFailure('EINVAL', 'Cannot rename the workspace root');
@@ -728,6 +801,10 @@ export class Workspace {
       if (!sa || (await this.caseClash(src, new Map()))) throw new BackendFailure('ENOENT', `Not found: ${from}`);
       await this.refuseCaseClash(dst, src); // the source itself is fine: a case-only rename
       const sb = await fsp.lstat(b, { bigint: true }).catch(() => null);
+      if (guard) {
+        await guard(a, 'from');
+        await guard(b, 'to');
+      }
       if (sb) {
         // Same inode → case-only rename on a case-insensitive FS (Windows/macOS). Anything else is a real clash.
         if (!sameEntry(sa, sb)) throw new BackendFailure('EEXIST', `Already exists: ${to}`);
@@ -750,7 +827,7 @@ export class Workspace {
   }
 
   /** Removes via `trash` when given (OS recycle bin), else hard delete. */
-  async remove(rel: string, trash?: (abs: string) => Promise<void>): Promise<void> {
+  async remove(rel: string, trash?: (abs: string) => Promise<void>, guard?: WriteGuard): Promise<void> {
     const key = normalize(rel);
     if (!key) throw new BackendFailure('OUTSIDE_WORKSPACE', 'Refusing to delete workspace root');
     const abs = this.abs(key);
@@ -759,6 +836,7 @@ export class Workspace {
       const st = await fsp.lstat(abs).catch(() => null);
       // A stale spelling must not delete the twin it resolves to on a case-insensitive folder.
       if (!st || (await this.caseClash(key, new Map()))) throw new BackendFailure('ENOENT', `Not found: ${rel}`);
+      await guard?.(abs, 'target');
       if (trash) await trash(abs);
       else await retryWin(() => fsp.rm(abs, { recursive: true, force: true }));
       this.dropEntries(key);
@@ -811,7 +889,10 @@ export class Workspace {
     const ok: string[] = [];
     const refused: string[] = [];
     for (const p of paths.map(normalize).filter(Boolean)) {
-      if (this.index.get(p)?.kind === 'file' || (await this.real(p).then(() => true, () => false))) ok.push(p);
+      // real() also refuses One's data folder (as written and where it really is): a listed path can lead
+      // there through a link, so even listed paths take that check here.
+      const known = (this.index.get(p)?.kind === 'file' && !this.denyDirs.length) || (await this.real(p).then(() => true, () => false));
+      if (known && !(this.skipLinks && (await this.throughLink(p)))) ok.push(p);
       else refused.push(p);
     }
     return { ok, refused };
@@ -1140,6 +1221,8 @@ export class Workspace {
   /** Stat one hinted path and diff it against the index. */
   private async reconcile(rel: string, listings?: Map<string, Promise<Set<string> | null>>): Promise<FsEvent[]> {
     if (this.matcher.path(rel)) return [];
+    // A recursive watcher reports everything below the root, One's data folder included: never indexed.
+    if (this.denyDirs.length && (await this.deniedPath(rel))) return [];
     const parent = parentOf(rel);
     if (parent && this.index.get(parent)?.kind !== 'dir') {
       // Parent unknown: it probably just appeared (mkdir -p, folder moved in). Reconcile it instead; that walks it.
@@ -1150,7 +1233,7 @@ export class Workspace {
     // lstat first (one call for ordinary entries, as before): a link that appeared or was re-pointed is
     // an entry only while its target is inside the folder.
     const own = await fsp.lstat(abs).catch(() => null);
-    let st = own?.isSymbolicLink() ? ((await this.linkTarget(abs)) ? await fsp.stat(abs).catch(() => null) : null) : own;
+    let st = own?.isSymbolicLink() ? (!this.skipLinks && (await this.linkTarget(abs)) ? await fsp.stat(abs).catch(() => null) : null) : own;
     // Case-insensitive folder: after "Note.md" → "note.md" the old name still stats fine (it finds the
     // new one). Only the listing tells: else the old spelling comes back as a phantom twin.
     if (st && (await this.caseClash(rel, listings ?? new Map()))) st = null;

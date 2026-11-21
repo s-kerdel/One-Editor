@@ -73,7 +73,7 @@ export function flushSession() {
 export function persistSession() {
   try {
     // Lets index.html's skeleton match the real layout on the next launch.
-    localStorage.setItem('sec-edit-layout', JSON.stringify({ w: Math.round(ui.sidebarWidth.value), sb: app.sidebarVisible.value, ov: ui.overviewVisible.value, ow: Math.round(ui.overviewWidth.value), z: ui.zenAttr(app.settings.value['zen.keepStatusBar'] === true) || undefined }));
+    localStorage.setItem('sec-edit-layout', JSON.stringify({ w: Math.round(ui.sidebarWidth.value), sb: app.sidebarVisible.value, ov: ui.overviewVisible.value && !ui.zen.value, ow: Math.round(ui.overviewWidth.value), z: ui.zenAttr(app.settings.value['zen.keepStatusBar'] === true) || undefined }));
   } catch {}
   if (!app.workspace.value || !sessionRestored) return;
   if (sessionTimer) clearTimeout(sessionTimer);
@@ -242,6 +242,8 @@ export function applySessionLayout(s: SessionState | null) {
     if (typeof s.processesOpen === 'boolean') ui.processesOpen.value = s.processesOpen;
     if (typeof s.sidebarPanel === 'string' && app.panels.value.some((p) => p.id === s.sidebarPanel)) app.sidebarPanel.value = s.sidebarPanel;
     ui.zen.value = zenSaved(s.zen as ui.ZenSaved | undefined) ?? null;
+    // Zen: a shown sidebar / overview is a peek, never restored (also an old zen's kept file tree).
+    if (ui.zen.value) app.sidebarVisible.value = ui.overviewVisible.value = false;
     if (Array.isArray(s.expanded)) ui.expanded.value = new Set(s.expanded.filter((x) => typeof x === 'string'));
     const langs = s.languageOverrides;
     if (langs && typeof langs === 'object') ui.languageOverrides.value = langs as Record<string, string>;

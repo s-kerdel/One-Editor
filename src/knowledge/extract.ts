@@ -2,6 +2,7 @@
 // Pure + line-based (no markdown AST) so 5k notes index in well under a second.
 import { parseWikiLink } from '@shared/wikilinks';
 import { stem } from '@shared/paths';
+import { MAX_STRUCTURE_LINE, blankCodeSpans, parseAtxHeading, parseKeyLine } from '@shared/markdown-lines';
 
 export interface LinkRef {
   kind: 'wiki' | 'md';
@@ -41,12 +42,12 @@ export interface NoteInfo {
 export type LineKind = 'frontmatter' | 'code' | 'text';
 
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
-const INLINE_CODE_RE = /(`+)(?:(?!\1)[^])*?\1(?!`)/g;
 const blank = (s: string) => ' '.repeat(s.length);
 
 /** Replaces inline code spans with spaces (same length, so columns stay valid). */
 export function maskInlineCode(line: string): string {
-  return line.indexOf('`') === -1 ? line : line.replace(INLINE_CODE_RE, blank);
+  // A linear scan of backtick runs (the backreference regex this replaces was ~n^1.85 on crafted lines).
+  return blankCodeSpans(line);
 }
 
 /**
@@ -153,13 +154,14 @@ export function parseFrontmatter(lines: readonly string[]): Record<string, unkno
       if (Array.isArray(arr)) arr.push(scalar(stripComment(item[1])));
       continue;
     }
-    const kv = /^([A-Za-z0-9_][\w .-]*?)\s*:(?:\s+(.*))?$/.exec(raw);
+    // A single scan (the regex this replaces was quadratic on a long line without a colon).
+    const kv = parseKeyLine(raw);
     if (!kv) {
       listKey = null;
       continue;
     }
-    const key = kv[1].trim();
-    const val = stripComment(kv[2] ?? '').trim();
+    const key = kv.key;
+    const val = stripComment(kv.value ?? '').trim();
     if (val === '') {
       props[key] = [];
       listKey = key; // stays [] unless `- item` lines follow
@@ -199,7 +201,6 @@ const REF_DEF_RE = /^ {0,3}\[([^\]\n]+)\]:\s*(?:<([^<>\n]*)>|(\S+))/;
 // A tag = '#' + TAG_BODY, at line start or after whitespace / opening punctuation (TAG_PREFIX).
 const TAG_BODY_RE = /[\p{L}\p{N}_][\p{L}\p{N}_\-/]*/uy;
 const TAG_PREFIX_RE = /[\s(>,;:!?*_~=]/;
-const HEADING_RE = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
 const TASK_RE = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[([ xX])\]\s/;
 const BLOCK_RE = /(?:^|\s)\^([A-Za-z0-9-]+)\s*$/;
 const SCHEME_RE = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/i;
@@ -245,14 +246,14 @@ export function extractHeadings(text: string): Heading[] {
   const seen = new Map<string, number>();
   scanLines(text, (line, lineNo, kind) => {
     if (kind !== 'text' || line.indexOf('#') === -1) return;
-    const m = HEADING_RE.exec(line);
+    const m = parseAtxHeading(line);
     if (!m) return;
-    const t = plainHeading(m[2] ?? '');
+    const t = plainHeading(m.text);
     let slug = slugify(t);
     const n = seen.get(slug) ?? 0;
     seen.set(slug, n + 1);
     if (n) slug = `${slug}-${n}`;
-    out.push({ level: m[1].length, text: t, line: lineNo, slug });
+    out.push({ level: m.level, text: t, line: lineNo, slug });
   });
   return out;
 }
@@ -358,14 +359,14 @@ export function extractNote(path: string, text: string): NoteInfo {
     const hasHash = masked.indexOf('#') !== -1;
 
     if (hasHash) {
-      const h = HEADING_RE.exec(line);
+      const h = parseAtxHeading(line);
       if (h) {
-        const t = plainHeading(h[2] ?? '');
+        const t = plainHeading(h.text);
         let slug = slugify(t);
         const n = slugSeen.get(slug) ?? 0;
         slugSeen.set(slug, n + 1);
         if (n) slug = `${slug}-${n}`;
-        headings.push({ level: h[1].length, text: t, line: lineNo, slug });
+        headings.push({ level: h.level, text: t, line: lineNo, slug });
       }
     }
     if (hasBracket) {
@@ -396,7 +397,7 @@ export function extractNote(path: string, text: string): NoteInfo {
       if (t) t[1] === ' ' ? open++ : done++;
     }
     if (hasHash) for (const t of findTagsInLine(masked)) addTag(t.tag);
-    if (line.indexOf('^') !== -1) {
+    if (line.length <= MAX_STRUCTURE_LINE && line.indexOf('^') !== -1) {
       const b = BLOCK_RE.exec(masked);
       if (b) blocks.push({ id: b[1], line: lineNo });
     }

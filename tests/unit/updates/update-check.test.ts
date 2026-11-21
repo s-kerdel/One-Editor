@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   CHECK_INTERVAL_MS,
   MAX_DETAILS,
+  MAX_SUMMARY_PACKAGES,
   UPDATE_CHECK_CHANNELS as CH,
   UPDATE_ENDPOINTS,
   UPDATE_HOSTS,
@@ -12,17 +13,22 @@ import {
   cvss3Score,
   daysUntil,
   electronFindings,
+  electronSummary,
   fixedVersion,
   isAllowedUpdateUrl,
   isCheckDue,
   isVulnId,
   osvHits,
   osvQueries,
+  packageChecks,
   parseStatus,
+  parseSummary,
+  sameBuild,
   severityOf,
   sortFindings,
   stillShipped,
   vulnFinding,
+  type CheckSummary,
   type Finding,
   type ShippedDeps,
   type UpdateStatus,
@@ -239,7 +245,7 @@ describe('cache', () => {
     expect(stillShipped([finding, ...el], { electron: '45.4.1', packages: [] })).toEqual(el);
   });
   it('a damaged or doctored file gives a clean status', () => {
-    expect(parseStatus(null)).toEqual({ lastChecked: null, lastError: null, lastAttempt: null, checking: false, findings: [] });
+    expect(parseStatus(null)).toEqual({ lastChecked: null, lastError: null, lastAttempt: null, checking: false, findings: [], summary: null });
     expect(parseStatus('x').findings).toEqual([]);
     const s = parseStatus({
       lastChecked: NOW,
@@ -248,7 +254,81 @@ describe('cache', () => {
       checking: true,
       findings: [finding, { ...finding, url: 'javascript:alert(1)' }, { ...finding, url: 'https://evil.example/' }, { ...finding, level: 'boom' }, { ...finding, pkg: '<img>' }, null, 7],
     });
-    expect(s).toEqual({ lastChecked: NOW, lastError: null, lastAttempt: null, checking: false, findings: [finding] });
+    expect(s).toEqual({ lastChecked: NOW, lastError: null, lastAttempt: null, checking: false, findings: [finding], summary: null });
+  });
+});
+
+describe('summary: what a check looked at', () => {
+  it('Electron: shipped version, newest patch, supported until when, newer major', () => {
+    expect(electronSummary(eol(), '45.4.1', NOW)).toEqual({ version: '45.4.1', latest: '45.4.1', eol: '2027-04-27', supported: true, newestMajor: '46' });
+    expect(electronSummary(eol({ latest45: '45.4.3' }), '45.4.1', NOW).latest).toBe('45.4.3');
+    expect(electronSummary(eol({ eolFrom: '2026-11-01' }), '45.4.1', NOW).supported).toBe(false);
+    expect(electronSummary(eol({ isEol: true }), '45.4.1', NOW).supported).toBe(false);
+    expect(electronSummary(eol({ majors: ['44'] }), '45.4.1', NOW)).toEqual({ version: '45.4.1', latest: null, eol: null, supported: null, newestMajor: null });
+    expect(electronSummary(eol({ majors: ['46', '44'] }), '45.4.1', NOW)).toMatchObject({ supported: null, newestMajor: '46' });
+    expect(() => electronSummary({ result: {} }, '45.4.1', NOW)).toThrow(/Unexpected reply/);
+  });
+  it('untrusted reply text: only plain versions of the same major and real dates are kept', () => {
+    for (const bad of ['45.4.3+<img src=x onerror=alert(1)>', '45.4.3 <b>', '45.4.3/../../x', '45.4.3?x=1', '45.4.3#x', '<script>', '44.9.9', 'x'.repeat(60)]) {
+      expect(electronSummary(eol({ latest45: bad }), '45.4.1', NOW).latest, bad).toBeNull();
+      expect(electronFindings(eol({ latest45: bad }), '45.4.1', NOW).some((f) => f.id === 'electron-patch'), bad).toBe(false);
+    }
+    expect(electronSummary(eol({ latest45: '45.5.0-beta.2' }), '45.4.1', NOW).latest).toBe('45.5.0-beta.2');
+    for (const bad of ['2027-13-45', 'soon', '2027-04-27T00:00Z', '<img>']) expect(electronSummary(eol({ eolFrom: bad }), '45.4.1', NOW), bad).toMatchObject({ eol: null, supported: true });
+  });
+  it('packages: every package sent is a row, with its number of distinct advisories', () => {
+    const hits = [
+      { id: 'GHSA-aaaa-bbbb-cccc', pkg: 'dompurify', version: '3.4.18' },
+      { id: 'CVE-2026-1111', pkg: 'dompurify', version: '3.4.18' },
+      { id: 'GHSA-dddd-eeee-ffff', pkg: '@codemirror/view', version: '6.43.15' },
+    ];
+    expect(packageChecks(osvQueries(DEPS), hits)).toEqual([
+      { name: 'electron', version: '45.4.1', vulns: 0 },
+      { name: 'dompurify', version: '3.4.18', vulns: 2 },
+      { name: 'markdown-it', version: '15.0.3', vulns: 0 },
+      { name: '@codemirror/view', version: '6.43.15', vulns: 1 },
+    ]);
+  });
+  const good: CheckSummary = {
+    at: NOW,
+    ms: 1234,
+    electron: { version: '45.4.1', latest: '45.4.3', eol: '2027-04-27', supported: true, newestMajor: '46' },
+    electronError: null,
+    packages: packageChecks(osvQueries(DEPS), [{ id: 'GHSA-aaaa-bbbb-cccc', pkg: 'dompurify', version: '3.4.18' }]),
+    packagesError: null,
+  };
+  it('a stored summary comes back as written; doctored fields are dropped, text is capped', () => {
+    expect(parseSummary(JSON.parse(JSON.stringify(good)))).toEqual(good);
+    expect(parseStatus({ lastChecked: NOW, summary: good }).summary).toEqual(good);
+    for (const bad of [null, 'x', 5, {}, { at: 'x' }, { at: -1 }]) expect(parseSummary(bad), JSON.stringify(bad)).toBeNull();
+    const doctored = parseSummary({
+      at: NOW,
+      ms: -5,
+      electron: { version: '45.4.1', latest: '45.4.3<img>', eol: 'tomorrow', supported: 'yes', newestMajor: '<b>46</b>' },
+      electronError: `<img src=x onerror=alert(1)>${'x'.repeat(500)}`,
+      packages: [{ name: '<img src=x>', version: '1.0.0', vulns: 1 }, { name: 'ok', version: '1.0.0 /home/me', vulns: 0 }, { name: 'fine', version: '2.0.0', vulns: 1e9 }, { name: 'neg', version: '1.0.0', vulns: -3 }, { name: 'frac', version: '1.0.0', vulns: 1.5 }, null, 'x'],
+      packagesError: 42,
+    })!;
+    expect(doctored).toEqual({
+      at: NOW,
+      ms: 0,
+      electron: { version: '45.4.1', latest: null, eol: null, supported: null, newestMajor: null },
+      electronError: `<img src=x onerror=alert(1)>${'x'.repeat(500)}`.slice(0, 200),
+      packages: [{ name: 'fine', version: '2.0.0', vulns: 999 }, { name: 'neg', version: '1.0.0', vulns: 0 }, { name: 'frac', version: '1.0.0', vulns: 0 }],
+      packagesError: null,
+    });
+    expect(parseSummary({ at: NOW, electron: { version: '<b>' }, packages: 'x', ms: 1e12 })).toMatchObject({ electron: null, packages: null, ms: 3_600_000 });
+    const many = Array.from({ length: MAX_SUMMARY_PACKAGES + 10 }, (_, i) => ({ name: `p${i}`, version: '1.0.0', vulns: 0 }));
+    expect(parseSummary({ at: NOW, packages: many })!.packages).toHaveLength(MAX_SUMMARY_PACKAGES);
+  });
+  it('a summary is about one build: another Electron or other package versions drop it', () => {
+    const s = { ...good, electron: electronSummary(eol(), '45.4.1', NOW) };
+    expect(sameBuild(s, DEPS)).toBe(true);
+    expect(sameBuild(s, { ...DEPS, electron: '45.4.3' })).toBe(false);
+    expect(sameBuild(s, { ...DEPS, packages: [{ name: 'dompurify', version: '3.4.19' }, ...DEPS.packages.slice(1)] })).toBe(false);
+    expect(sameBuild(s, { ...DEPS, packages: DEPS.packages.slice(1) })).toBe(false);
+    expect(sameBuild({ ...s, packages: null }, DEPS)).toBe(true);
+    expect(sameBuild({ ...s, electron: null }, { ...DEPS, electron: '45.4.3' })).toBe(false); // the list starts with Electron
   });
 });
 
@@ -351,13 +431,46 @@ function setup(o: { enabled?: boolean; state?: unknown; eolBody?: unknown; batch
 const dompurifyHit = (queries: { package: { name: string } }[]) => ({ results: queries.map((q) => (q.package.name === 'dompurify' ? { vulns: [{ id: 'GHSA-aaaa-bbbb-cccc' }] } : {})) });
 
 describe('UpdateCheckService', () => {
-  it('switched off: refuses, and nothing is fetched — not even on "Check now"', async () => {
+  it('switched off: the automatic check refuses and nothing is fetched', async () => {
     const t = setup({ enabled: false });
-    await expect(t.svc.check(true)).rejects.toMatchObject({ code: 'EDISABLED' });
     await expect(t.svc.check(false)).rejects.toMatchObject({ code: 'EDISABLED' });
-    expect(await t.svc.status()).toMatchObject({ lastChecked: null, findings: [] });
+    await expect(t.svc.check('true')).rejects.toMatchObject({ code: 'EDISABLED' }); // only `true` is manual
+    t.flags.now = NOW + 30 * DAY; // however long ago
+    await expect(t.svc.check(undefined)).rejects.toMatchObject({ code: 'EDISABLED' });
+    expect(await t.svc.status()).toMatchObject({ lastChecked: null, findings: [], summary: null });
     expect(t.calls).toEqual([]);
     expect(t.written).toEqual([]);
+  });
+
+  it('switched off: "Check now" (manual) still goes, with the same requests; automatic stays refused after it', async () => {
+    const t = setup({ enabled: false, batch: dompurifyHit });
+    const s = await t.svc.check(true);
+    expect(t.calls.map((c) => `${c.init.method} ${c.url}`)).toEqual([
+      'GET https://endoflife.date/api/v1/products/electron/',
+      'POST https://api.osv.dev/v1/querybatch',
+      'GET https://api.osv.dev/v1/vulns/GHSA-aaaa-bbbb-cccc',
+    ]);
+    // Same payload as an automatic check: names + versions, nothing about the setting or the trigger.
+    expect(JSON.parse(t.calls[1].init.body!)).toEqual({ queries: osvQueries(DEPS) });
+    expect(s).toMatchObject({ lastChecked: NOW, lastError: null });
+    expect(t.written).toHaveLength(1);
+    t.flags.now = NOW + 8 * DAY; // due, but the setting is off
+    await expect(t.svc.check(false)).rejects.toMatchObject({ code: 'EDISABLED' });
+    expect(t.calls).toHaveLength(3);
+    // Manual again: no 7-day rule.
+    t.flags.now = NOW + 8 * DAY + 1000;
+    await t.svc.check(true);
+    expect(t.calls).toHaveLength(6);
+  });
+
+  it('switched on: the automatic check goes when due', async () => {
+    const t = setup({ enabled: true });
+    await t.svc.check(false);
+    expect(t.calls).toHaveLength(2);
+    t.flags.enabled = false; // switched off later: automatic refused, even when due
+    t.flags.now = NOW + 8 * DAY;
+    await expect(t.svc.check(false)).rejects.toMatchObject({ code: 'EDISABLED' });
+    expect(t.calls).toHaveLength(2);
   });
 
   it('a check: one GET, one POST with names + versions only, one GET per advisory; the result is cached', async () => {
@@ -401,6 +514,45 @@ describe('UpdateCheckService', () => {
     t.flags.now += 7 * DAY;
     await t.svc.check(false);
     expect(t.calls).toHaveLength(6);
+  });
+
+  it('a check keeps a summary of what it looked at and how long it took; a new process reads it back', async () => {
+    const t = setup({ eolBody: eol({ latest45: '45.4.3' }), batch: dompurifyHit });
+    const fetch = t.deps.fetch;
+    t.deps.fetch = async (url, init) => ((t.flags.now += 400), fetch(url, init));
+    const s = await t.svc.check(true);
+    expect(s.summary).toEqual({
+      at: NOW,
+      ms: 1200,
+      electron: { version: '45.4.1', latest: '45.4.3', eol: '2027-04-27', supported: true, newestMajor: '46' },
+      electronError: null,
+      packages: [
+        { name: 'electron', version: '45.4.1', vulns: 0 },
+        { name: 'dompurify', version: '3.4.18', vulns: 1 },
+        { name: 'markdown-it', version: '15.0.3', vulns: 0 },
+        { name: '@codemirror/view', version: '6.43.15', vulns: 0 },
+      ],
+      packagesError: null,
+    });
+    // Persisted with the findings; the copy handed out is not the service's own.
+    expect((t.written[0] as { summary: unknown }).summary).toEqual(s.summary);
+    s.summary!.packages!.length = 0;
+    expect((await t.svc.status()).summary!.packages).toHaveLength(4);
+    const again = setup({ state: JSON.parse(JSON.stringify(t.flags.state)) });
+    expect((await again.svc.status()).summary).toEqual((await t.svc.status()).summary);
+    expect(again.calls).toEqual([]);
+    // A rebuild with other versions: the old summary no longer describes what runs.
+    const rebuilt = setup({ state: t.flags.state, shipped: { packages: [{ name: 'dompurify', version: '3.4.19' }, ...DEPS.packages.slice(1)] } });
+    expect((await rebuilt.svc.status()).summary).toBeNull();
+  });
+
+  it('the summary says which half failed, in plain words; the other half is still there', async () => {
+    const t = setup({ fail: (u) => u.includes('osv.dev') });
+    expect((await t.svc.check(true)).summary).toMatchObject({ electron: { version: '45.4.1', latest: '45.4.1' }, electronError: null, packages: null, packagesError: 'Could not reach the update services (offline?)' });
+    const u = setup({ eolBody: { nope: true } });
+    const s = (await u.svc.check(true)).summary!;
+    expect(s).toMatchObject({ electron: null, electronError: 'Unexpected reply from endoflife.date', packagesError: null });
+    expect(s.packages).toHaveLength(4);
   });
 
   it('two checks at once share one run', async () => {
@@ -510,10 +662,18 @@ describe('IPC + preload bridge', () => {
     expect(w.calls).toHaveLength(4);
   });
 
-  it('switched off: an error reply, no request', async () => {
+  it('switched off: automatic = an error reply and no request; "Check now" goes', async () => {
     const w = wire(true, false);
-    expect(await w.bridge.check(true)).toEqual({ ok: false, error: { code: 'EDISABLED', message: 'Security update checks are switched off' } });
+    expect(await w.bridge.check(false)).toEqual({ ok: false, error: { code: 'EDISABLED', message: 'Automatic security update checks are switched off' } });
+    expect(await w.bridge.check()).toMatchObject({ ok: false, error: { code: 'EDISABLED' } });
+    expect(await w.handlers.get(CH.check)!({}, 'true')).toMatchObject({ ok: false, error: { code: 'EDISABLED' } });
     expect(w.calls).toEqual([]);
+    expect(await w.bridge.check(true)).toMatchObject({ ok: true, result: { lastChecked: NOW, summary: { at: NOW } } });
+    expect(w.calls).toHaveLength(2);
+    // An untrusted sender cannot make a manual check either.
+    const u = wire(false, false);
+    expect(await u.bridge.check(true)).toMatchObject({ ok: false, error: { code: 'EACCES' } });
+    expect(u.calls).toEqual([]);
   });
 
   it('onChange subscribes and unsubscribes', () => {

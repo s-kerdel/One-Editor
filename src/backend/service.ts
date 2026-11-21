@@ -33,12 +33,9 @@ import { ProcessExplorer, registerProcessSource } from './processes';
 import type { ProcRequest, ProcSnapshot } from '../shared/processes';
 import { winSystemExe } from './winsys';
 
-export function defaultConfigDir(): string {
-  if (process.env.SEC_EDIT_CONFIG_DIR) return process.env.SEC_EDIT_CONFIG_DIR;
-  if (process.platform === 'win32') return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'sec-edit');
-  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'sec-edit');
-  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'sec-edit');
-}
+// Moved to ./appdata (dependency-light, shared with the MCP server); re-exported for existing callers.
+export { defaultConfigDir, defaultCacheDir, indexOptionsFrom } from './appdata';
+import { defaultCacheDir, defaultConfigDir, indexOptionsFrom } from './appdata';
 
 export async function readJson<T>(file: string, fallback: T): Promise<T> {
   try {
@@ -77,24 +74,6 @@ const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 /** Stable per-folder id for config files (sessions, export folders). */
 export const rootId = (root: string) => crypto.createHash('sha1').update(root.toLowerCase()).digest('hex').slice(0, 16);
 
-/** Windows: %LOCALAPPDATA% (a cache must not travel with a roaming profile); elsewhere next to the settings. */
-export function defaultCacheDir(configDir: string): string {
-  const local = process.platform === 'win32' ? process.env.LOCALAPPDATA : undefined;
-  if (local && samePathCI(configDir, defaultConfigDir())) return path.join(local, 'sec-edit', 'index-cache');
-  return path.join(configDir, 'index-cache');
-}
-const samePathCI = (a: string, b: string) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
-
-/** Settings → what the indexers skip (search.* in the settings registry). */
-export function indexOptionsFrom(s: Settings): IndexOptions {
-  const kb = Number(s['search.maxFileSizeKB']);
-  return {
-    respectGitignore: s['search.respectGitignore'] !== false,
-    skipLockfiles: s['search.skipLockfiles'] !== false,
-    skipMinified: s['search.skipMinified'] !== false,
-    maxFileBytes: Number.isFinite(kb) && kb > 0 ? Math.min(16384, Math.max(16, kb)) * 1024 : MAX_INDEX_BYTES,
-  };
-}
 const INDEX_KEYS = ['search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB'];
 
 const samePath = (a: string, b: string) => (process.platform === 'linux' ? a === b : a.toLowerCase() === b.toLowerCase());
@@ -231,7 +210,10 @@ export class BackendService {
     const cacheDir = this.workspaceOptions.cacheDir === undefined ? defaultCacheDir(this.configDir) : this.workspaceOptions.cacheDir || undefined;
     // search.indexing = onDemand: no indexer thread at open; the renderer's first consumer starts it.
     const warmIndexer = s['search.indexing'] !== 'onDemand';
-    this.workspace = new Workspace(resolved, { exclude: s.excludeGlobs, showHidden: s.showHiddenFiles, index: indexOptionsFrom(s), warmIndexer, ...this.workspaceOptions, cacheDir });
+    // One's own data (settings, mcp.json, the vault, git trust, the text cache) is never served, even
+    // when the open folder contains it (the home folder on Windows: AppData is no dot name).
+    const deny = [this.configDir, ...(cacheDir ? [cacheDir] : [])];
+    this.workspace = new Workspace(resolved, { exclude: s.excludeGlobs, showHidden: s.showHiddenFiles, index: indexOptionsFrom(s), warmIndexer, ...this.workspaceOptions, cacheDir, deny });
     this.unwatch = this.workspace.onEvents((e) => {
       this.fsListeners.forEach((l) => l(e));
       this.monitor?.trigger('fs', e.map((x) => x.path));
