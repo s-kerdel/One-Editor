@@ -180,7 +180,8 @@ test('content width: tab-strip button cycles readable → wide → full, palette
   await expect(btn).toHaveAttribute('title', /Readable/);
   expect(await cssVar(page, '--content-width')).toBe('860px');
   // it sits in the view-mode group, left of the mode buttons
-  const [bx, mx] = await page.evaluate(() => [document.querySelector('.se-width-btn')!.getBoundingClientRect().right, document.querySelector('.se-modes')!.getBoundingClientRect().left]);
+  // By its test id: `.se-width-btn` is the shared look of the strip's icon buttons (back/forward use it too).
+  const [bx, mx] = await page.evaluate(() => [document.querySelector('[data-testid="content-width"]')!.getBoundingClientRect().right, document.querySelector('.se-modes')!.getBoundingClientRect().left]);
   expect(mx - bx).toBeGreaterThan(0);
   expect(mx - bx).toBeLessThan(16);
 

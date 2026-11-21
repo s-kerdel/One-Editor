@@ -92,8 +92,9 @@ function install() {
   app.events.on('workspace:opened', () => void reload());
   // Renames made in One emit this per file (Popups' movePath also reports the folder itself).
   app.events.on('file:renamed', (from, to) => renamed(from, to));
-  // Outside the app a rename is an unlink + add in one watcher batch: follow the likely moves.
-  app.backend.onFsEvents((events) => {
+  // Outside the app a rename is an unlink + add in one watcher batch: follow the likely moves. (Optional call: a
+  // stub backend without watcher events, as in unit tests that load this chunk, must not fail the import.)
+  app.backend?.onFsEvents?.((events) => {
     if (!loaded.value || !bookmarks.value.length) return;
     for (const m of fsMoves(
       bookmarks.value.map((b) => b.path),
