@@ -56,6 +56,8 @@ export interface TerminalSpawnRequest {
   cwd?: string;
   cols?: number;
   rows?: number;
+  /** With preset 'claude': report Claude's file edits back (`term:follow`, setting `claude.follow`). */
+  follow?: boolean;
 }
 
 export interface TerminalSpawnResult {
@@ -77,6 +79,25 @@ export interface TerminalExitEvent {
   id: number;
   exitCode: number;
   signal?: number;
+}
+
+/** Longest `probe.text` (a longer line is compared by this prefix). */
+export const FOLLOW_PROBE_CHARS = 200;
+
+/** Claude Code changed a file in the open folder (main/terminal-follow.ts), or finished its turn. */
+export interface TerminalFollowEvent {
+  /** Terminal id. */
+  id: number;
+  /** 'stop' = Claude finished its turn; 'prompt' = the user's next prompt was submitted (both without a path). */
+  kind: 'edit' | 'write' | 'stop' | 'prompt';
+  /** Workspace-relative POSIX path (edit / write). Never a path outside the open folder. */
+  path?: string;
+  /** Start of the new text: only to find the edited lines (fallback when there are no `lines`). */
+  hint?: string;
+  /** Changed lines of the file as it is after the edit (1-based, inclusive, merged), from Claude's own patch. */
+  lines?: Array<[number, number]>;
+  /** Text of one added line: the document shows the edit once that line reads like this. */
+  probe?: { line: number; text: string };
 }
 
 export interface TerminalLimits {
@@ -119,6 +140,7 @@ export const TERMINAL_CHANNELS = {
   ack: 'term:ack',
   data: 'term:data',
   exit: 'term:exit',
+  follow: 'term:follow',
 } as const;
 
 /** Names the HTTP server must refuse with ENOTSUP (browser mode never exposes a shell). */

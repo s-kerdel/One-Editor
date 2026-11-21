@@ -25,11 +25,13 @@ import {
   type ShellList,
   type TerminalDataEvent,
   type TerminalExitEvent,
+  type TerminalFollowEvent,
   type TerminalLimits,
   type TerminalReply,
   type TerminalSpawnResult,
 } from '../shared/terminal';
-import { claudeHint, claudeInstall, detectClaude, detectShells, pathFor, pickDefaultShell, planClaude, planSpawn, windowsBuildOf, type DetectEnv } from './terminal-shells';
+import { claudeHint, claudeInstall, detectClaude, detectShells, envGet, pathFor, pickDefaultShell, planClaude, planSpawn, windowsBuildOf, type DetectEnv } from './terminal-shells';
+import { ClaudeFollow } from './terminal-follow';
 import { winSystemExe } from '../backend/winsys';
 
 // ---------------------------------------------------------------- node-pty surface we use
@@ -124,6 +126,7 @@ export interface ParsedSpawn {
   cwd: string;
   cols: number;
   rows: number;
+  follow?: true;
 }
 
 export function parseSpawnRequest(raw: unknown, l: TerminalLimits = TERMINAL_LIMITS): ParsedSpawn {
@@ -132,6 +135,7 @@ export function parseSpawnRequest(raw: unknown, l: TerminalLimits = TERMINAL_LIM
   if (r.shellId !== undefined && (typeof r.shellId !== 'string' || !SHELL_ID.test(r.shellId))) throw fail('EINVAL', 'Bad shell id');
   if (r.cwd !== undefined && (typeof r.cwd !== 'string' || r.cwd.length > 4096 || r.cwd.includes('\0'))) throw fail('EINVAL', 'Bad folder');
   if (r.preset !== undefined && r.preset !== 'claude') throw fail('EINVAL', 'Bad preset');
+  if (r.follow !== undefined && typeof r.follow !== 'boolean') throw fail('EINVAL', 'Bad follow flag');
   if (r.prefer !== undefined && (typeof r.prefer !== 'string' || !(r.prefer === '' || SHELL_ID.test(r.prefer)))) throw fail('EINVAL', 'Bad shell id');
   const dim = (v: unknown, def: number, min: number, max: number, what: string) => {
     if (v === undefined) return def;
@@ -145,6 +149,7 @@ export function parseSpawnRequest(raw: unknown, l: TerminalLimits = TERMINAL_LIM
     cwd: (r.cwd as string | undefined) ?? '',
     cols: dim(r.cols, 80, l.minCols, l.maxCols, 'width'),
     rows: dim(r.rows, 24, l.minRows, l.maxRows, 'height'),
+    ...(r.follow === true && r.preset === 'claude' ? { follow: true as const } : {}),
   };
 }
 
@@ -211,7 +216,7 @@ interface Term {
   subs: Disposable[];
 }
 
-export type TerminalSink = (owner: number, channel: typeof CH.data | typeof CH.exit, payload: TerminalDataEvent[] | TerminalExitEvent) => void;
+export type TerminalSink = (owner: number, channel: typeof CH.data | typeof CH.exit | typeof CH.follow, payload: TerminalDataEvent[] | TerminalExitEvent | TerminalFollowEvent) => void;
 
 export interface TerminalServiceOptions {
   /** Loads node-pty (called on the first spawn only). */
@@ -239,6 +244,9 @@ export interface TerminalServiceOptions {
   signalGroup?: (pgid: number, signal: NodeJS.Signals) => void;
   /** Windows: kill a process tree, outliving this process (default: detached `taskkill /T /F`). */
   treeKill?: (pid: number) => void;
+  /** "Follow Claude's edits" (terminal-follow.ts): `dir` = `<app data>/claude-follow`; `foldCase` / `inside`
+   *  are the open workspace's case rule and real-path rule. Unset = the feature is off. */
+  follow?: { dir: string; foldCase: () => boolean; inside: (rel: string) => Promise<boolean> };
 }
 
 export class TerminalService {
@@ -255,6 +263,7 @@ export class TerminalService {
   private ptyMod: PtyModuleLike | null = null;
   private nextId = 1;
   private disposed = false;
+  private followSvc: ClaudeFollow | null = null;
 
   constructor(o: TerminalServiceOptions) {
     this.o = o;
@@ -357,21 +366,38 @@ export class TerminalService {
       if (this.o.getWorkspaceRoot() !== root) throw fail('NO_WORKSPACE', 'The folder changed');
       if (this.disposed) throw fail('EIO', 'Shutting down');
       const env = this.o.env ?? process.env;
+      const id = this.nextId++;
       let plan;
       if (claude) {
-        plan = planClaude(claude, cwd.abs, { platform: this.platform, env, wslExe: claude.via === 'wsl' ? shell?.path : undefined });
+        const follow = req.follow ? await this.openFollow(id, root, claude, list.shells, env) : null;
+        if (follow && (this.o.getWorkspaceRoot() !== root || this.disposed)) {
+          this.followSvc?.close(id);
+          throw fail('NO_WORKSPACE', 'The folder changed');
+        }
+        try {
+          plan = planClaude(claude, cwd.abs, { platform: this.platform, env, wslExe: claude.via === 'wsl' ? shell?.path : undefined, follow: follow ?? undefined });
+        } catch (err) {
+          this.followSvc?.close(id);
+          throw err;
+        }
         shell = { id: 'claude', name: 'Claude Code', kind: 'claude', path: claude.path ?? plan.file, args: [], detail: claude.via === 'wsl' ? `AI assistant · in ${claude.distro} (WSL)` : 'AI assistant in this folder' };
       } else plan = planSpawn(shell!, cwd.abs, { platform: this.platform, env });
-      const pty = this.loadPty().spawn(plan.file, plan.args, {
-        name: 'xterm-256color',
-        cols: req.cols,
-        rows: req.rows,
-        cwd: plan.cwd,
-        env: buildTerminalEnv(env, { platform: this.platform, appVersion: this.o.appVersion, extra: plan.env }),
-        useConpty: true,
-        useConptyDll: !!this.o.useConptyDll,
-      });
-      const t: Term = { id: this.nextId++, owner, root, pty, shell: shell!, pending: '', unacked: 0, paused: false, killing: false, exited: false, timers: [], subs: [] };
+      let pty: PtyLike;
+      try {
+        pty = this.loadPty().spawn(plan.file, plan.args, {
+          name: 'xterm-256color',
+          cols: req.cols,
+          rows: req.rows,
+          cwd: plan.cwd,
+          env: buildTerminalEnv(env, { platform: this.platform, appVersion: this.o.appVersion, extra: plan.env }),
+          useConpty: true,
+          useConptyDll: !!this.o.useConptyDll,
+        });
+      } catch (err) {
+        this.followSvc?.close(id);
+        throw err;
+      }
+      const t: Term = { id, owner, root, pty, shell: shell!, pending: '', unacked: 0, paused: false, killing: false, exited: false, timers: [], subs: [] };
       this.terms.set(t.id, t);
       t.subs.push(
         pty.onData((d) => this.onData(t, d)),
@@ -381,6 +407,30 @@ export class TerminalService {
     } finally {
       this.release(owner);
     }
+  }
+
+  /**
+   * A follow session for Claude terminal `id`, or null (Claude then starts as before). Needs a shell that
+   * runs the POSIX hook: always inside WSL / on Unix; on Windows only with Git Bash (Claude Code falls
+   * back to PowerShell without it). Inside WSL the session folder must be on a drive (WSLENV /p maps it).
+   */
+  private async openFollow(id: number, root: string, claude: ClaudeInfo, shells: ShellInfo[], env: Record<string, string | undefined>) {
+    const f = this.o.follow;
+    if (!f) return null;
+    const wsl = claude.via === 'wsl' ? claude.distro : undefined;
+    if (wsl ? !/^[a-z]:[\\/]/i.test(f.dir) : this.platform === 'win32' && !shells.some((s) => s.kind === 'gitbash') && !envGet(env, 'CLAUDE_CODE_GIT_BASH_PATH', true)) return null;
+    // cmd.exe cannot take % or a quote in the settings path (cmdQuote would refuse the whole start).
+    if (this.platform === 'win32' && /["%\r\n]/.test(f.dir)) return null;
+    this.followSvc ??= new ClaudeFollow({
+      dir: f.dir,
+      inside: f.inside,
+      emit: (termId, e) => {
+        const t = this.terms.get(termId);
+        // Only for a live terminal of the folder that is still open.
+        if (t && !t.exited && t.root === this.o.getWorkspaceRoot()) this.emit(t.owner, CH.follow, e);
+      },
+    });
+    return this.followSvc.open(id, { root, platform: this.platform, foldCase: f.foldCase(), wslDistro: wsl });
   }
 
   write(owner: number, id: unknown, data: unknown): boolean {
@@ -441,6 +491,7 @@ export class TerminalService {
     if (this.disposed) return;
     this.disposed = true;
     for (const t of [...this.terms.values()]) this.terminate(t, true);
+    this.followSvc?.dispose();
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = null;
   }
@@ -509,7 +560,7 @@ export class TerminalService {
     if (batch.length) this.emit(owner, CH.data, batch);
   }
 
-  private emit(owner: number, channel: typeof CH.data | typeof CH.exit, payload: TerminalDataEvent[] | TerminalExitEvent) {
+  private emit(owner: number, channel: typeof CH.data | typeof CH.exit | typeof CH.follow, payload: TerminalDataEvent[] | TerminalExitEvent | TerminalFollowEvent) {
     for (const s of this.sinks) {
       try {
         s(owner, channel, payload);
@@ -531,6 +582,7 @@ export class TerminalService {
     });
     this.terms.delete(t.id);
     this.dirty.delete(t);
+    this.followSvc?.close(t.id);
     const exit: TerminalExitEvent = { id: t.id, exitCode: isInt(e?.exitCode) ? e.exitCode : -1 };
     if (e?.signal) exit.signal = e.signal;
     this.emit(t.owner, CH.exit, exit);

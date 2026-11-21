@@ -154,6 +154,34 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   `src/renderer/terminal/run.ts` (dependency-free) says which fences get a "Run in terminal" button.
   Keys a focused widget must keep from the global keymap: `setGlobalKeyFilter()` in `commands.ts` (the terminal uses it).
   Terminals use their own `term:*` IPC channels (`src/shared/terminal.ts`), not `RPC_METHODS`: they need the sender's identity.
+- **Follow Claude's edits** (terminal, preview; setting `claude.follow`): a Claude preset terminal gets
+  `<app data>/claude-follow/<128-bit hex>/` (0700, removed on exit / quit, stale ones after a day) holding `settings.json`
+  (passed with `claude --settings`: user / project Claude settings are never touched) and the inbox `in/`. The hook
+  (`FOLLOW_HOOK`, `main/terminal-follow.ts`) is a **fixed** sh string; the folder reaches it only as env `ONE_FOLLOW_DIR`
+  (WSL: `WSLENV` `/p`), never by string building. Main reads `in/ev.*.json` (lstat + `O_NOFOLLOW`, regular, ≤ 1 MB,
+  ≤ 40 per second, deleted after reading; contents never logged), allow-lists event + tool, maps the path into the
+  open folder (`mapFollowPath` + `Workspace.real`; anything else is dropped) and sends `term:follow`
+  `{ id, kind, path?, hint?, lines?, probe? }` to the owning window (`lines` = the changed new-file lines from the
+  response's `structuredPatch`, `patchLines`: undocumented, so validated and optional; `probe` = one added line's text.
+  The UI flashes only once the document shows the edit — the probe matches, or the hint is unique after the reload). **Contract:** an inbox event can only make One show a file inside
+  the open folder — never write, run or open anything else. UI = the lazy chunk `terminal/follow.ts` (no focus change).
+  - **Events:** `kind` = `edit` / `write` / `stop` / `prompt`. `prompt` = `UserPromptSubmit`; its hook
+    (`FOLLOW_PROMPT_HOOK`, also fixed) drains stdin and drops a **constant**: the user's prompt is never written to
+    disk. It must print nothing (that event's stdout goes into Claude's context).
+  - **Queue, not "latest":** `follow.ts` shows every edit in order, one at a time (`pump` / `show`); nothing cancels an
+    older edit. A clean open document is re-read at once through the watcher's own entry
+    (`disk-sync.handleFsEvents([{ type: 'change', path }])`: same conflict rules by construction; `reloadFromDisk` is
+    the conflict banner's "take disk" and does nothing without a conflict). **A dirty document is never reloaded,
+    flashed or marked.** `diskUpdate` (800 ms) is only the fallback. Files changing faster than 1 / s: jump to the
+    newest, the skipped ones keep their marks.
+  - **State** (`terminal/follow-marks.ts`, CodeMirror only, unit-tested without a DOM): `followField` holds two sets of
+    line decorations — flashes (`spec.until`, each ends by itself) and "changed this turn" marks (`spec.turn`).
+    `followAdd` adds, `followSync { now, turn }` drops ended flashes and other turns' marks; both sets map through
+    changes. Clearing = `turnNo++` (next prompt, or palette "Claude: Clear change marks"): the document on screen syncs
+    now, other tabs on `active:changed`. Marks for a file that is not on screen wait per path (`pending`).
+  - **Caps:** queue 50, files per turn 200, waiting ranges per file 200, ranges per event 20, marks per file 2000,
+    lines per flash 400. Known gap: waiting marks are line numbers of the file as it was at that edit; later edits of a
+    file that is not open do not move them.
 - Variables: `app.variables` (`VariablesApi` in `src/renderer/variables/api.ts`) — `renderHook(path)` for markdown-it
   (`RenderOptions.vars`; export passes `{ export: true }`), `copyCode` / `runCode` / `forTargets` for code-block buttons
   (resolve placeholders, ask for missing values), `prepare(path)` before an export. Event `variables:changed` = re-render.

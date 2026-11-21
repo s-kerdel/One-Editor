@@ -276,7 +276,8 @@ export class TerminalManager {
       const s = this.d.settings();
       let cwd = o.cwd ?? '';
       const size = this.estimateSize(s.fontSize);
-      spawnP = b.spawn({ shellId: o.shellId, prefer: o.shellId || o.preset ? undefined : s.defaultShell || undefined, cwd: o.cwd, cols: size.cols, rows: size.rows, ...(o.preset ? { preset: o.preset } : {}) });
+      // `prefer` also for the Claude preset: Claude runs where the ★ default shell is (WSL or native).
+      spawnP = b.spawn({ shellId: o.shellId, prefer: o.shellId ? undefined : s.defaultShell || undefined, cwd: o.cwd, cols: size.cols, rows: size.rows, ...(o.preset ? { preset: o.preset, ...(s.followClaude ? { follow: true } : {}) } : {}) });
       spawnP.catch(() => {}); // handled below (an unhandled rejection while the view loads would be noise)
       view = await this.d.createView({
         os: this.d.os,

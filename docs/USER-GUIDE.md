@@ -790,6 +790,28 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 - **Not installed?** The ▾ card shows the install command with a **Copy** button. Install, then **Refresh list**.
 - **WSL as default shell?** Claude is looked for **inside that distro**.
 
+### Follow Claude's edits (preview)
+
+**Claude edits a file → One shows it.** Only for Claude started from One (the steps above).
+
+1. The file **opens** at the changed lines, which **flash green** for a few seconds.
+2. A note says **"Claude edited `src/a.php`"**. In a git folder it has a **Diff** button.
+3. Your cursor **stays in the terminal**. Typing in another file? One only shows the note.
+
+- **Every edit is shown**, in order. Several quick edits flash **together**; each fades by itself.
+- **Changed this turn:** a thin **green bar** left of every line Claude changed.
+  - It stays until your **next prompt** to Claude.
+  - It moves along when you type above it.
+  - Other files Claude changed get their bars when you open them.
+  - Remove them now: palette → **"Claude: Clear change marks"**.
+- **Unsaved edits are yours.** Such a file is not reloaded or marked: you get the usual **changed on disk** banner.
+- **Many files at once?** One jumps to the newest; the files in between keep their bars.
+
+- **Turn it off:** palette → **"Claude: Toggle follow edits"**, or Settings → Terminal. Applies to **new** Claude terminals.
+- **Your Claude settings are not changed.** One passes its own hooks with `claude --settings`.
+- **Not followed (yet):** files Claude changes through shell commands; files outside the open folder (never opened).
+- **Windows without WSL:** needs **Git Bash** (Claude Code runs hooks with it).
+
 ## 8. Git
 
 **Open a folder that is a git repository, and trust it once.** One uses **your installed git**, so your login, SSH keys and Windows Credential Manager just work. No git installed? Git features stay hidden (one hint tells you).

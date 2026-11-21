@@ -163,6 +163,12 @@ function main() {
     loadPty: () => loadNodePty({ packaged: app.isPackaged, resourcesPath: process.resourcesPath }),
     getWorkspaceRoot: () => service.workspace?.root ?? null,
     appVersion: app.getVersion(),
+    // "Follow Claude's edits": per-terminal inbox folders in app data (terminal-follow.ts); paths are checked against the open folder.
+    follow: {
+      dir: path.join(app.getPath('userData'), 'claude-follow'),
+      foldCase: () => !!service.workspace?.foldsCase,
+      inside: (rel) => (service.workspace ? service.workspace.real(rel).then(() => true, () => false) : Promise.resolve(false)),
+    },
   });
   // Process explorer rows (read only while it is open): Chromium processes + which children are shells.
   registerProcessSource(electronProcessSource({ shellPids: () => terminals.pids(), uiPid: () => (win && !win.isDestroyed() ? win.webContents.getOSProcessId() : 0) }));

@@ -25,6 +25,7 @@ export function terminalBridge(ipc: IpcRendererLike) {
     ack: (id: number, chars: number) => ipc.send(CH.ack, Number(id), Number(chars)),
     onData: listen(CH.data),
     onExit: listen(CH.exit),
+    onFollow: listen(CH.follow),
   };
 }
 

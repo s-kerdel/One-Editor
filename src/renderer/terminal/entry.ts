@@ -178,6 +178,29 @@ export function installTerminalCommands() {
     },
     { id: 'claude.open', title: 'Open Claude Code', category: 'Claude', keywords: ['ai', 'assistant', 'claude code', 'agent'], when: desktop, run: () => void newTerminal({ preset: 'claude' }) },
     { id: 'claude.askFile', title: 'Ask about this file', category: 'Claude', keywords: ['ai', 'assistant', 'explain', 'review'], when: () => desktop() && !!app.activePath.value, run: () => void askClaude('file') },
+    {
+      id: 'claude.toggleFollow',
+      title: 'Toggle follow edits',
+      category: 'Claude',
+      keywords: ['ai', 'follow', 'edits', 'highlight', 'hooks', 'changes'],
+      when: desktop,
+      run: () => {
+        const on = !readTerminalSettings(app.settings.value).followClaude;
+        updateSettings({ [TERMINAL_SETTING_KEYS.followClaude]: on });
+        app.toast(on ? 'Following Claude’s edits (new Claude terminals)' : 'No longer following Claude’s edits', 'info');
+      },
+    },
+    {
+      id: 'claude.clearMarks',
+      title: 'Clear change marks',
+      category: 'Claude',
+      keywords: ['ai', 'follow', 'edits', 'changed', 'turn', 'marks', 'highlight'],
+      when: desktop,
+      run: () =>
+        void import('./follow')
+          .then((m) => app.toast(m.clearChangeMarks() ? 'Change marks cleared' : 'No change marks in this file', 'info'))
+          .catch(() => {}),
+    },
     { id: 'claude.askSelection', title: 'Ask about selection', category: 'Claude', keywords: ['ai', 'assistant', 'explain', 'lines'], when: () => desktop() && hasSelection(), run: () => void askClaude('selection') },
   ]);
 }
@@ -197,6 +220,12 @@ export function warmUp() {
     }, 4000);
   }, 3000);
 }
+
+// "Follow Claude's edits": main reports edits of Claude terminals it started (term:follow). The UI part
+// (./follow: CodeMirror highlight, toast) is its own chunk, fetched with the first event.
+backend.onFollow?.((e) => {
+  if (readTerminalSettings(app.settings.value).followClaude) void import('./follow').then((m) => m.onFollowEvent(e)).catch(() => {});
+});
 
 // Loading this chunk = the commands exist (idle preload or the first Ctrl+`).
 installTerminalCommands();

@@ -291,6 +291,12 @@ export function wslPathFor(cwd: string, distro: string): string | null {
   return m ? `/mnt/${m[1].toLowerCase()}/${m[2].split(/[\\/]+/).filter(Boolean).join('/')}`.replace(/\/$/, '') || '/' : null;
 }
 
+/** "Follow Claude's edits": the session folder One made + the settings file in it (main/terminal-follow.ts). */
+export interface ClaudeFollowPlan {
+  dir: string;
+  settings: string;
+}
+
 /**
  * How to start Claude Code in `cwd`:
  *  - inside WSL: an interactive login bash (the user's PATH), cd'ing back to the folder AFTER the rc
@@ -298,22 +304,30 @@ export function wslPathFor(cwd: string, distro: string): string | null {
  *  - Windows npm shim (claude.cmd): through cmd.exe, pushd-ing to UNC folders cmd cannot start in;
  *  - otherwise the binary itself, with its folder first on PATH (an npm install's node sits next to it).
  */
-export function planClaude(info: ClaudeInfo, cwd: string, o: { platform: string; env: Record<string, string | undefined>; wslExe?: string }): SpawnPlan {
+export function planClaude(info: ClaudeInfo, cwd: string, o: { platform: string; env: Record<string, string | undefined>; wslExe?: string; follow?: ClaudeFollowPlan }): SpawnPlan {
   const win = o.platform === 'win32';
+  const follow = o.follow;
   if (info.via === 'wsl' && info.distro && o.wslExe) {
     const inside = wslPathFor(cwd, info.distro);
-    const args = ['-d', info.distro, '--cd', inside ?? cwd, '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec claude', inside ?? '.'];
-    return { file: o.wslExe, args, cwd, env: {} };
+    // Follow: the session folder reaches the distro as an env var only (WSLENV's /p turns the Windows path
+    // into /mnt/…); the script stays a fixed string and adds --settings only when the variable arrived.
+    const script = follow ? 'cd -- "$0" 2>/dev/null; exec claude ${ONE_FOLLOW_DIR:+--settings "$ONE_FOLLOW_DIR/settings.json"}' : 'cd -- "$0" 2>/dev/null; exec claude';
+    const args = ['-d', info.distro, '--cd', inside ?? cwd, '-e', 'bash', '-lic', script, inside ?? '.'];
+    const env: Record<string, string> = follow ? { ONE_FOLLOW_DIR: follow.dir, WSLENV: [envGet(o.env, 'WSLENV', true), 'ONE_FOLLOW_DIR/p'].filter(Boolean).join(':') } : {};
+    return { file: o.wslExe, args, cwd, env };
   }
   const exe = info.path!;
   const P = pathFor(o.platform);
   const pathKey = win ? (Object.keys(o.env).find((k) => k.toLowerCase() === 'path') ?? 'Path') : 'PATH';
-  const env = { [pathKey]: [P.dirname(exe), envGet(o.env, 'PATH', win)].filter(Boolean).join(P.delimiter) };
+  const env: Record<string, string> = { [pathKey]: [P.dirname(exe), envGet(o.env, 'PATH', win)].filter(Boolean).join(P.delimiter) };
+  // Git Bash (which runs the hook on Windows) takes C:/… paths; backslashes would need care in sh.
+  if (follow) env.ONE_FOLLOW_DIR = win ? follow.dir.replace(/\\/g, '/') : follow.dir;
   if (win && /\.(cmd|bat)$/i.test(exe)) {
     const comspec = envGet(o.env, 'ComSpec', true) || P.join(envGet(o.env, 'SystemRoot', true) || 'C:\\Windows', 'System32', 'cmd.exe');
-    if (isUncPath(cwd)) return { file: comspec, args: `/D ${cmdTail('/C', `pushd ${cmdQuote(cwd)} && ${cmdQuote(exe)}`)}`, cwd: envGet(o.env, 'USERPROFILE', true) || 'C:\\', env };
-    return { file: comspec, args: `/D ${cmdTail('/C', cmdQuote(exe))}`, cwd, env };
+    const run = cmdQuote(exe) + (follow ? ` --settings ${cmdQuote(follow.settings)}` : '');
+    if (isUncPath(cwd)) return { file: comspec, args: `/D ${cmdTail('/C', `pushd ${cmdQuote(cwd)} && ${run}`)}`, cwd: envGet(o.env, 'USERPROFILE', true) || 'C:\\', env };
+    return { file: comspec, args: `/D ${cmdTail('/C', run)}`, cwd, env };
   }
-  return { file: exe, args: [], cwd, env };
+  return { file: exe, args: follow ? ['--settings', follow.settings] : [], cwd, env };
 }
 

@@ -35,7 +35,7 @@ describe('TerminalManager.askClaude', () => {
     r.b.list = { ...r.b.list, claude: { available: true, via: 'native', path: '/usr/bin/claude' } };
     const p = r.m.askClaude('@notes/a.md ');
     await flush(20);
-    expect(r.b.spawned).toEqual([{ shellId: undefined, prefer: undefined, cwd: undefined, cols: 80, rows: 24, preset: 'claude' }]);
+    expect(r.b.spawned).toEqual([{ shellId: undefined, prefer: undefined, cwd: undefined, cols: 80, rows: 24, preset: 'claude', follow: true }]);
     r.b.emitData(1, '╭ Claude Code ╮');
     expect(await p).toBe(true);
     const v = FakeView.all[0];
@@ -96,5 +96,14 @@ describe('TerminalManager.askClaude', () => {
     await r.m.loadShells(); // setting changed → re-asked
     await r.m.loadShells();
     expect(seen).toEqual([undefined, 'wsl:Ubuntu']);
+  });
+
+  it('starting Claude passes the ★ default shell along, so a native default (pwsh) is not overruled by the folder\'s WSL default', async () => {
+    const r = managerRig();
+    r.b.list = { ...r.b.list, claude: { available: true, via: 'native', path: 'C:/Users/me/.local/bin/claude.exe' } };
+    r.settings.defaultShell = 'pwsh';
+    void r.m.askClaude('@a.md ');
+    await flush(20);
+    expect(r.b.spawned[0]).toMatchObject({ preset: 'claude', prefer: 'pwsh', shellId: undefined });
   });
 });

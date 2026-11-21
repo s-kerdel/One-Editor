@@ -14,6 +14,7 @@ export interface ClaudeAsk {
 /** Longer selections are referenced by line range only (Claude reads the file). */
 export const QUOTE_LIMIT = 600;
 
+import { FOLLOW_PROBE_CHARS } from '@shared/terminal';
 import { CONTROL } from './run'; // control characters could drive the TUI (ESC sequences, ^C, ^D…); tabs and newlines are fine
 
 export function claudePrompt(a: ClaudeAsk): string {
@@ -32,3 +33,17 @@ export function claudePrompt(a: ClaudeAsk): string {
 
 /** A prompt typed into a TUI without bracketed paste would submit at every newline: make it one line. */
 export const oneLine = (text: string) => text.replace(/\s*[\r\n]+\s*/g, ' ').replace(/ +$/, ' ');
+
+/**
+ * Where Claude's new text sits in the (LF) document: the first occurrence's character range, or null when
+ * it is not there (yet). `unique` = it occurs once: only then is it certainly the edited place.
+ */
+export function findHint(doc: string, hint: string | undefined): { from: number; to: number; unique: boolean } | null {
+  const h = (hint ?? '').replace(/\r\n?/g, '\n').replace(/^\n+|\s+$/g, '');
+  if (!h) return null;
+  const at = doc.indexOf(h);
+  return at < 0 ? null : { from: at, to: at + h.length, unique: doc.indexOf(h, at + 1) < 0 };
+}
+
+/** Does the document already show the edit? `lineText` = its line at `probe.line` (undefined: no such line). */
+export const probeMatches = (lineText: string | undefined, probe: { line: number; text: string }) => lineText !== undefined && lineText.slice(0, probe.text.length) === probe.text && (probe.text.length >= FOLLOW_PROBE_CHARS || lineText.length === probe.text.length);

@@ -1,0 +1,24 @@
+/* "Claude changed this": a green wash on the edited lines that fades out (follow.ts removes it after). */
+.cm-line.se-claude-flash {
+  animation: se-claude-flash 4s ease-out forwards;
+}
+@keyframes se-claude-flash {
+  0%,
+  35% {
+    background-color: color-mix(in srgb, var(--success) 26%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+/* "Claude changed this line in this turn": a thin bar at the line's left edge, until the next prompt.
+   An inset shadow: it shares the line with the flash and takes no room. */
+.cm-line.se-claude-turn {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--success) 70%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cm-line.se-claude-flash {
+    animation: none;
+    background-color: color-mix(in srgb, var(--success) 18%, transparent);
+  }
+}
