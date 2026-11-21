@@ -238,3 +238,56 @@ describe('batch delete (paths)', () => {
     expect(row).toMatchObject({ items: 2, note: 'folders: restore from the Recycle Bin' });
   });
 });
+
+describe('batch move keeps the folder structure (below the common parent)', () => {
+  it('where each item goes: kept below the common parent; flat; one parent = as a flat move', async () => {
+    const { batchDestinations } = await import('../../../src/mcp/tools/write');
+    expect(batchDestinations(['notes/a/x.md', 'notes/b/y.md'], 'archive', false, false)).toEqual(['archive/a/x.md', 'archive/b/y.md']);
+    expect(batchDestinations(['notes/a/x.md', 'notes/a/deep/er/y.md', 'notes/b.md'], 'archive/', false, false)).toEqual(['archive/a/x.md', 'archive/a/deep/er/y.md', 'archive/b.md']);
+    expect(batchDestinations(['n/x.md', 'n/y.md'], 'a', false, false)).toEqual(['a/x.md', 'a/y.md']);
+    expect(batchDestinations(['n/a/x.md', 'n/b/x.md'], 'a', true, false)).toEqual(['a/x.md', 'a/x.md']); // flat: the second clashes
+    expect(batchDestinations(['Notes/a/x.md', 'notes/b/y.md'], 'z', false, true)).toEqual(['z/a/x.md', 'z/b/y.md']); // Windows: case-insensitive parent
+    expect(batchDestinations(['x.md', 'sub/y.md'], 'z', false, false)).toEqual(['z/x.md', 'z/sub/y.md']);
+  });
+
+  it('nested items keep their subfolders (made as needed, existing ones reused); a clash is refused, the rest go; one Revert', async () => {
+    const r = await rig({ files: { 'notes/a/x.md': 'x\n', 'notes/a/deep/z.md': 'z\n', 'notes/b/y.md': 'y\n', 'notes/b/clash.md': 'mine\n', 'archive/b/clash.md': 'theirs\n', 'archive/b/keep.md': 'keep\n' } });
+    const t = (await r.call('move', { paths: ['notes/a/x.md', 'notes/a/deep/z.md', 'notes/b/y.md', 'notes/b/clash.md'], to_folder: 'archive' })).text.split('\n');
+    expect(t).toEqual([
+      expect.stringMatching(/^Moved 3 of 4 items into archive · undo: [a-f0-9]{8}$/),
+      expect.stringMatching(/^ok notes\/a\/x\.md → archive\/a\/x\.md/),
+      expect.stringMatching(/^ok notes\/a\/deep\/z\.md → archive\/a\/deep\/z\.md/),
+      expect.stringMatching(/^ok notes\/b\/y\.md → archive\/b\/y\.md/),
+      'EEXIST notes/b/clash.md: Already exists: archive/b/clash.md',
+    ]);
+    expect([r.get('archive/a/deep/z.md'), r.get('archive/b/y.md'), r.get('archive/b/keep.md'), r.get('archive/b/clash.md'), r.get('notes/b/clash.md')]).toEqual(['z\n', 'y\n', 'keep\n', 'theirs\n', 'mine\n']);
+    const row = (await r.rows()).reverse().find((x) => x.tool === 'move')!;
+    await r.revert(row.journal!);
+    expect([r.get('notes/a/x.md'), r.get('notes/a/deep/z.md'), r.get('notes/b/y.md'), r.get('archive/b/y.md')]).toEqual(['x\n', 'z\n', 'y\n', null]);
+  });
+
+  it('flat: everything directly in to_folder (name clashes refused per item)', async () => {
+    const r = await rig({ files: { 'n/a/x.md': 'a\n', 'n/b/x.md': 'b\n', 'n/c/y.md': 'c\n' } });
+    const t = (await r.call('move', { paths: ['n/a/x.md', 'n/b/x.md', 'n/c/y.md'], to_folder: 'flat', flat: true })).text.split('\n');
+    expect(t.slice(1)).toEqual([expect.stringMatching(/^ok n\/a\/x\.md → flat\/x\.md/), 'EEXIST n/b/x.md: Already exists: flat/x.md', expect.stringMatching(/^ok n\/c\/y\.md → flat\/y\.md/)]);
+  });
+
+  it('to_paths: a new path per item; exclusive with to_folder / flat; the lengths must match', async () => {
+    const r = await rig({ files: { 'a.md': 'a\n', 'b.md': 'b\n' } });
+    expect((await r.call('move', { paths: ['a.md', 'b.md'], to_paths: ['x/one.md'] })).text).toBe('EINVAL: to_paths must name one new path per item (2), not 1');
+    expect((await r.call('move', { paths: ['a.md'], to_paths: ['x.md'], to_folder: 'x' })).text).toMatch(/^EINVAL: to_paths replaces to_folder and flat/);
+    expect((await r.call('move', { paths: ['a.md'], to_paths: ['x.md'], flat: true })).text).toMatch(/^EINVAL: to_paths replaces to_folder and flat/);
+    const t = (await r.call('move', { paths: ['a.md', 'b.md'], to_paths: ['x/one.md', 'y/z/two.md'] })).text.split('\n');
+    expect(t[0]).toMatch(/^Moved 2 of 2 items · undo: /);
+    expect([r.get('x/one.md'), r.get('y/z/two.md')]).toEqual(['a\n', 'b\n']);
+  });
+
+  it('a folder into an existing folder of that name is refused clearly (folders are not merged); hidden destinations too', async () => {
+    const r = await rig({ files: { 'src/proj/a.md': 'a\n', 'archive/proj/old.md': 'old\n', 'src/other/b.md': 'b\n' } });
+    const t = (await r.call('move', { paths: ['src/proj', 'src/other'], to_folder: 'archive' })).text.split('\n');
+    expect(t[1]).toBe('EEXIST src/proj: archive/proj exists: folders are not merged. Move what src/proj holds instead (paths: src/proj/…).');
+    expect(t[2]).toBe('ok src/other → archive/other');
+    expect(r.get('archive/proj/old.md')).toBe('old\n');
+    expect((await r.call('move', { paths: ['src/proj/a.md'], to_folder: '.hidden' })).text).toMatch(/EACCES src\/proj\/a\.md: Cannot change \.hidden\/a\.md/);
+  });
+});

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { McpService, folderProblem, foldersConfirm, mcpLaunch, registerMcpIpc, type FolderBatch, type McpDeps } from '../../../src/main/mcp';
+import { McpService, folderChoice, folderProblem, foldersConfirm, mcpLaunch, registerMcpIpc, type FolderBatch, type FolderChoice, type McpDeps } from '../../../src/main/mcp';
 import { MCP_CHANNELS, MCP_WRITES_ENABLED, TOKEN_ENV } from '../../../src/shared/mcp';
 import { hashToken, matchToken } from '../../../src/mcp/tokens';
 import { OneMcpServer } from '../../../src/mcp/server';
@@ -22,7 +22,7 @@ function setup(o: Partial<McpDeps> = {}) {
   const notes = path.join(home, 'notes');
   fs.mkdirSync(configDir, { recursive: true });
   fs.mkdirSync(notes, { recursive: true });
-  const answers = { enable: true, write: true, pick: notes as string | string[] | null, folders: true, code: true, undoOff: true, token: true, keyring: true, copy: true };
+  const answers = { enable: true, write: true, pick: notes as string | string[] | null, folders: true as boolean | FolderChoice, code: true, undoOff: true, token: true, keyring: true, copy: true };
   const changes: unknown[] = [];
   const batches: FolderBatch[] = [];
   const asked: string[] = [];
@@ -36,7 +36,8 @@ function setup(o: Partial<McpDeps> = {}) {
     confirmEnable: async () => (asked.push('enable'), answers.enable),
     confirmWrite: async () => (asked.push('write'), answers.write),
     pickFolders: async () => (asked.push('pick'), answers.pick === null ? [] : [answers.pick].flat()),
-    confirmFolders: async (q) => (asked.push('folders'), batches.push(q), answers.folders),
+    // true = "Add read-only", false = Cancel, or the choice itself.
+    confirmFolders: async (q) => (asked.push('folders'), batches.push(q), answers.folders === true ? { mode: 'read', allowCode: false } : answers.folders || null),
     realpath: (p) => fsp.realpath(p),
     isDirectory: (p) => fsp.stat(p).then((s) => s.isDirectory(), () => false),
     randomId: () => (++id).toString(16).padStart(16, '0'),
@@ -141,15 +142,15 @@ describe('several folders at once (one dialog, one confirm)', () => {
 
   it('one confirm lists the batch; all added read-only; aliases unique and independent of the click order', async () => {
     const t = setup();
-    await t.svc.addFolder(); // "notes", one folder: no confirm, as before
-    expect(t.asked).toEqual(['pick']);
+    await t.svc.addFolder(); // "notes": one folder gets the one dialog too
+    expect(t.asked).toEqual(['pick', 'folders']);
     const a = mk(t.home, 'a', 'notes');
     const b = mk(t.home, 'b', 'notes');
     const w = mk(t.home, 'Work Docs');
     t.answers.pick = [b, w, a];
     const s = await t.svc.addFolder();
-    expect(t.asked).toEqual(['pick', 'pick', 'folders']);
-    expect(t.batches).toEqual([{ add: [{ alias: 'work-docs', path: w }, { alias: 'notes-2', path: a }, { alias: 'notes-3', path: b }], refused: [] }]);
+    expect(t.asked).toEqual(['pick', 'folders', 'pick', 'folders']);
+    expect(t.batches[1]).toEqual({ add: [{ alias: 'work-docs', path: w }, { alias: 'notes-2', path: a }, { alias: 'notes-3', path: b }], refused: [], writes: MCP_WRITES_ENABLED });
     expect(s.folders.map((f) => [f.alias, f.mode])).toEqual([['notes', 'read'], ['work-docs', 'read'], ['notes-2', 'read'], ['notes-3', 'read']]);
     expect(t.file().folders.map((f: { mode: string }) => f.mode)).toEqual(['read', 'read', 'read', 'read']);
     expect(new Set(s.folders.map((f) => f.id)).size).toBe(4);
@@ -170,7 +171,7 @@ describe('several folders at once (one dialog, one confirm)', () => {
     fs.symlinkSync(x, path.join(t.home, 'link-to-x'));
     t.answers.pick = [t.notes, t.home, t.configDir, path.join(t.dir, 'nope'), x, path.join(t.home, 'link-to-x')];
     const s = await t.svc.addFolder();
-    const [q] = t.batches;
+    const q = t.batches[1];
     expect(q.add).toEqual([{ alias: 'x', path: x }]);
     const why = Object.fromEntries(q.refused.map((r) => [r.path, r.why]));
     expect(Object.keys(why)).toHaveLength(5);
@@ -196,7 +197,7 @@ describe('several folders at once (one dialog, one confirm)', () => {
     const t = setup();
     t.answers.pick = [t.home, '/'];
     expect((await t.svc.addFolder()).folders).toEqual([]);
-    expect(t.batches).toEqual([{ add: [], refused: [{ path: '/', why: expect.stringMatching(/drive/) }, { path: t.home, why: expect.stringMatching(/home folder/) }] }]);
+    expect(t.batches).toEqual([{ add: [], refused: [{ path: '/', why: expect.stringMatching(/drive/) }, { path: t.home, why: expect.stringMatching(/home folder/) }], writes: MCP_WRITES_ENABLED }]);
     expect(fs.existsSync(path.join(t.configDir, 'mcp.json'))).toBe(false);
     const box = foldersConfirm(t.batches[0]);
     expect(box.buttons).toEqual(['OK']);
@@ -217,15 +218,19 @@ describe('several folders at once (one dialog, one confirm)', () => {
     expect(t.asked.filter((a) => a === 'pick')).toHaveLength(1);
   });
 
-  it('the confirm text: every folder to add with its alias, the refused apart with why; Cancel is the default', () => {
+  it('the confirm text: every folder to add with its alias, the refused apart with why; three buttons, Cancel the default', () => {
     const box = foldersConfirm({ add: [{ alias: 'notes', path: '/h/notes' }, { alias: 'notes-2', path: '/h/b/notes' }], refused: [{ path: '/h', why: 'Your whole home folder cannot be shared: pick a folder inside it.' }] });
-    expect(box).toMatchObject({ type: 'question', title: 'Share 2 folders?', message: 'Let MCP clients read these 2 folders?', buttons: ['Add 2 folders', 'Cancel'], defaultId: 1, cancelId: 1 });
+    expect(box).toMatchObject({ type: 'question', title: 'Share 2 folders?', message: 'Share these 2 folders with MCP clients?', buttons: ['Add read-only', 'Add and allow changes', 'Cancel'], defaultId: 2, cancelId: 2, checkboxLabel: 'Also code and config files', checkboxChecked: false });
     expect(box.detail.split('\n\n')).toEqual([
-      'Read-only:\n• notes: /h/notes\n• notes-2: /h/b/notes',
+      'Folders:\n• notes: /h/notes\n• notes-2: /h/b/notes',
       'Not added:\n• /h: Your whole home folder cannot be shared: pick a folder inside it.',
-      'AI apps you set up can search and read them, not change them: you allow changes per folder. Hidden files, key files and excluded folders stay invisible.',
+      expect.stringMatching(/^Read-only: AI apps you set up can search and read them\. Allow changes: /),
     ]);
-    expect(foldersConfirm({ add: [{ alias: 'a', path: '/a' }], refused: [] })).toMatchObject({ title: 'Share this folder?', message: 'Let MCP clients read “a”?', buttons: ['Add folder', 'Cancel'] });
+    expect(foldersConfirm({ add: [{ alias: 'a', path: '/a' }], refused: [] })).toMatchObject({ title: 'Share this folder?', message: 'Share “a” with MCP clients?' });
+    // A build that ships read-only: no "allow changes", no checkbox.
+    const ro = foldersConfirm({ add: [{ alias: 'a', path: '/a' }], refused: [], writes: false });
+    expect(ro).toMatchObject({ buttons: ['Add read-only', 'Cancel'], defaultId: 1, cancelId: 1 });
+    expect(ro.checkboxLabel).toBeUndefined();
     const many = foldersConfirm({ add: [{ alias: 'a', path: '/a' }], refused: Array.from({ length: 14 }, (_, i) => ({ path: `/r${i}`, why: 'Not a folder' })) });
     expect(many.detail).toContain('• /r9: Not a folder\n…and 4 more');
     expect(many.detail).not.toContain('/r10');
@@ -417,5 +422,46 @@ describe('mcpLaunch + IPC guard', () => {
     for (const fn of handlers.values()) expect(await fn('evil', true)).toMatchObject({ ok: false, error: { code: 'EACCES' } });
     expect(t.asked).toEqual([]);
     expect(await handlers.get(MCP_CHANNELS.setEnabled)!('trusted', true)).toMatchObject({ ok: true, result: { enabled: true } });
+  });
+});
+
+describe('the one "Add folders…" dialog decides the mode for the whole step', () => {
+  const mk = (...parts: string[]) => {
+    const d = path.join(...parts);
+    fs.mkdirSync(d, { recursive: true });
+    return d;
+  };
+  it('each button / checkbox combination → those modes in mcp.json; no further dialog', async () => {
+    const box = foldersConfirm({ add: [{ alias: 'a', path: '/a' }], refused: [] });
+    expect(folderChoice(box, { response: 0, checkboxChecked: true })).toEqual({ mode: 'read', allowCode: false }); // the box counts only with changes
+    expect(folderChoice(box, { response: 1, checkboxChecked: false })).toEqual({ mode: 'write', allowCode: false });
+    expect(folderChoice(box, { response: 1, checkboxChecked: true })).toEqual({ mode: 'write', allowCode: true });
+    expect(folderChoice(box, { response: 2, checkboxChecked: true })).toBeNull();
+    expect(folderChoice(foldersConfirm({ add: [], refused: [{ path: '/', why: 'x' }] }), { response: 0 })).toBeNull(); // the notice
+    for (const [choice, mode, code] of [
+      [{ mode: 'read', allowCode: true }, 'read', undefined],
+      [{ mode: 'write', allowCode: false }, 'write', undefined],
+      [{ mode: 'write', allowCode: true }, 'write', true],
+    ] as const) {
+      const t = setup({ writesEnabled: true });
+      t.answers.folders = choice;
+      t.answers.pick = [mk(t.home, 'one'), mk(t.home, 'two')];
+      await t.svc.addFolder();
+      expect(t.file().folders.map((f: any) => [f.alias, f.mode, f.allowCode])).toEqual([['one', mode, code], ['two', mode, code]]);
+      expect(t.asked).toEqual(['pick', 'folders']); // no write / code dialog on top
+    }
+  });
+
+  it('a single folder gets the one dialog too; Cancel adds nothing; a read-only build never writes "write"', async () => {
+    const t = setup({ writesEnabled: true });
+    t.answers.folders = false;
+    expect((await t.svc.addFolder()).folders).toEqual([]);
+    expect(t.asked).toEqual(['pick', 'folders']);
+    expect(fs.existsSync(path.join(t.configDir, 'mcp.json'))).toBe(false);
+    const ro = setup({ writesEnabled: false });
+    ro.answers.folders = { mode: 'write', allowCode: true };
+    await ro.svc.addFolder();
+    expect(ro.batches[0].writes).toBe(false);
+    expect(ro.file().folders.map((f: any) => [f.mode, f.allowCode])).toEqual([['read', undefined]]);
   });
 });

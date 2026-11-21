@@ -358,11 +358,14 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
 - **Inbound access for AI clients: one feature** (`src/mcp`, Settings → MCP server). Off by default. Main owns
   `<app data>/mcp.json` (on/off, the folder allow-list, per-folder mode and `allowCode`, `undo`, token hashes; read-only
   by default); every widening step is a **native dialog** in main — turning on, sharing folders (only through main's
-  folder dialog, `multiSelections`: the page never passes a path, `mcp:addFolder` takes no argument; one folder is added
-  at once, several get **one** native confirm (`foldersConfirm`) listing each alias + real path and, apart, every refused
-  one with its reason — `folderProblem`, already shared, picked twice, over the limit; nothing to add = reasons + "OK"
-  only; aliases in sorted path order, so they do not depend on the click order), allowing writes, code files in a
-  folder, undo copies off, creating / regenerating / revoking a token; narrowing needs none. Grants never live in settings.json: `BackendService.saveSettings`
+  folder dialog, `multiSelections`: the page never passes a path or a mode, `mcp:addFolder` takes no argument; every
+  "Add folders…" step — one folder or several — gets exactly **one** native confirm (`foldersConfirm`) listing each
+  alias + real path and, apart, every refused one with its reason — `folderProblem`, already shared, picked twice,
+  over the limit; nothing to add = reasons + "OK" only; aliases in sorted path order. Its buttons **[Add read-only]
+  [Add and allow changes] [Cancel]** (Cancel the default) and checkbox **"Also code and config files"** (counted only
+  with allow changes; `folderChoice`) set mode and `allowCode` for every folder of that step, from the dialog's own
+  response; nothing else asks for them), later per-folder widening — allowing writes, code files in a
+  folder —, undo copies off, creating / regenerating / revoking a token; narrowing needs none. Grants never live in settings.json: `BackendService.saveSettings`
   drops every `mcp.*` key but the two result limits (`isMainOwnedKey`), and the server reads none from there.
   **Live files ("MCP active"):** a running stdio server keeps `<app data>/mcp-live/<pid>-<random>.json` (`src/mcp/live.ts`)
   holding only `{ v, pid, client (its token's name), started, lastCall }` — never a path, file name, query, text or
@@ -462,7 +465,15 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
   refused off fixed local drives (exit 3) and for a reparse point (exit 4). macOS only on the home volume; Linux the
   same-device XDG trash. Batches (`paths`, max 100; `replace_in_files`, max 200 changed files) run item by item past
   failures, one answer line per item, one journal group (one Revert; folder entries have none), one audit row with
-  `items`; the quota counts each changed item. `replace_in_files`: `find` is literal (escaped, never a regex), `query`
+  `items`; **`undo`** (`tools/write.ts` `undoGroup`): only a group this server process made (`Journal.ownGroup`: the
+  full id or the 8-character code answers show; anything else → `EACCES: only changes from this session can be undone
+  here; use Revert in One`), only in its folder while still shared and writable, all or nothing via
+  `revertGroupReport` (the same preconditions as One's Revert; every changed file is named), once only (the shared
+  `reverted` mark), one quota unit, no confirmation; the answer is counts only, never content; folder deletes are
+  `trash` notes in their group (no copy): "restore … from the Recycle Bin"; batch `move` keeps the subfolders below the common parent of `paths` (`batchDestinations`; `flat` = all
+  directly in `to_folder`, `to_paths` = one destination each), makes missing parents level by level (strict
+  `mkdirStrict`, through the resolver's destination check), reuses existing folders, never overwrites a file and never
+  merges a folder into an existing one of the same name (EEXIST with a hint); the quota counts each changed item. `replace_in_files`: `find` is literal (escaped, never a regex), `query`
   takes file filters only (`in:` refused) via the search parser in `noRegex` mode; visible, type-allowed text files;
   each file through `overwrite` (stamp guard + placeholder rules: files that would touch a secret line are skipped and
   named). `replace_text all` refuses the whole call when any match touches a secret line or its neighbour (names the

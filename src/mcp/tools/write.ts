@@ -9,9 +9,10 @@ import { toLf } from '../../backend/textcodec';
 import { isMarkdown } from '../../shared/paths';
 import { applyEdits, createRenameRewriter } from '../../knowledge/rename';
 import { appendText, patchText, replaceUnique, type PatchTarget } from '../edits';
-import { writeTypeProblem, type Folder, type Target } from '../folders';
+import { cleanPath, writeTypeProblem, type Folder, type Target } from '../folders';
 import { MCP_CONFIRM_OVER } from '../../shared/mcp';
 import { checkPlaceholderPolicy, frozenLines, isVarsFile } from '../placeholders';
+import { readGroup, revertGroupReport } from '../journal';
 import { ToolError, type CallContext, type ToolAnnotations, type ToolDef, type ToolResult } from '../protocol';
 import { MAX_EDIT_BYTES, MAX_MOVE_ENTRIES, MAX_MOVE_WALK, MAX_WRITE_BYTES, checkEtag, checkSize, create, etagOf, makeDir, move, overwrite, parseEtag, scopeAt, trashFile, trashFolder, varsFileFor, writeError, type WriteCtx } from '../writes';
 import { batchSummary, binWord, count as many, folderSummary, shownName, shownPath, sizeText, surveyFolder, type Survey } from '../confirm';
@@ -230,7 +231,7 @@ export function writeTools(env: ToolEnv): ToolDef[] {
     {
       name: 'move',
       title: 'Move or rename',
-      description: 'Rename or move a file or folder (with its contents); never overwrites. Links to it are updated.',
+      description: 'Rename or move files or folders (with contents); never overwrites; links are updated.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -238,7 +239,9 @@ export function writeTools(env: ToolEnv): ToolDef[] {
           from: P.path('Current path'),
           to: P.path('New path (must not exist)'),
           paths: { type: 'array', items: { type: 'string', maxLength: 1024 }, maxItems: 100, description: 'Several (not with from).' },
-          to_folder: P.path('Their new folder'),
+          to_folder: P.path('New folder (keeps subfolders)'),
+          flat: { type: 'boolean', description: 'No subfolders.' },
+          to_paths: { type: 'array', items: { type: 'string', maxLength: 1024 }, maxItems: 100, description: 'Or one new path each.' },
           update_links: { type: 'boolean', description: 'Rewrite links to it (default: on).' },
         },
         additionalProperties: false,
@@ -253,24 +256,34 @@ export function writeTools(env: ToolEnv): ToolDef[] {
           'move',
           async (f, c) => {
             const update = typeof a.update_links === 'boolean' ? a.update_links : env.settings()['links.updateOnRename'] !== false;
-            const batch = a.paths !== undefined || a.to_folder !== undefined;
-            if (batch === (a.from !== undefined || a.to !== undefined)) throw new ToolError('EINVAL', 'Pass from + to (one item), or paths + to_folder (several)');
+            const batch = a.paths !== undefined || a.to_folder !== undefined || a.to_paths !== undefined || a.flat !== undefined;
+            if (batch === (a.from !== undefined || a.to !== undefined)) throw new ToolError('EINVAL', 'Pass from + to (one item), or paths + to_folder / to_paths (several)');
             if (!batch) {
               if (a.from === undefined || a.to === undefined) throw new ToolError('EINVAL', 'Pass both from and to');
               env.quota.take();
               const r = await moveOne(env, f, c, a.from, a.to, { update });
               return done(`Moved ${r.from} → ${r.to}`, r.etag, env.journal.enabled ? r.group : undefined, r.links, r.notUpdated);
             }
-            if (!Array.isArray(a.paths) || typeof a.to_folder !== 'string') throw new ToolError('EINVAL', 'Pass both paths and to_folder');
+            if (!Array.isArray(a.paths)) throw new ToolError('EINVAL', 'Pass paths, with to_folder or to_paths');
+            const paths = a.paths as string[];
+            let dests: string[];
+            if (a.to_paths !== undefined) {
+              if (a.to_folder !== undefined || a.flat !== undefined) throw new ToolError('EINVAL', 'to_paths replaces to_folder and flat: pass one of them');
+              const to = a.to_paths as string[];
+              if (to.length !== paths.length) throw new ToolError('EINVAL', `to_paths must name one new path per item (${paths.length}), not ${to.length}`);
+              dests = to;
+            } else {
+              if (typeof a.to_folder !== 'string') throw new ToolError('EINVAL', 'Pass both paths and to_folder (or to_paths)');
+              dests = batchDestinations(paths, String(a.to_folder), a.flat === true, f.win);
+            }
             // Each item on its own (a failure does not stop the rest); one undo group: one Revert moves all back.
             const group = env.journal.newGroup();
             const rows: string[] = [];
             let moved = 0;
-            for (const p of a.paths as string[]) {
+            for (const [i, p] of paths.entries()) {
               try {
                 env.quota.take();
-                const base = String(p).replace(/\/+$/, '').split('/').pop() ?? '';
-                const r = await moveOne(env, f, c, p, `${String(a.to_folder).replace(/\/+$/, '')}/${base}`, { update, group });
+                const r = await moveOne(env, f, c, p, dests[i], { update, group });
                 moved++;
                 rows.push(line(`ok ${r.from} → ${r.to}`, r.links, r.notUpdated));
               } catch (err) {
@@ -278,11 +291,20 @@ export function writeTools(env: ToolEnv): ToolDef[] {
                 rows.push(`${e.code} ${oneItem(p)}: ${e.message}`);
               }
             }
-            const head = line(`Moved ${moved} of ${many(rows.length, 'item')} into ${String(a.to_folder)}`, moved && env.journal.enabled ? `undo: ${group.slice(-8)}` : '');
+            const head = line(`Moved ${moved} of ${many(rows.length, 'item')}${typeof a.to_folder === 'string' ? ` into ${a.to_folder}` : ''}`, moved && env.journal.enabled ? `undo: ${group.slice(-8)}` : '');
             return { content: [{ type: 'text', text: [head, ...rows].join('\n') }], journal: moved && env.journal.enabled ? group : undefined, isError: moved === 0, audit: { items: rows.length } };
           },
           { quota: false },
         ),
+    },
+    {
+      name: 'undo',
+      title: 'Undo',
+      description: 'Undo your own change from this session: id = the undo code its answer showed.',
+      inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'The undo code.', maxLength: 40 } }, required: ['id'], additionalProperties: false },
+      annotations: ann(false),
+      write: true,
+      run: (a) => undoGroup(env, String(a.id)),
     },
     {
       name: 'create_folder',
@@ -499,6 +521,8 @@ async function deleteMany(env: ToolEnv, f: Folder, c: WriteCtx, paths: string[],
       env.quota.take();
       if (i.survey) {
         await trashFolderOrSay(c, f, i.t!, i.realDir!, i.survey);
+        // A note in the group (no copy): `undo` and Revert say it comes back from the bin, never "undone".
+        await env.journal.add(group, { client: c.client, tool: c.tool, root: f.root, folder: f.alias, op: 'trash', path: i.t!.key, dir: true, after: null }, null, { force: true }).catch(() => {});
         folders++;
         rows.push(`ok ${i.t!.key} (folder, ${many(i.survey.files, 'file')}: restore it from the ${binWord()})`);
       } else {
@@ -511,7 +535,7 @@ async function deleteMany(env: ToolEnv, f: Folder, c: WriteCtx, paths: string[],
       rows.push(`${e.code} ${i.t!.key}: ${e.message}`);
     }
   }
-  const head = line(`Deleted ${files + folders} of ${many(items.length, 'item')} (${binWord()})`, files ? `undo: ${group.slice(-8)}` : '');
+  const head = line(`Deleted ${files + folders} of ${many(items.length, 'item')} (${binWord()})`, files + folders ? `undo: ${group.slice(-8)}` : '');
   return {
     content: [{ type: 'text', text: [head, ...rows].join('\n') }],
     journal: files ? group : undefined,
@@ -615,13 +639,44 @@ function matchLines(text: string, old: string): number[][] {
   return out;
 }
 
+/**
+ * Where each of `paths` goes in `toFolder`: under the same subfolders as below their common parent folder
+ * (notes/a/x.md + notes/b/y.md → to/a/x.md + to/b/y.md; all in one folder → to/x.md, as a flat move), or all
+ * directly in it (`flat`). Paths are compared as the resolver cleans them; a bad one fails on its own later.
+ */
+export function batchDestinations(paths: readonly string[], toFolder: string, flat: boolean, win: boolean): string[] {
+  const clean = (p: string) => {
+    try {
+      return cleanPath(p, { win });
+    } catch {
+      return String(p).replace(/^\/+|\/+$/g, '');
+    }
+  };
+  const keys = paths.map(clean);
+  const to = clean(toFolder);
+  const join = (rel: string) => (to ? `${to}/${rel}` : rel);
+  if (flat) return keys.map((k) => join(k.split('/').pop() ?? k));
+  const parents = keys.map((k) => k.split('/').slice(0, -1));
+  let common = parents[0] ?? [];
+  for (const p of parents.slice(1)) {
+    let i = 0;
+    while (i < common.length && i < p.length && (win ? common[i].toLowerCase() === p[i].toLowerCase() : common[i] === p[i])) i++;
+    common = common.slice(0, i);
+  }
+  return keys.map((k) => join(k.split('/').slice(common.length).join('/')));
+}
+
 /** One move (a file or a folder with its contents): every rule of `move`. Shares `o.group` in a batch. */
 async function moveOne(env: ToolEnv, f: Folder, c: WriteCtx, fromArg: unknown, toArg: unknown, o: { update: boolean; group?: string }) {
   const from = await f.resolveTarget(fromArg, { kind: 'any', exists: 'must' });
   const isDir = !!from.st?.isDirectory();
   if (!isDir && (await f.readText(from.key)).binary) throw new ToolError('EINVAL', `Binary file: ${from.key} cannot be moved here`);
   // sameAs: "Note.md" → "note.md" on a case-insensitive folder is a rename, not a clash.
-  const to = await f.resolveTarget(toArg, { kind: isDir ? 'dir' : 'file', exists: 'mustNot', sameAs: from.st ?? undefined });
+  const to = await f.resolveTarget(toArg, { kind: isDir ? 'dir' : 'file', exists: 'mustNot', sameAs: from.st ?? undefined }).catch((err) => {
+    // Folders are not merged: an existing folder of that name stays as it is (its files are never overwritten).
+    if (isDir && err instanceof ToolError && err.code === 'EEXIST') throw new ToolError('EEXIST', `${err.message.replace(/^Already exists: /, '')} exists: folders are not merged. Move what ${from.key} holds instead (paths: ${from.key}/…).`);
+    throw err;
+  });
   if (to.key.toLowerCase().startsWith(`${from.key.toLowerCase()}/`)) throw new ToolError('EINVAL', 'A folder cannot be moved into itself');
   const ws = await f.workspace();
   // Visible files, old → new (link rewrites, placeholder checks). A folder takes everything along: items
@@ -698,4 +753,34 @@ async function moveOne(env: ToolEnv, f: Folder, c: WriteCtx, fromArg: unknown, t
   const links = updated.length ? `links updated: ${names(updated)}` : '';
   const notUpdated = failed.length ? `links NOT updated: ${names(failed)}` : '';
   return { from: from.key, to: to.key, etag: st ? etagOf({ mtime: st.mtimeMs, size: st.size }) : null, group, links, notUpdated };
+}
+
+/** Groups being undone right now (two calls for one group never both run). */
+const undoing = new Set<string>();
+
+/**
+ * undo: a group THIS process made (its answer showed the code), all or nothing, only onto files still as the
+ * change left them (journal.ts revertGroupReport, like Revert in One), only in a folder that is still shared and
+ * writable. Marked reverted (shared with One's Revert): once only. The answer is a summary, never file content.
+ */
+async function undoGroup(env: ToolEnv, id: string): Promise<ToolResult> {
+  const group = env.journal.ownGroup(id);
+  if (!group) throw new ToolError('EACCES', 'only changes from this session can be undone here; use Revert in One');
+  if (undoing.has(group)) throw new ToolError('EBUSY', 'That change is being undone already');
+  undoing.add(group);
+  try {
+    const { entries } = await readGroup(env.journal.dir, group).catch((err) => {
+      throw err instanceof ToolError && err.code === 'ENOENT' ? new ToolError('ENOENT', 'That change kept no undo copy (undo copies were off): nothing to undo') : err;
+    });
+    const f = env.pool.list().find((x) => x.root === entries[0].root && x.alias === entries[0].folder);
+    if (!f) throw new ToolError('EACCES', 'That folder is no longer shared here: use Revert in One');
+    f.checkWritable(); // and again inside each step (Folder.guard)
+    env.quota.take();
+    const r = await f.use(() => revertGroupReport(f, env.journal.dir, group, (abs) => env.trash(abs)));
+    const parts = [r.restored && `${many(r.restored, 'file')} restored`, r.movedBack && `${r.movedBack} moved back`, r.removed && `${r.removed} created ${r.removed === 1 ? 'item' : 'items'} removed`].filter(Boolean);
+    const bin = r.inBin.length ? `; folder${r.inBin.length === 1 ? '' : 's'} ${r.inBin.slice(0, 5).join(', ')}${r.inBin.length > 5 ? ' …' : ''}: restore from the ${binWord()}` : '';
+    return { content: [{ type: 'text', text: `Undone: ${parts.join(', ') || 'nothing left to change'}${bin}` }], audit: { items: r.n } };
+  } finally {
+    undoing.delete(group);
+  }
 }

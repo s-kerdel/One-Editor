@@ -14,7 +14,9 @@ const BUDGET = {
   readOnly: { raw: 5_000, visible: 4_300 },
   // +700 / +700 (v0.5.2): replace_in_files and the batch params (paths, to_folder, all, confirm), each saving
   // many calls (100 moves or deletes in one; a replace across files instead of one replace_text per file).
-  withWrites: { raw: 10_700, visible: 9_200 },
+  // +400 / +300 (v0.5.3): the `undo` tool (one short description, one param): the AI fixes its own slip in
+  // one call instead of re-writing files by hand.
+  withWrites: { raw: 11_100, visible: 9_500 },
 };
 
 const BASE = path.resolve(__dirname, '../../../.tmp/mcp/unit');

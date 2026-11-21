@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 // Status-bar MCP icon (src/renderer/mcp/indicator.tsx): shown while MCP is on, muted without an app,
-// accent with one (a count from two), one tooltip line per app, a ~1 s pulse on each new call.
+// green with one (a count from two), one tooltip line per app, a ~1 s pulse on each new call.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -65,7 +65,7 @@ describe('Indicator', () => {
     return { host, btn, done: () => act(() => render(null, host)) };
   }
 
-  it('off: no slot; on: muted "MCP"; connected: accent + count from two; off again: gone', async () => {
+  it('off: no slot; on: muted "MCP"; connected: green + count from two; off again: gone', async () => {
     const { btn, done } = await mounted();
     await act(() => take({ ...NO_MCP_STATUS }));
     expect(mcpIndicator.value).toBeNull();

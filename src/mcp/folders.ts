@@ -182,6 +182,11 @@ export class Folder {
     this.vis = new Visibility(env.settings().excludeGlobs ?? []);
   }
 
+  /** Windows path rules (case, 8.3 names). */
+  get win(): boolean {
+    return this.env.win;
+  }
+
   get isWarm() {
     return !!this.ws;
   }

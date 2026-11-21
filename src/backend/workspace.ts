@@ -886,8 +886,9 @@ export class Workspace {
       }
       if (guard?.strict && !(sb && sameEntry(sa, sb))) {
         // Never over something created in the window: a file is linked in (EEXIST when the name is taken)
-        // and its old name removed; a folder can only replace an empty folder.
-        await fsp.mkdir(path.dirname(b), { recursive: true });
+        // and its old name removed; a folder can only replace an empty folder. Missing parent folders are
+        // made one level at a time, each checked where it really is (a batch move into new subfolders).
+        if (dst.includes('/')) await this.mkdirStrict(dst.slice(0, dst.lastIndexOf('/')));
         await this.parentStillHere(dst);
         // The source too: only the entry the guard checked (sa), from its folder as verified, before and
         // after it is linked in (its old name is removed last).

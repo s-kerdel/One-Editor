@@ -28,7 +28,7 @@ import { WEB_SERVER_CHANNELS } from '../shared/web-server';
 import { UpdateCheckService, registerUpdateCheckIpc } from './update-check';
 import { UPDATE_CHECK_CHANNELS, UPDATE_ENDPOINTS, isAllowedUpdateUrl } from '../shared/update-check';
 import { NAV_CHANNEL, navFromAppCommand } from '../shared/nav';
-import { McpService, foldersConfirm, mcpLaunch, registerMcpIpc } from './mcp';
+import { McpService, folderChoice, foldersConfirm, mcpLaunch, registerMcpIpc } from './mcp';
 import { platformTrash } from '../backend/trash';
 import { MCP_CHANNELS } from '../shared/mcp';
 import os from 'node:os';
@@ -246,8 +246,21 @@ function main() {
       const r = await dialog.showOpenDialog(win!, { title: 'Share folders with MCP clients', message: 'Pick one or more folders to share read-only', properties: ['openDirectory', 'multiSelections'] });
       return r.canceled ? [] : r.filePaths;
     },
-    // A one-button notice (nothing left to add) is never a yes.
-    confirmFolders: async (q) => (await mcpConfirm(foldersConfirm(q))) && q.add.length > 0,
+    // The one dialog of "Add folders…": its buttons and checkbox are the choice (a one-button notice is never a yes).
+    // Tests: SEC_EDIT_TEST_MCP_FOLDERS = read | write | write+code | cancel (default: read when
+    // SEC_EDIT_TEST_MCP_CONFIRM = allow, else cancel).
+    confirmFolders: async (q) => {
+      const box = foldersConfirm(q);
+      if (isTest) {
+        console.log(`[sec-edit:mcp-confirm] ${JSON.stringify({ title: box.title, message: box.message, detail: box.detail, buttons: box.buttons, checkbox: box.checkboxLabel })}`);
+        const want = process.env.SEC_EDIT_TEST_MCP_FOLDERS ?? (process.env.SEC_EDIT_TEST_MCP_CONFIRM === 'allow' ? 'read' : 'cancel');
+        const response = want === 'read' ? 0 : want.startsWith('write') ? 1 : box.cancelId;
+        return folderChoice(box, { response, checkboxChecked: want === 'write+code' });
+      }
+      if (!win || win.isDestroyed()) return null;
+      const r = await dialog.showMessageBox(win, { noLink: true, ...box });
+      return folderChoice(box, r);
+    },
     realpath: (abs) => fsp.realpath(abs),
     isDirectory: (abs) => fsp.stat(abs).then((st) => st.isDirectory(), () => false),
     randomId: () => crypto.randomBytes(8).toString('hex'),

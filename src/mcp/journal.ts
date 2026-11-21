@@ -22,8 +22,9 @@ export const JOURNAL_SESSION_BYTES = 64 * 1024 * 1024;
 export const JOURNAL_KEEP_RECENT_MS = 24 * 3600_000;
 export const GROUP_RE = JOURNAL_GROUP_RE;
 
-export type JournalOp = 'write' | 'create' | 'append' | 'patch' | 'replace' | 'relink' | 'move' | 'mkdir' | 'delete';
-const OPS: readonly JournalOp[] = ['write', 'create', 'append', 'patch', 'replace', 'relink', 'move', 'mkdir', 'delete'];
+/** `trash`: a whole folder went to the Recycle Bin (a note only: no copy, never reverted; restore it from the bin). */
+export type JournalOp = 'write' | 'create' | 'append' | 'patch' | 'replace' | 'relink' | 'move' | 'mkdir' | 'delete' | 'trash';
+const OPS: readonly JournalOp[] = ['write', 'create', 'append', 'patch', 'replace', 'relink', 'move', 'mkdir', 'delete', 'trash'];
 /** Ops that replaced the content of a file that existed (revert = put the old bytes back). */
 const CONTENT_OPS: readonly JournalOp[] = ['write', 'append', 'patch', 'replace', 'relink'];
 
@@ -96,6 +97,14 @@ export class Journal {
   /** Off (Settings → MCP server): writes keep no undo copy and get no Revert. */
   get enabled(): boolean {
     return this.o.enabled?.() ?? true;
+  }
+
+  /** A group this process made (full id, or the 8-character undo code answers show); null = not ours. */
+  ownGroup(id: string): string | null {
+    const want = id.trim().toLowerCase();
+    if (!want) return null;
+    for (const g of this.mine) if (g === want || (want.length === 8 && g.endsWith(`-${want}`))) return g;
+    return null;
   }
 
   newGroup(): string {
@@ -173,17 +182,34 @@ export async function readGroup(dir: string, group: string): Promise<{ entries: 
   return { entries, reverted: names.includes('reverted') };
 }
 
-const changed = (p: string) => new ToolError('EXTERNAL_CHANGE', `${p} changed after the MCP change. Nothing was reverted.`);
+const changedSince = (ps: string[]) => new ToolError('EXTERNAL_CHANGE', `Changed since: ${[...ps].sort().slice(0, 10).join(', ')}${ps.length > 10 ? ` +${ps.length - 10} more` : ''}. Nothing was reverted.`);
 const same = (st: { mtimeMs: number; size: number } | null, s: Stamp) => !!st && Math.abs(st.mtimeMs - s.mtime) <= 1 && st.size === s.size;
+
+/** What a revert did: files whose content came back, moves undone, created things removed; folders it cannot bring back. */
+export interface RevertReport {
+  n: number;
+  restored: number;
+  movedBack: number;
+  removed: number;
+  /** Folders deleted whole (no copy): to be restored from the Recycle Bin. */
+  inBin: string[];
+}
 
 /**
  * Undoes a group, newest change first, all or nothing: every precondition is checked before anything is
- * written, and each step checks again at commit time (the folder's write guard). Paths go through the
- * folder's resolver like any MCP write. Returns how many changes were undone.
+ * written (every changed path is named), and each step checks again at commit time (the folder's write
+ * guard). Paths go through the folder's resolver like any MCP write. Returns how many changes were undone.
  */
 export async function revertGroup(folder: Folder, dir: string, group: string, trash: (abs: string) => Promise<void>): Promise<number> {
-  const { entries, reverted } = await readGroup(dir, group);
-  if (reverted) throw new ToolError('EALREADY', 'Already reverted');
+  return (await revertGroupReport(folder, dir, group, trash)).n;
+}
+
+export async function revertGroupReport(folder: Folder, dir: string, group: string, trash: (abs: string) => Promise<void>): Promise<RevertReport> {
+  const { entries: all, reverted } = await readGroup(dir, group);
+  if (reverted) throw new ToolError('EALREADY', 'Already undone (here or with Revert in One)');
+  const inBin = all.filter((e) => e.op === 'trash').map((e) => e.path);
+  const entries = all.filter((e) => e.op !== 'trash');
+  if (!entries.length) throw new ToolError('ENOTUNDOABLE', `Not undoable here: restore ${inBin.slice(0, 5).join(', ')}${inBin.length > 5 ? ' …' : ''} from the Recycle Bin`);
   const gdir = path.join(dir, group);
   const prev = async (e: JournalEntry) => {
     if (!e.bytes) throw new ToolError('ENODATA', `The old content of ${e.path} was not kept (too large): restore it from the Recycle Bin`);
@@ -192,27 +218,32 @@ export async function revertGroup(folder: Folder, dir: string, group: string, tr
   const steps = [...entries].reverse();
   // What each path must be now: only the newest change of a path speaks for it (older ones are covered).
   const seen = new Set<string>();
+  const changed: string[] = [];
+  const check = async (p: string, fn: () => Promise<unknown>) => {
+    if (!(await fn().then(() => true, () => false)) && !changed.includes(p)) changed.push(p);
+  };
   for (const e of steps) {
     const at = e.op === 'move' ? e.to! : e.path;
     if (CONTENT_OPS.includes(e.op) || e.op === 'delete') await prev(e); // fail early, before any write
-    if (e.op === 'move') {
-      await folder.resolveTarget(e.path, { kind: 'any', exists: 'mustNot' }).catch(() => Promise.reject(changed(e.path)));
-    }
+    if (e.op === 'move') await check(e.path, () => folder.resolveTarget(e.path, { kind: 'any', exists: 'mustNot' }));
     if (seen.has(at)) continue;
     seen.add(at);
     if (e.op === 'delete') {
-      await folder.resolveTarget(at, { kind: 'file', exists: 'mustNot' }).catch(() => Promise.reject(changed(at)));
+      await check(at, () => folder.resolveTarget(at, { kind: 'file', exists: 'mustNot' }));
       continue;
     }
-    const t = await folder.resolveTarget(at, { kind: e.dir || e.op === 'mkdir' ? 'dir' : 'any', exists: 'must' }).catch(() => Promise.reject(changed(at)));
-    if (e.after && !same(t.st, e.after)) throw changed(at);
-    if (e.op === 'mkdir' && (await fsp.readdir(t.abs)).length) throw changed(at);
+    await check(at, async () => {
+      const t = await folder.resolveTarget(at, { kind: e.dir || e.op === 'mkdir' ? 'dir' : 'any', exists: 'must' });
+      if (e.after && !same(t.st, e.after)) throw new Error('changed');
+      if (e.op === 'mkdir' && (await fsp.readdir(t.abs)).length) throw new Error('not empty');
+    });
   }
+  if (changed.length) throw changedSince(changed);
+  const report: RevertReport = { n: 0, restored: 0, movedBack: 0, removed: 0, inBin };
   // Apply. `state`: what a path is after an earlier step of this revert (the next step's precondition).
   const ws = await folder.workspace();
   const state = new Map<string, Stamp | null>();
   const expectOf = (p: string, journaled: Stamp | null) => (state.has(p) ? state.get(p)! : journaled);
-  let n = 0;
   for (const e of steps) {
     if (CONTENT_OPS.includes(e.op)) {
       const t = await folder.resolveTarget(e.path, { kind: 'any', exists: 'must' });
@@ -220,16 +251,19 @@ export async function revertGroup(folder: Folder, dir: string, group: string, tr
       const ex = expectOf(e.path, e.after);
       const r = await ws.writeBinary(t.key, bytes, folder.guard(ex ? { expect: ex } : {}));
       state.set(e.path, { mtime: r.mtime, size: bytes.length });
+      report.restored++;
     } else if (e.op === 'create') {
       const t = await folder.resolveTarget(e.path, { kind: 'any', exists: 'must' });
       const ex = expectOf(e.path, e.after);
       await ws.remove(t.key, trash, folder.guard(ex ? { expect: ex } : {}));
       state.set(e.path, null);
+      report.removed++;
     } else if (e.op === 'delete') {
       const t = await folder.resolveTarget(e.path, { kind: 'file', exists: 'mustNot' });
       const bytes = await prev(e);
       const r = await ws.writeBinary(t.key, bytes, folder.guard({ expect: 'absent' }));
       state.set(e.path, { mtime: r.mtime, size: bytes.length });
+      report.restored++;
     } else if (e.op === 'move') {
       const from = await folder.resolveTarget(e.to!, { kind: 'any', exists: 'must' });
       const to = await folder.resolveTarget(e.path, { kind: 'any', exists: 'mustNot' });
@@ -238,12 +272,14 @@ export async function revertGroup(folder: Folder, dir: string, group: string, tr
       const st = await fsp.stat(to.abs).catch(() => null);
       state.set(e.path, st && !e.dir ? { mtime: st.mtimeMs, size: st.size } : null);
       state.set(e.to!, null);
+      report.movedBack++;
     } else if (e.op === 'mkdir') {
       const t = await folder.resolveTarget(e.path, { kind: 'dir', exists: 'must' });
       await ws.remove(t.key, undefined, folder.guard({ expect: 'emptyDir' }));
+      report.removed++;
     }
-    n++;
+    report.n++;
   }
   await fsp.writeFile(path.join(gdir, 'reverted'), String(Date.now()), { flag: 'wx' }).catch(() => {});
-  return n;
+  return report;
 }

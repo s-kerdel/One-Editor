@@ -212,7 +212,7 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 
 | Icon | Shows when | Click |
 |---|---|---|
-| **MCP** | The MCP server is on. Grey: no AI app connected. Coloured: an app is (count from 2; a short flash on each call) | Settings → MCP server → **Recent activity** |
+| **MCP** | The MCP server is on. Grey: no AI app connected. **Green**: an app is connected (count from 2; a short flash on each call) | Settings → MCP server → **Recent activity** |
 | **🌐 :4317** | The web server runs (browser mode) | The info box: **Open**, **Copy link**, **Stop server** |
 | **⛨ 3** | The last security check found something (red: high / critical) | The findings |
 
@@ -1034,18 +1034,20 @@ Settings are **global**, not per folder.
 
 1. Settings → **MCP server** → pick your app under **Client setup** → switch it **on** (One asks once). Its setup, with a fresh **access token**, is now on the clipboard.
 2. Paste it where the table below says → **restart that app**.
-3. **Add folders…** → pick a notes folder (or several: see below). It is shared **Read-only**.
+3. **Add folders…** → pick a notes folder (or several: see below) → **Add read-only** (or **Add and allow changes**).
 
-**Share several folders at once**
+**Share folders: one question**
 
-1. **Add folders…** → **Ctrl+click** (macOS: **Cmd+click**) or **Shift+click** the folders → **Select Folder**.
-2. One asks once for the whole batch: **Read-only:** what it adds (its name for the AI: path), **Not added:** what it skips, with why.
-3. **Add N folders** → all are shared **Read-only**. **Cancel** adds nothing.
+1. **Add folders…** → pick one, or **Ctrl+click** (macOS: **Cmd+click**) / **Shift+click** several → **Select Folder**.
+2. One asks **once** for the whole step: what it adds (its name for the AI: path), what it skips (with why).
+3. Choose: **Add read-only** · **Add and allow changes** (tick **Also code and config files** if the AI may change those too) · **Cancel** (the default: adds nothing).
+
+- The choice applies to every folder of that step. No further question for them.
 
 - **Skipped, with a reason:** already shared, a whole drive, your home folder itself, One's own data folder, not a folder, over the limit of 32.
 - **Nothing left to add?** You only see the reasons and **OK**.
 - **Same folder name twice** (`a\notes`, `b\notes`): the AI sees `notes` and `notes-2`, numbered in path order.
-- **One folder** is added straight away, as before. **Read-write** stays a step per folder (One asks).
+- **Later changes** per folder (read-only → read-write, code files on) still ask, one folder at a time.
 - Running AI apps see the new folders within a second: restart nothing.
 
 **Updated One and an app stopped working?** Copy the setup again: **a token is now required** (see Access tokens).
@@ -1142,8 +1144,9 @@ Only in **Read-write** folders:
 | `patch_file` | Changes one heading section, `^block` or frontmatter key: append · prepend · replace · delete |
 | `replace_text` | Replaces one exact piece of text (it must occur once), or every match in that file (`all`) |
 | `replace_in_files` | Replaces exact text in many files at once; `query` picks them with search filters (`path:` `ext:` `tag:` `lang:` `file:`); `preview` only counts |
-| `move` | Renames / moves a file or folder (with everything in it), never overwrites; updates links to it (**Update links on rename**). `paths` + `to_folder`: up to 100 items in one call |
+| `move` | Renames / moves a file or folder (with everything in it), never overwrites; updates links to it (**Update links on rename**). `paths` + `to_folder`: up to 100 items in one call, **keeping their subfolders** (`notes/a/x.md` + `notes/b/y.md` → `archive/a/x.md` + `archive/b/y.md`); `flat: true` puts all directly in `to_folder`; `to_paths` gives each its own new path. Existing folders are reused; an existing file is never overwritten, and a folder is never merged into one of the same name |
 | `create_folder` · `delete` | New folder · files or folders to the **Recycle Bin** (`paths`: up to 100). File deletes keep undo copies (even with undo copies off), or are refused |
+| `undo` | Undoes one of **its own changes from this session** (the `undo:` code of that answer): everything of that call, only if you have not edited those files since. Anything older, or from another app: **Revert** in One. A deleted folder: restore it from the Recycle Bin |
 
 **Fewer calls, one Revert**
 
@@ -1218,7 +1221,7 @@ Only in **Read-write** folders:
 - **A secret typed into a normal note *is* readable.** Keep secrets in the vault.
 - **Excluded folders are a normal setting:** removing an entry from **Excluded folders** makes that folder visible to AI apps at once, without a question. Check the list before sharing a folder.
 - **Read-only unless you say so**, per folder (see above). `--read-only` in the client setup keeps an AI app read-only whatever the folder says.
-- **See it in the status bar** (right end): **MCP** shows while the MCP server is on. **Grey** = no app connected. **Coloured** (+ a count from 2) = an AI app is connected; it flashes briefly on each call. Hover: which app, and when it last asked. Click: **Recent activity**.
+- **See it in the status bar** (right end): **MCP** shows while the MCP server is on. **Grey** = no app connected. **Green** (+ a count from 2) = an AI app is connected; it flashes briefly on each call. Hover: which app, and when it last asked. Click: **Recent activity**.
 - **Off = off:** running servers stop within a second. A removed folder or revoked token is gone at once.
 - **Edge cases:** a heading that is only `#` counts as empty (no section). Frontmatter key lines over 10,000 characters are ignored by `read_file` / `patch_file`.
 

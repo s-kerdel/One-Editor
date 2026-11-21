@@ -1,5 +1,5 @@
 // Status-bar corner in the real desktop app: the MCP icon shows while MCP is on (muted, "no app connected"),
-// turns accent when a real stdio server (started from the copied setup, with its token) writes its live file,
+// turns green when a real stdio server (started from the copied setup, with its token) writes its live file,
 // pulses on a call, goes back to muted when that server ends, and disappears when MCP is off. Its click opens
 // Settings → MCP server at Recent activity. With the web server running too, the order is MCP · :port.
 import type { ElectronApplication, Page } from '@playwright/test';
@@ -21,7 +21,7 @@ async function runCommand(page: Page, text: string, id: string) {
   await page.keyboard.press('Enter');
 }
 
-test('MCP icon: on → muted; a live session → accent + pulse on a call; session ends → muted; off → gone; click → Recent activity', async ({ el }) => {
+test('MCP icon: on → muted; a live session → green + pulse on a call; session ends → muted; off → gone; click → Recent activity', async ({ el }) => {
   test.setTimeout(90_000);
   const shared = path.join(el.tmp, 'Shared Notes');
   fs.mkdirSync(shared, { recursive: true });
@@ -63,6 +63,17 @@ test('MCP icon: on → muted; a live session → accent + pulse on a call; sessi
   await client.connect(transport);
   try {
     await expect(icon(page)).toHaveAttribute('data-state', 'live', { timeout: 15000 });
+    // Connected = the theme's green (--success), icon and "MCP" text alike (user: "may be lit green").
+    const green = await page.evaluate(() => {
+      const s = document.createElement('span');
+      s.style.color = 'var(--success)';
+      document.body.append(s);
+      const c = getComputedStyle(s).color;
+      s.remove();
+      return c;
+    });
+    expect(await icon(page).evaluate((b) => getComputedStyle(b).color)).toBe(green);
+    expect(await icon(page).locator('.se-icon').evaluate((i) => getComputedStyle(i).color)).toBe(green);
     expect(liveFiles(el.userData)).toHaveLength(1);
     await expect(icon(page)).toHaveAttribute('title', /^First app connected · no calls yet$/);
     await expect(icon(page).locator('[data-testid="mcp-indicator-count"]')).toHaveCount(0);

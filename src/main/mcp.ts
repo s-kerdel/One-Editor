@@ -65,7 +65,8 @@ export interface McpDeps {
   /** The native folder dialog, several folders at once; [] = cancelled. */
   pickFolders(): Promise<string[]>;
   /** Several folders picked: one native confirm for the batch (see `foldersConfirm`). No `add` = only the reasons, answers false. */
-  confirmFolders(q: FolderBatch): Promise<boolean>;
+  /** THE dialog of "Add folders…" (one, also for one folder): read-only / allow changes (+ code files) / Cancel. */
+  confirmFolders(q: FolderBatch): Promise<FolderChoice | null>;
   realpath(abs: string): Promise<string>;
   isDirectory(abs: string): Promise<boolean>;
   randomId(): string;
@@ -151,31 +152,71 @@ import { folderProblem } from '../mcp/grant';
 export interface FolderBatch {
   add: Array<{ alias: string; path: string }>;
   refused: Array<{ path: string; why: string }>;
+  /** This build lets AI apps change files (MCP_WRITES_ENABLED): "Add and allow changes" is offered. */
+  writes?: boolean;
 }
+/** What the one "Add folders…" dialog answered, for every folder of that step. */
+export interface FolderChoice {
+  mode: 'read' | 'write';
+  /** Code and config files too (the dialog's checkbox; only with mode write). */
+  allowCode: boolean;
+}
+
 /** A refused pick + the error code a single pick answers with. */
 type Refusal = FolderBatch['refused'][number] & { code: string };
 
 /** Refused rows shown at most (each widens nothing, so the rest is a count); every folder to add is listed. */
 const REFUSED_SHOWN = 10;
 
-/** The native confirm of a batch (main.ts shows it). Nothing to add → a notice with the reasons and only "OK". */
-export function foldersConfirm(q: FolderBatch): { type: 'question' | 'warning'; title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number } {
+export interface FoldersBox {
+  type: 'question' | 'warning';
+  title: string;
+  message: string;
+  detail: string;
+  buttons: string[];
+  defaultId: number;
+  cancelId: number;
+  checkboxLabel?: string;
+  checkboxChecked?: boolean;
+}
+
+/**
+ * The one native dialog of "Add folders…" (main.ts shows it): every folder to add and every refused one with
+ * why; [Add read-only] [Add and allow changes] [Cancel] (Cancel the default) and "Also code and config files"
+ * (only with allow changes). Writes off in this build: [Add read-only] [Cancel]. Nothing to add → a notice
+ * with the reasons and only "OK".
+ */
+export function foldersConfirm(q: FolderBatch, writes = q.writes !== false): FoldersBox {
   const n = q.add.length;
   const refused = q.refused.slice(0, REFUSED_SHOWN).map((r) => `• ${r.path}: ${r.why}`);
   if (q.refused.length > REFUSED_SHOWN) refused.push(`…and ${q.refused.length - REFUSED_SHOWN} more`);
   if (!n) return { type: 'warning', title: 'No folder added', message: 'None of these folders can be shared', detail: refused.join('\n'), buttons: ['OK'], defaultId: 0, cancelId: 0 };
-  const parts = [`Read-only:\n${q.add.map((f) => `• ${f.alias}: ${f.path}`).join('\n')}`];
+  const parts = [`${n === 1 ? 'Folder' : 'Folders'}:\n${q.add.map((f) => `• ${f.alias}: ${f.path}`).join('\n')}`];
   if (refused.length) parts.push(`Not added:\n${refused.join('\n')}`);
-  parts.push('AI apps you set up can search and read them, not change them: you allow changes per folder. Hidden files, key files and excluded folders stay invisible.');
+  parts.push(
+    writes
+      ? 'Read-only: AI apps you set up can search and read them. Allow changes: they can also edit, move and delete notes there (to the Recycle Bin; each change can be reverted). Hidden files, key files and excluded folders stay invisible either way.'
+      : 'AI apps you set up can search and read them, not change them. Hidden files, key files and excluded folders stay invisible.',
+  );
+  const it = n === 1 ? `“${q.add[0].alias}”` : `these ${n} folders`;
   return {
     type: 'question',
     title: n === 1 ? 'Share this folder?' : `Share ${n} folders?`,
-    message: n === 1 ? `Let MCP clients read “${q.add[0].alias}”?` : `Let MCP clients read these ${n} folders?`,
+    message: `Share ${it} with MCP clients?`,
     detail: parts.join('\n\n'),
-    buttons: [n === 1 ? 'Add folder' : `Add ${n} folders`, 'Cancel'],
-    defaultId: 1,
-    cancelId: 1,
+    buttons: writes ? ['Add read-only', 'Add and allow changes', 'Cancel'] : ['Add read-only', 'Cancel'],
+    defaultId: writes ? 2 : 1,
+    cancelId: writes ? 2 : 1,
+    ...(writes ? { checkboxLabel: 'Also code and config files', checkboxChecked: false } : {}),
   };
+}
+
+/** The dialog's answer → the choice (null = Cancel or the notice). The checkbox counts only with allow changes. */
+export function folderChoice(box: FoldersBox, r: { response: number; checkboxChecked?: boolean }): FolderChoice | null {
+  const label = box.buttons[r.response];
+  if (label === 'Add read-only') return { mode: 'read', allowCode: false };
+  if (label === 'Add and allow changes') return { mode: 'write', allowCode: r.checkboxChecked === true };
+  return null;
 }
 
 export class McpService {
@@ -471,10 +512,10 @@ export class McpService {
     });
   }
 
-  /** Opens the native folder dialog (several at once); every folder it adds is shared read-only.
-   *  One folder: added at once (picking it was the OK), a refusal is the error, as before. Several: each
-   *  passes the same checks, then one native confirm lists what is added and what is not (and why);
-   *  "Cancel" adds nothing, and with nothing left to add it only shows the reasons. */
+  /** Opens the native folder dialog (several at once), then ONE native confirm for that step (also for one
+   *  folder): what is added and what is not (and why), read-only or with changes allowed (and code files). The
+   *  choice applies to every folder of the step; nothing else asks. One folder that is refused: the error, as
+   *  before. "Cancel" adds nothing; with nothing left to add it only shows the reasons. */
   addFolder(): Promise<McpStatus> {
     return this.serial(async () => {
       const cfg = await this.read();
@@ -483,10 +524,12 @@ export class McpService {
       if (!picked.length) return this.statusOf(cfg);
       const { add, refused } = await this.sortOut(cfg, picked);
       if (picked.length === 1 && refused.length) throw new McpError(refused[0].code, refused[0].why);
-      if (picked.length > 1 && !(await this.deps.confirmFolders({ add, refused: refused.map(({ path, why }) => ({ path, why })) }))) return this.statusOf(cfg);
-      if (!add.length) return this.statusOf(cfg);
+      const choice = await this.deps.confirmFolders({ add, refused: refused.map(({ path, why }) => ({ path, why })), writes: this.writes });
+      if (!choice || !add.length) return this.statusOf(cfg);
+      const mode: 'read' | 'write' = this.writes && choice.mode === 'write' ? 'write' : 'read';
+      const allowCode = mode === 'write' && choice.allowCode;
       const added = this.deps.now?.() ?? Date.now();
-      return this.write({ ...cfg, folders: [...cfg.folders, ...add.map((f) => ({ id: this.deps.randomId(), alias: f.alias, path: f.path, mode: 'read' as const, added }))] });
+      return this.write({ ...cfg, folders: [...cfg.folders, ...add.map((f) => ({ id: this.deps.randomId(), alias: f.alias, path: f.path, mode, ...(allowCode ? { allowCode: true } : {}), added }))] });
     });
   }
 
