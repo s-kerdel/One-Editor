@@ -18,10 +18,11 @@ import { LANGUAGES } from '@shared/languages';
 
 // Icons only this lazily loaded chunk draws (see addIcons).
 addIcons({ history: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8|M3 3v5h5|M12 7v5l4 2', trash: 'M3 6h18|M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6|M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2|M10 11v6|M14 11v6', rename: 'M12 20h9|M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z', reveal: 'M15 3h6v6|M10 14 21 3|M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6', exportPdf: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z|M14 3v5h5|M12 11v6|m9 14 3 3 3-3', arrowUp: 'M12 19V5|m5 12 7-7 7 7' });
-import { absolutePath, copyText, deletePaths, duplicate, errText, exists, expandTo, newNote, revealInOs, revealInTree, revealLabel, setTree, trashName, startCreate, validateName } from './fileops';
+import { absolutePath, copyText, deletePaths, duplicate, errText, exists, expandTo, newNote, revealInOs, revealInTree, revealLabel, setTree, startCreate } from './fileops';
+import { moveNode, trashName, validateName } from './file-rules';
 import { RpcError } from '../platform';
 import { extname, join, stem } from '@shared/paths';
-import { filesUnder, findNode, insertNode, moveNode, removeNode } from './tree-model';
+import { filesUnder, findNode, insertNode, removeNode } from './tree-model';
 import { OPEN_MAX, openPaths, topLevel } from './tree-select';
 import { discardDoc } from './documents';
 import { renameDocs } from './doc-save';
@@ -39,11 +40,12 @@ import { installSettingsSync } from './settings-sync';
 // Settings written by another sec-edit process (desktop ↔ browser mode) apply live: wired here, not at startup.
 installSettingsSync();
 
-// Desktop "Start web server" (palette commands, status-bar pill): its chunk follows this idle-loaded one,
-// so the startup bundle carries none of it. The browser build has no bridge and never fetches it.
-if ((globalThis as { secEditBridge?: { webServer?: unknown } }).secEditBridge?.webServer)
+// Desktop "Start web server" (palette commands, status-bar pill) and the corner's MCP icon (same chunk): it
+// follows this idle-loaded one, so the startup bundle carries none of it. The browser build has no bridge and never fetches it.
+const desktop = (globalThis as { secEditBridge?: { webServer?: unknown; mcp?: unknown } }).secEditBridge;
+if (desktop?.webServer || desktop?.mcp)
   void import('../webserver/web-server-ui').then(
-    (m) => m.install(),
+    (m) => (m.install(), m.installMcpIndicator()),
     (err) => console.warn('[webserver] failed to load', err),
   );
 

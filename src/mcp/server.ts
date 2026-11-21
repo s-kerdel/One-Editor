@@ -46,6 +46,8 @@ export interface ServerOptions {
   elicitTimeoutMs?: number;
   /** Tests: the two-step confirmation codes (a clock of their own). */
   confirmCodes?: ConfirmCodes;
+  /** After every answered call (the live file's "last call"; throttled there). */
+  onActivity?: () => void;
   /** Tests: other write limits. */
   quota?: WriteQuota;
   /** Tests: the home folder for the grant rules (default os.homedir()). */
@@ -88,12 +90,14 @@ export class OneMcpServer {
       resources: new Resources(this.pool, env.limits),
       elicitTimeoutMs: o.elicitTimeoutMs,
       onCall: (r) => {
+        o.onActivity?.();
         let folder: string | null = typeof r.args.folder === 'string' ? r.args.folder.slice(0, 40) : null;
         if (!folder && this.pool.list().length === 1) folder = this.pool.list()[0].alias;
         const p = typeof r.args.path === 'string' ? r.args.path : typeof r.args.uri === 'string' ? r.args.uri : null;
-        const p2 = p ?? (typeof r.args.from === 'string' ? r.args.from : null);
+        const list = Array.isArray(r.args.paths) ? (r.args.paths as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+        const p2 = p ?? (typeof r.args.from === 'string' ? r.args.from : list.length ? `${list[0]}${list.length > 1 ? ` +${list.length - 1} more` : ''}` : null);
         // The token's name is the user's own label for the app: shown rather than the name the client claims.
-        void this.audit.record({ client: o.token?.name ?? r.client, transport: o.transport, tool: r.tool, folder, path: p2 ? p2.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 300) : null, ok: r.ok, code: r.code, ms: r.ms, bytes: r.bytes, journal: r.journal ?? null, token: o.token?.id ?? null, note: r.note ?? null });
+        void this.audit.record({ client: o.token?.name ?? r.client, transport: o.transport, tool: r.tool, folder, path: p2 ? p2.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 300) : null, ok: r.ok, code: r.code, ms: r.ms, bytes: r.bytes, journal: r.journal ?? null, token: o.token?.id ?? null, note: r.note ?? null, ...(r.items ? { items: r.items } : {}) });
       },
     });
   }

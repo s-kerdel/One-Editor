@@ -374,6 +374,9 @@ function main() {
   registerWebServerIpc(ipcMain, webServer, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   registerUpdateCheckIpc(ipcMain, updates, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
   registerMcpIpc(ipcMain, mcp, { isTrusted: (e) => trustedSender(e as Electron.IpcMainInvokeEvent) });
+  // "MCP active" (status bar): running stdio servers' live files. Off the startup path: a few seconds later;
+  // the first scan also removes files that crashed servers left behind.
+  setTimeout(() => mcp.watchSessions(), 3000).unref();
   // A file / folder dropped on the window: the preload read its path from the File object (page script
   // cannot fabricate one) and reports it here, so the open that follows passes the gate.
   ipcMain.on('app:vouchPath', (e, abs: unknown) => void (trustedSender(e) && gate.vouch(abs)));

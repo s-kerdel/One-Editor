@@ -1,6 +1,7 @@
-// Back / forward buttons at the start of the tab strip (nav/buttons.tsx, browser mode): where they sit in
-// each layout, greyed out at the ends and live, clicks step (the editor keeps focus), right-click / long
-// press / keyboard list the recent places, Esc closes the list, a row jumps there, Settings hides them.
+// Back / forward buttons at the start of the status bar (nav/buttons.tsx, browser mode): where they sit in
+// each layout (← → │ folder · crumbs; the tab strip has none), greyed out at the ends and live, clicks step
+// (the editor keeps focus), right-click / long press / keyboard list the recent places upwards, Esc closes
+// the list, a row jumps there, Settings hides them (and their rule).
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Page } from '@playwright/test';
@@ -43,14 +44,17 @@ async function open(page: Page, file: string, line = 0) {
   await page.waitForTimeout(SETTLE);
 }
 
-const back = (page: Page) => page.locator('.se-topline .se-navbtns [aria-label="Go back"]');
-const fwd = (page: Page) => page.locator('.se-topline .se-navbtns [aria-label="Go forward"]');
+const back = (page: Page) => page.locator('.se-status .se-navbtns [aria-label="Go back"]');
+const fwd = (page: Page) => page.locator('.se-status .se-navbtns [aria-label="Go forward"]');
 const off = async (page: Page) => [await back(page).getAttribute('aria-disabled'), await fwd(page).getAttribute('aria-disabled')].map((v) => v === 'true');
 const menu = (page: Page) => page.locator('.se-menu[role="menu"]');
 const rows = (page: Page) => menu(page).locator('.se-menu-item').evaluateAll((els) => els.map((e) => `${e.querySelector('.se-menu-label')?.textContent} | ${e.querySelector('.se-menu-keys')?.textContent ?? ''}`));
 const editorFocused = (page: Page) => page.evaluate(() => !!document.activeElement?.closest('.cm-editor'));
 /** Classes of .se-topline's children, left to right (skipping nothing: the strip's order is the point). */
 const topline = (page: Page) => page.locator('.se-topline').evaluate((el) => [...el.children].map((c) => c.classList[0]));
+/** The status bar's first two children: the arrows' group, then the folder button. */
+const statusStart = (page: Page) => page.locator('.se-status').evaluate((el) => [...el.children].slice(0, 2).map((c) => c.className));
+const FOLDER = 'se-status-item se-status-btn se-status-ws';
 const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate((e) => e.getBoundingClientRect().toJSON() as DOMRect);
 
 test('greyed out at the ends and live; clicks step back / forward and leave the focus in the editor', async ({ page, ws }) => {
@@ -103,9 +107,12 @@ test('right-click lists the recent places (file + heading / line), Esc closes it
   await back(page).click({ button: 'right' });
   await expect(menu(page)).toBeVisible();
   await expect.poll(() => rows(page)).toEqual(['beta.md | Beta', 'gamma.ts | line 8', 'alpha.md | Setup']);
-  // The list hangs under the button, inside the window.
+  // The list opens upwards from the status bar: it ends right over the button, wholly inside the window.
   const [btn, m] = [await rect(page, '.se-navbtns [aria-label="Go back"]'), await rect(page, '.se-menu')];
-  expect(m.y).toBeGreaterThanOrEqual(btn.bottom);
+  expect(m.bottom).toBeLessThanOrEqual(btn.y);
+  expect(btn.y - m.bottom).toBeLessThan(8);
+  expect(m.y).toBeGreaterThanOrEqual(0);
+  expect(m.right).toBeLessThanOrEqual(page.viewportSize()!.width);
   expect(Math.abs(m.x - btn.x)).toBeLessThan(2);
   await page.keyboard.press('Escape');
   await expect(menu(page)).toHaveCount(0);
@@ -170,65 +177,105 @@ test('long press opens the list without stepping; the keyboard reaches it (Shift
   await expect.poll(() => where(page)).toBe(`${B}:2`);
 });
 
-test('placement: start of the strip in shelf (sidebar shown / hidden), classic and zen; about 50 px; integrated frame regions', async ({ page, ws }) => {
+test('placement: status bar start (← → │ folder) in shelf, classic and zen with the status bar; the strip has none; both themes', async ({ page, ws }) => {
   await boot(page, ws);
   await open(page, A, 0);
   await open(page, B, 0);
-  const checkCell = async () => {
-    const nav = await rect(page, '.se-navbtns');
-    const tab = await rect(page, '.se-tab');
-    const bar = await rect(page, '.se-tabbar');
-    expect(nav.width).toBeGreaterThanOrEqual(44);
-    expect(nav.width).toBeLessThanOrEqual(60);
-    expect(nav.height).toBe(bar.height); // a cell of the strip, ruled like a tab
-    expect(nav.right).toBeLessThanOrEqual(tab.x + 0.5);
-    return nav;
+  const setSettings = (patch: Record<string, unknown>) =>
+    page.evaluate((p) => {
+      const s = (window as any).__secEdit;
+      s.settings.value = { ...s.settings.value, ...p };
+    }, patch);
+  /** Arrows first in the status bar, sized like its items, then the rule, then the folder button. */
+  const checkStatus = async (label: string) => {
+    expect(await statusStart(page), label).toEqual(['se-navbtns', FOLDER]);
+    const g = await page.locator('.se-status').evaluate((bar) => {
+      const r = (e: Element) => e.getBoundingClientRect().toJSON() as DOMRect;
+      const nav = bar.querySelector('.se-navbtns')!;
+      const [b, f] = [...nav.querySelectorAll('button')];
+      const rule = getComputedStyle(nav, '::after');
+      return {
+        bar: r(bar),
+        nav: r(nav),
+        b: r(b),
+        f: r(f),
+        folder: r(bar.querySelector('.se-status-ws')!),
+        icon: r(b.querySelector('svg')!),
+        rule: [rule.content, rule.width, rule.height, rule.backgroundColor],
+        line: getComputedStyle(bar).borderTopColor,
+        color: [getComputedStyle(f).color, getComputedStyle(bar).backgroundColor],
+      };
+    });
+    // ← then → then the rule (the group's ::after, right of → and left of the folder button).
+    expect(g.b.x - g.bar.x, label).toBeLessThanOrEqual(8);
+    expect(g.f.x, label).toBeGreaterThanOrEqual(g.b.right);
+    expect(g.nav.right - g.f.right, label).toBeGreaterThanOrEqual(5); // margin + 1 px rule
+    expect(g.folder.x, label).toBeGreaterThanOrEqual(g.nav.right);
+    expect(g.rule, label).toEqual(['""', '1px', '14px', g.line]);
+    // The status bar's item height, a comfortable width; inside the bar; icon centred.
+    for (const x of [g.b, g.f]) {
+      expect(x.height, label).toBe(g.folder.height);
+      expect(x.width, label).toBeGreaterThanOrEqual(22);
+      expect(x.width, label).toBeLessThanOrEqual(28);
+      expect(x.y, label).toBeGreaterThanOrEqual(g.bar.y);
+      expect(x.bottom, label).toBeLessThanOrEqual(g.bar.bottom);
+    }
+    expect(Math.abs(g.icon.x + g.icon.width / 2 - (g.b.x + g.b.width / 2)), label).toBeLessThanOrEqual(0.5);
+    expect(g.color[0], label).not.toBe(g.color[1]);
   };
 
-  // Shelf, sidebar shown: the very first thing in the strip.
-  expect(await topline(page)).toEqual(['se-navbtns', 'se-tabbar']);
-  await checkCell();
-  // Shelf, sidebar hidden: [show sidebar] ◀ ▶ │ tabs — one cell with the reveal button.
+  // Shelf, sidebar shown / hidden: the strip is just the tabs (the reveal button keeps its own cell).
+  expect(await topline(page)).toEqual(['se-tabbar']);
+  await checkStatus('shelf');
   await page.keyboard.press('Control+Shift+b');
-  expect(await topline(page)).toEqual(['se-shelf-reveal', 'se-navbtns', 'se-tabbar']);
-  const nav = await checkCell();
-  const reveal = await rect(page, '.se-shelf-reveal');
-  expect(Math.abs(reveal.right - nav.x)).toBeLessThan(0.5);
-  expect(await page.locator('.se-shelf-reveal').evaluate((e) => getComputedStyle(e).borderRightWidth)).toBe('0px');
+  expect(await topline(page)).toEqual(['se-shelf-reveal', 'se-tabbar']);
+  const [reveal, tabs] = [await rect(page, '.se-shelf-reveal'), await rect(page, '.se-tabbar')];
+  expect(Math.abs(reveal.right - tabs.x)).toBeLessThan(0.5);
+  expect(await page.locator('.se-shelf-reveal').evaluate((e) => getComputedStyle(e).borderRightWidth)).toBe('1px');
+  await checkStatus('shelf, sidebar hidden');
   await page.keyboard.press('Control+Shift+b');
 
-  // Integrated frame (forced in the browser): the buttons are no-drag, their gaps drag like the strip, no mismatch.
+  // Light theme: the same, the rule in the light border colour.
+  await setSettings({ theme: 'light' });
+  await expect(page.locator('.se-root.theme-light')).toBeVisible();
+  await checkStatus('shelf, light');
+  await setSettings({ theme: 'dark' });
+
+  // Integrated frame (forced in the browser): the status bar is not a drag area; no region mismatch.
   await forceIntegratedFrame(page);
-  for (const sel of ['.se-navbtns [aria-label="Go back"]', '.se-navbtns [aria-label="Go forward"]']) {
-    expect(await page.locator(sel).evaluate((e) => (getComputedStyle(e) as any).webkitAppRegion), sel).toBe('no-drag');
-  }
   const r = await appRegionReport(page);
   expect(r.mismatches).toEqual([]);
   expect(r.leaks).toEqual([]);
 
-  // Classic: the same spot (no reveal button in classic).
+  // Classic: the full-width status bar, same start.
   await page.keyboard.press('Control+,');
   await page.locator('[data-setting="sidebarStyle"] [data-value="classic"]').click();
   await page.keyboard.press('Escape');
   await expect(page.locator('.se-root.ui-classic .se-activity')).toBeVisible();
-  expect(await topline(page)).toEqual(['se-navbtns', 'se-tabbar']);
-  await checkCell();
+  await expect(page.locator('.se-root.ui-classic > .se-status .se-navbtns')).toBeVisible();
+  expect(await topline(page)).toEqual(['se-tabbar']);
+  await checkStatus('classic');
   await page.keyboard.press('Control+Shift+b');
-  expect(await topline(page)).toEqual(['se-navbtns', 'se-tabbar']);
+  await checkStatus('classic, sidebar hidden');
   await page.keyboard.press('Control+Shift+b');
+  await page.keyboard.press('Control+,');
+  await page.locator('[data-setting="sidebarStyle"] [data-value="shelf"]').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.se-root.ui-shelf')).toBeVisible();
 
-  // Zen (windowed): tabs stay, so do the buttons, at the strip's start; the leave-zen button stays at its end.
-  await page.evaluate(() => {
-    const s = (window as any).__secEdit;
-    s.settings.value = { ...s.settings.value, 'zen.fullScreen': false };
-  });
+  // Zen (windowed): no status bar, so no arrows — the keys still step. With zen.keepStatusBar they come back.
+  await setSettings({ 'zen.fullScreen': false });
   await page.keyboard.press('Control+Alt+z');
   await expect(page.locator('.se-root.se-zen')).toBeVisible();
-  expect(await topline(page)).toEqual(['se-navbtns', 'se-tabbar']);
-  await checkCell();
-  await expect(page.locator('.se-tabbar-tools .se-zen-btn')).toBeVisible();
-  await back(page).click();
+  await expect(page.locator('.se-status')).toHaveCount(0);
+  expect(await topline(page)).toEqual(['se-tabbar']);
+  await page.keyboard.press('Alt+ArrowLeft');
   await expect.poll(() => where(page)).toBe(`${A}:0`);
+  await setSettings({ 'zen.keepStatusBar': true });
+  await checkStatus('zen + status bar');
+  await expect(page.locator('.se-tabbar-tools .se-zen-btn')).toBeVisible();
+  await fwd(page).click();
+  await expect.poll(() => where(page)).toBe(`${B}:0`);
   await page.keyboard.press('Control+Alt+z');
   await expect(page.locator('.se-root.se-zen')).toHaveCount(0);
 });
@@ -244,6 +291,8 @@ test('Settings → Appearance → "Back and forward buttons" hides them; the key
   await expect(sw).toHaveAttribute('aria-checked', 'false');
   await page.keyboard.press('Escape');
   await expect(page.locator('.se-navbtns')).toHaveCount(0);
+  // The rule goes with them: the folder button starts the status bar.
+  expect((await statusStart(page))[0]).toBe(FOLDER);
   expect(await topline(page)).toEqual(['se-tabbar']);
   await page.keyboard.press('Alt+ArrowLeft');
   await expect.poll(() => where(page)).toBe(`${A}:0`);

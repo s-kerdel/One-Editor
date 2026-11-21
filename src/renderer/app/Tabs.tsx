@@ -9,6 +9,7 @@ import { FileIcon, Icon } from './icons';
 import { closeTabs, persistSession } from './documents';
 import { prettyKey, runCommand } from './commands';
 import { lazyComponent } from './lazy';
+import { popups } from './fileops';
 
 const TAB_MIME = 'application/x-sec-edit-tab';
 const TREE_MIME = 'application/x-sec-edit-paths';
@@ -17,7 +18,7 @@ export function closeAll() {
   return closeTabs(app.tabs.value.map((t) => t.path));
 }
 
-const tabMenu = (path: string) => import('./Popups').then((m) => m.tabMenu(path));
+const tabMenu = (path: string) => popups().then((m) => m.tabMenu(path));
 
 /** Labels for tabs, adding the folder when two open files share a name. */
 function labels(paths: string[]): Map<string, string | null> {

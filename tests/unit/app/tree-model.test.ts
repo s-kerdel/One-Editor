@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { TreeNode } from '../../../src/shared/api';
-import { findNode, flattenTree, moveNode, removeNode, insertNode, filesUnder, ancestors } from '../../../src/renderer/app/tree-model';
+import { findNode, flattenTree, removeNode, insertNode, filesUnder, ancestors } from '../../../src/renderer/app/tree-model';
+import { moveNode } from '../../../src/renderer/app/file-rules';
 import { applyFsEvents } from '../../../src/renderer/app/disk-sync';
 
 const tree = (): TreeNode => ({

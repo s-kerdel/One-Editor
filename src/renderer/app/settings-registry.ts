@@ -283,13 +283,13 @@ const defs: Draft[] = [
       ],
     },
   },
-  // Go back / forward buttons at the start of the tab strip (nav/buttons.tsx; read by app/Layout.tsx).
+  // Go back / forward buttons at the start of the status bar (nav/buttons.tsx; read by app/StatusBar.tsx).
   {
     key: 'nav.buttons',
     section: 'appearance',
     label: 'Back and forward buttons',
-    description: 'Arrows at the start of the tab strip. Off: the shortcuts and mouse side buttons still work.',
-    keywords: ['go back', 'go forward', 'navigation', 'history', 'arrows', 'tab strip', 'recent places'],
+    description: 'Arrows at the left of the status bar. Off: the shortcuts and mouse side buttons still work.',
+    keywords: ['go back', 'go forward', 'navigation', 'history', 'arrows', 'status bar', 'recent places'],
     default: true,
     control: { type: 'toggle' },
   },

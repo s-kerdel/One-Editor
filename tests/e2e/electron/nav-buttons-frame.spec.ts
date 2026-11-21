@@ -1,7 +1,8 @@
 // Back / forward buttons (nav/buttons.tsx) with the integrated window frame (desktop default: the tab strip
-// is the title bar). The buttons sit at the strip's start, far from the window controls, and are no-drag
-// as a whole cell (its padding would otherwise cover the sidebar sash's edge); a real press through the
-// X server's hit-testing reaches them (drag regions swallow presses), and the strip's empty end still drags.
+// is the title bar). The buttons sit at the status bar's far left (← → │ folder · crumbs), not in the strip:
+// the strip is just the tabs again (the show-sidebar cell first while the shelf is hidden). A real press
+// through the X server's hit-testing reaches them, the right-click list opens upwards inside the window,
+// and the strip's empty end still drags.
 import { execSync } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -29,9 +30,12 @@ async function prepare(el: ElectronFixture, settings: Record<string, unknown>) {
 const region = (page: Page, sel: string) => page.locator(sel).first().evaluate((el) => (getComputedStyle(el) as any).webkitAppRegion as string);
 const box = (page: Page, sel: string) => page.locator(sel).first().evaluate((el) => el.getBoundingClientRect().toJSON() as DOMRect);
 const active = (page: Page) => page.evaluate(() => (window as any).__secEdit.activePath.value as string);
+const strip = (page: Page) => page.locator('.se-topline').evaluate((e) => [...e.children].map((c) => c.classList[0]));
+const BACK = '.se-status .se-navbtns [aria-label="Go back"]';
+const FWD = '.se-status .se-navbtns [aria-label="Go forward"]';
 
 for (const style of ['shelf', 'classic'] as const) {
-  test(`${style}: back / forward are clickable no-drag cells at the strip's start, clear of the window controls`, async ({ el }) => {
+  test(`${style}: back / forward sit at the status bar's left, before a rule; the strip has none; real clicks and an upward list`, async ({ el }) => {
     const display = privateDisplay();
     await prepare(el, { sidebarStyle: style });
     const { page } = await el.launch([el.ws], display ? { env: { DISPLAY: display } } : {});
@@ -42,17 +46,32 @@ for (const style of ['shelf', 'classic'] as const) {
       await expect.poll(() => active(page)).toBe(f);
       await page.waitForTimeout(450); // not one coalesced navigation
     }
-    await expect(page.locator('.se-navbtns [aria-label="Go back"]')).toHaveAttribute('aria-disabled', 'false');
+    await expect(page.locator(BACK)).toHaveAttribute('aria-disabled', 'false');
 
-    // The strip still drags; the whole cell and both buttons do not.
+    // Far left of the status bar (classic: the window-wide one), then the rule, then the folder button.
+    if (style === 'classic') await expect(page.locator('.se-root > .se-status .se-navbtns')).toBeVisible();
+    const g = await page.locator('.se-status').evaluate((bar) => {
+      const r = (e: Element) => e.getBoundingClientRect().toJSON() as DOMRect;
+      const nav = bar.querySelector('.se-navbtns')!;
+      return {
+        first: bar.firstElementChild!.className,
+        bar: r(bar),
+        nav: r(nav),
+        f: r(nav.querySelector('[aria-label="Go forward"]')!),
+        folder: r(bar.querySelector('.se-status-ws')!),
+        rule: getComputedStyle(nav, '::after').width,
+        winH: innerHeight,
+      };
+    });
+    expect(g.first).toBe('se-navbtns');
+    expect(g.nav.x - g.bar.x).toBeLessThanOrEqual(8);
+    expect(g.rule).toBe('1px');
+    expect(g.nav.right - g.f.right).toBeGreaterThanOrEqual(5);
+    expect(g.folder.x).toBeGreaterThanOrEqual(g.nav.right);
+    expect(g.bar.bottom).toBeLessThanOrEqual(g.winH);
+    // The strip is the tabs (and the show-sidebar cell): nothing reserved for arrows. It still drags.
+    expect(await strip(page)).toEqual(['se-tabbar']);
     expect(await region(page, '.se-topline')).toBe('drag');
-    for (const sel of ['.se-navbtns', '.se-navbtns [aria-label="Go back"]', '.se-navbtns [aria-label="Go forward"]']) expect(await region(page, sel), sel).toBe('no-drag');
-    // At the strip's start, nowhere near the controls (they start at the WCO rect's right end).
-    const wco = await page.evaluate(() => (navigator as any).windowControlsOverlay.getTitlebarAreaRect().toJSON() as DOMRect);
-    const nav = await box(page, '.se-navbtns');
-    const card = await box(page, '.se-content');
-    expect(nav.x - card.x).toBeLessThanOrEqual(1);
-    expect(nav.right).toBeLessThan(wco.x + wco.width - 200);
     // Every point agrees with what is shown — sidebar shown (its sash overlaps the card's edge) and hidden.
     for (const sidebar of [true, false]) {
       if (!sidebar) await page.keyboard.press('Control+Shift+b');
@@ -62,7 +81,8 @@ for (const style of ['shelf', 'classic'] as const) {
       expect(r.mismatches, `sidebar ${sidebar}`).toEqual([]);
       expect(r.leaks, `sidebar ${sidebar}`).toEqual([]);
     }
-    if (style === 'shelf') expect(await page.locator('.se-topline').evaluate((e) => [...e.children].map((c) => c.classList[0]))).toEqual(['se-shelf-reveal', 'se-navbtns', 'se-tabbar']);
+    expect(await strip(page)).toEqual(style === 'shelf' ? ['se-shelf-reveal', 'se-tabbar'] : ['se-tabbar']);
+    if (style === 'shelf') expect(Math.abs((await box(page, '.se-shelf-reveal')).right - (await box(page, '.se-tabbar')).x)).toBeLessThan(0.5);
     await page.keyboard.press('Control+Shift+b');
 
     // Real pointer input: presses on the buttons reach the page and step; the strip's empty end drags.
@@ -78,27 +98,22 @@ for (const style of ['shelf', 'classic'] as const) {
         const b = await box(page, sel);
         return [b.x + b.width / 2, b.y + b.height / 2] as const;
       };
-      await x!.click(...(await at('.se-navbtns [aria-label="Go back"]')));
+      await x!.click(...(await at(BACK)));
       await expect.poll(() => active(page)).toBe('README.md');
       expect(await presses()).toEqual(['nav']);
-      await expect(page.locator('.se-navbtns [aria-label="Go forward"]')).toHaveAttribute('aria-disabled', 'false');
-      await x!.click(...(await at('.se-navbtns [aria-label="Go forward"]')));
+      await expect(page.locator(FWD)).toHaveAttribute('aria-disabled', 'false');
+      await x!.click(...(await at(FWD)));
       await expect.poll(() => active(page)).toBe('notes/kubernetes.md');
       expect(await presses()).toEqual(['nav']);
-      // The cell's padding is ours too, not a window move: right of the forward button, and at its left
-      // edge (where the sidebar's resize sash overlaps the card and takes the press).
-      const cell = await box(page, '.se-navbtns');
-      const f = await box(page, '.se-navbtns [aria-label="Go forward"]');
-      await x!.click(f.right + 1, cell.y + cell.height / 2);
-      expect(await presses()).toEqual(['nav']);
-      await x!.click(cell.x + 1.5, cell.y + cell.height / 2);
-      expect(await presses()).toHaveLength(1);
-      // Right-click (X button 3) lists the places; the menu over the strip takes its clicks.
-      const [bx, by] = await at('.se-navbtns [aria-label="Go back"]');
+      // Right-click (X button 3) lists the places upwards: over the button, inside the window.
+      const [bx, by] = await at(BACK);
       await x!.move(bx, by);
       await x!.down(3);
       await x!.up(3);
       await expect(page.locator('.se-menu[role="menu"]')).toBeVisible();
+      const [btn, m] = [await box(page, BACK), await box(page, '.se-menu')];
+      expect(m.bottom).toBeLessThanOrEqual(btn.y);
+      expect(m.y).toBeGreaterThanOrEqual(0);
       await x!.click(...(await at('.se-menu .se-menu-item')));
       await expect.poll(() => active(page)).toBe('README.md');
       await presses();

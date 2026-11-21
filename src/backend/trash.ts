@@ -11,22 +11,23 @@ const run = (cmd: string, args: string[], env?: NodeJS.ProcessEnv, timeout = 200
     execFile(cmd, args, { env: { ...process.env, ...env }, windowsHide: true, timeout }, (err) => (err ? reject(err) : resolve())),
   );
 
-/** How long a trash call may take. A whole folder (noPermanent) can be big, and Windows may be waiting on its own
- *  "delete permanently?" dialog: 20 s would kill it mid-way and leave it partly deleted. Bounded, never forever. */
+/** How long a trash call may take. A whole folder (noPermanent) can be big: 20 s would kill it mid-way and leave
+ *  it partly deleted. Bounded, never forever. */
 export const trashTimeout = (o: TrashOptions = {}) => (o.noPermanent ? 15 * 60_000 : 20_000);
 
 export interface TrashOptions {
-  /** A whole folder with no undo copy (MCP folder delete): it must never end up deleted for good. */
+  /** A whole folder with no undo copy (MCP folder delete, after the user's OK). Windows: no prompt either way;
+   *  with the bin off or too small for it, Windows deletes it for good (the user's choice: the MCP confirmation
+   *  says so). macOS: refused off the home volume (Finder would delete at once). Linux: the XDG trash only. */
   noPermanent?: boolean;
 }
 
-// Constant: the path (and the dialog mode) come in through the environment, never into the text.
+// Constant: the path comes in through the environment, never into the text.
 // Only fixed local drives have a Recycle Bin. Elsewhere (UNC, \\wsl$, USB) SendToRecycleBin with
-// OnlyErrorDialogs (= "yes to all") deletes permanently without asking, so refuse → ETRASH → the UI asks.
-// noPermanent: AllDialogs, so Windows itself asks before deleting for good (bin off or too small for it).
+// OnlyErrorDialogs (= "yes to all") deletes permanently without asking, so refuse (exit 3) → ETRASH.
 const WIN_TRASH_SCRIPT =
   'Add-Type -AssemblyName Microsoft.VisualBasic; $p = $env:SEC_EDIT_TRASH_PATH; ' +
-  "$ui = 'OnlyErrorDialogs'; if ($env:SEC_EDIT_TRASH_UI -eq 'AllDialogs') { $ui = 'AllDialogs' }; " +
+  "$ui = 'OnlyErrorDialogs'; " +
   "$r = [System.IO.Path]::GetPathRoot($p); if ($r.StartsWith('\\') -or ([System.IO.DriveInfo]::new($r)).DriveType -ne 'Fixed') { exit 3 }; " +
   // A junction / symlink swapped in after the caller's checks (process start takes a moment): never follow it.
   "if ((Get-Item -LiteralPath $p -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) { exit 4 }; " +
@@ -35,7 +36,8 @@ const WIN_TRASH_SCRIPT =
 
 /** The Windows call (pure, for tests): a constant script; values only in the environment. */
 export function windowsTrashCall(abs: string, o: TrashOptions = {}): { file: string; args: string[]; env: Record<string, string> } {
-  return { file: winSystemExe('powershell.exe'), args: ['-NoProfile', '-NonInteractive', '-Command', WIN_TRASH_SCRIPT], env: { SEC_EDIT_TRASH_PATH: abs, ...(o.noPermanent ? { SEC_EDIT_TRASH_UI: 'AllDialogs' } : {}) } };
+  void o; // the same call for files and folders (see TrashOptions)
+  return { file: winSystemExe('powershell.exe'), args: ['-NoProfile', '-NonInteractive', '-Command', WIN_TRASH_SCRIPT], env: { SEC_EDIT_TRASH_PATH: abs } };
 }
 
 export async function platformTrash(abs: string, o: TrashOptions = {}): Promise<void> {

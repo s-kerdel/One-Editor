@@ -223,9 +223,6 @@ html[data-theme='light'] .se-ws-avatar { color: hsl(var(--ws-hue) 55% 42%); }@me
 .se-shelf-reveal { flex: none; display: grid; place-items: center; width: 40px; height: var(--tab-h); padding: 0; border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); background: transparent; color: var(--text-faint); transition: background 0.1s, color 0.1s; }
 .se-shelf-reveal:hover { background: var(--bg-hover); color: var(--text); }
 .se-shelf-reveal:active { background: var(--bg-active); }
-/* Go back / forward (nav/buttons.tsx): one cell at the strip's start, ruled like a tab; right after "show sidebar" it joins that cell. */
-.se-navbtns { flex: none; display: flex; align-items: center; padding: 0 3px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.se-shelf-reveal:has(+ .se-navbtns) { width: 34px; border-right: 0; }
 
 .se-panel-head { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 8px 0 12px; flex: none; }
 .se-panel-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -356,9 +353,6 @@ html[data-folders='one'] .se-root .se-ficon-folder { color: var(--folder-color, 
 .se-width-btn[data-width='wide'], .se-width-btn[data-width='full'] { color: var(--accent); }
 .se-tools-sep { width: 1px; height: 16px; margin: 0 2px; background: var(--border); }
 .se-ov-toggle.on { color: var(--accent); }
-.se-navbtn { width: 23px; }
-.se-navbtn + .se-navbtn .se-icon { transform: scaleX(-1); } /* forward: the back arrow, mirrored (one startup glyph) */
-.se-navbtn[aria-disabled='true'] { opacity: 0.4; background: none; color: var(--text-faint); cursor: default; }
 .se-modes { display: flex; gap: 2px; padding: 2px; border-radius: var(--radius); background: var(--bg-hover); }
 .se-mode { width: 28px; height: 24px; display: grid; place-items: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); transition: background 0.1s, color 0.1s; }
 .se-mode:hover { color: var(--text); }
@@ -389,12 +383,21 @@ html[data-folders='one'] .se-root .se-ficon-folder { color: var(--folder-color, 
 .se-crumb { border: 0; background: transparent; font: inherit; color: var(--text-muted); padding: 1px 4px; border-radius: var(--radius-sm); cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }
 .se-crumb:hover { background: var(--bg-hover); color: var(--text); }
 .se-crumb.file { color: var(--text); }
-.se-status-item { display: inline-flex; align-items: center; gap: 5px; height: calc(var(--status-h) - 4px); padding: 0 7px; border-radius: var(--radius-sm); }
-.se-status-btn { border: 0; background: transparent; color: inherit; font-size: 12px; }
-.se-status-btn:hover, .se-status-btn[aria-expanded='true'] { background: var(--bg-hover); color: var(--text); }
+.se-status-item, .se-navbtn { display: inline-flex; align-items: center; gap: 5px; height: calc(var(--status-h) - 4px); padding: 0 7px; border-radius: var(--radius-sm); }
+.se-status-btn, .se-navbtn { border: 0; background: transparent; color: inherit; font-size: 12px; }
+.se-status-btn:hover, .se-status-btn[aria-expanded='true'], .se-navbtn:hover { background: var(--bg-hover); color: var(--text); }
 .se-status-ws { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
 .se-status-spacer { flex: 1; }
 .se-status-sel { color: var(--text-faint); }
+/* Go back / forward (nav/buttons.tsx): the status bar's start, status items (rules above), then a rule: ← → │ folder · crumbs. */
+.se-navbtns { flex: none; display: flex; align-items: center; gap: 2px; }
+.se-navbtns::after { content: ''; width: 1px; height: 14px; margin-left: 2px; background: var(--border); } /* 9 px clear each side */
+.se-navbtn { width: 24px; padding: 0; justify-content: center; }
+.se-navbtn + .se-navbtn .se-icon { transform: scaleX(-1); } /* forward: the back arrow, mirrored (one startup glyph) */
+.se-navbtn[aria-disabled='true'] { opacity: 0.4; background: none; color: var(--text-faint); cursor: default; }
+/* The far-right corner (StatusBar's StatusCorner): │ MCP · web server · shield. Rendered only with something in it. */
+.se-status-corner { flex: none; display: flex; align-items: center; gap: 2px; }
+.se-status-corner::before { content: ''; width: 1px; height: 14px; background: var(--border); } /* 9 px clear each side */
 .se-save-state.ok { color: var(--text-faint); }
 .se-save-state.dirty { color: var(--text-muted); }
 .se-save-state.warn { color: var(--warning); }

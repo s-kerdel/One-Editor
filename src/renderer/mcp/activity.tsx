@@ -71,7 +71,8 @@ function CallRow({ r, now, revert }: { r: McpActivity; now: number; revert: (r: 
     r.path && `File ${r.path}`,
     `Answer ${size(r.bytes)}`,
     new Date(r.t).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' }),
-    r.journal && !r.reverted && 'Undo copy kept',
+    r.items && `${r.items} items in one call`,
+    r.journal && !r.reverted && (r.items ? 'Undo copies kept: one Revert for all' : 'Undo copy kept'),
     r.note,
   ].filter(Boolean);
   return (
@@ -82,7 +83,11 @@ function CallRow({ r, now, revert }: { r: McpActivity; now: number; revert: (r: 
       <button class="se-mcp-call-what" aria-expanded={open} data-testid="mcp-call-open" onClick={() => setOpen(!open)}>
         <span class="se-mcp-time">{clock(r.t, now)}</span>
         <span class="se-mcp-app">{r.client}</span>
-        <span class="se-mcp-tool">{r.tool}</span>
+        {/* A batch (paths, replace_in_files) is one row; its Revert undoes the whole group. */}
+        <span class="se-mcp-tool" data-testid="mcp-call-tool">
+          {r.tool}
+          {r.items ? ` ×${r.items}` : ''}
+        </span>
         {/* The error sits next to the path, never cut: the path gives way first. */}
         <span class="se-mcp-target">
           <span class="se-mcp-where">{where}</span>

@@ -1,5 +1,5 @@
-// Go back / Go forward — the startup part only: two key bindings, the mouse side buttons, the tab
-// strip buttons' state and a note of which files were shown before the recorder (./impl, a lazy chunk)
+// Go back / Go forward — the startup part only: two key bindings, the mouse side buttons, the status
+// bar buttons' state and a note of which files were shown before the recorder (./impl, a lazy chunk)
 // took over. Keep this tiny.
 import { signal } from '@preact/signals';
 import { navFromMouseButton, type NavDir, type NavSource } from '@shared/nav';

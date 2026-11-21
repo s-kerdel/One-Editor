@@ -36,7 +36,7 @@ const PATHS: Record<string, string> = {
   // zen mode toggle (shelf foot, classic icon bar, zen strips): four corners = the screen
   zen: 'M3 8V3h5|M16 3h5v5|M21 16v5h-5|M8 21H3v-5',
   bookmark: 'm19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z', // Bookmarks panel (pill / icon bar)
-  // go back (start of the tab strip, nav/buttons.tsx; forward draws it mirrored, app.css)
+  // go back (start of the status bar, nav/buttons.tsx; forward draws it mirrored, app.css)
   arrowLeft: 'M19 12H5|m12 19-7-7 7-7',
 };
 

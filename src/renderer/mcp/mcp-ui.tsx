@@ -3,7 +3,7 @@
 // shows the native dialogs (turn on, share a folder, allow changes, code files, undo off, tokens). The page
 // never names a folder path and never sees an access token: "Copy setup" happens in main.
 import { signal } from '@preact/signals';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { app } from '../app/app';
 import { Icon } from '../app/icons';
 import '../app/icon-pack'; // refresh, copy
@@ -40,6 +40,8 @@ async function call<T>(p: Promise<unknown> | undefined): Promise<T> {
 const cancelled = (err: unknown) => (err as { code?: string })?.code === 'ECANCELED';
 
 const status = signal<McpStatus>(NO_MCP_STATUS);
+/** main's first answer is in: the rows above Recent activity have their real height. */
+const loaded = signal(false);
 const activity = signal<McpActivity[]>([]);
 /** The client tab: the setup main copies (with a token) is for this app. */
 const client = signal<SetupSnippet['id']>('lmstudio');
@@ -50,7 +52,7 @@ function install() {
   if (!b || installed) return;
   installed = true;
   b.onChange((s) => (status.value = s as McpStatus));
-  void call<McpStatus>(b.status()).then((s) => (status.value = s), () => {});
+  void call<McpStatus>(b.status()).then((s) => (status.value = s), () => {}).finally(() => (loaded.value = true));
   (globalThis as { __secEditMcp?: unknown }).__secEditMcp = { status: () => status.value }; // E2E
 }
 
@@ -256,9 +258,21 @@ async function revert(r: McpActivity) {
   await refreshActivity();
 }
 
+let reveal = false;
+/** The status bar's MCP icon: the next Settings open lands on Recent activity. */
+export const revealActivity = () => void (reveal = true);
+
 function Activity() {
+  const box = useRef<HTMLDivElement>(null);
+  const ready = loaded.value;
+  useEffect(() => {
+    if (!reveal || !ready) return;
+    reveal = false;
+    // A frame later: after Settings' own scroll to the section (a parent's effect runs after ours).
+    requestAnimationFrame(() => box.current?.scrollIntoView({ block: 'start' }));
+  }, [ready]);
   return (
-    <div class="se-mcp-activity">
+    <div ref={box} class="se-mcp-activity" data-testid="mcp-recent">
       <div class="se-mcp-row">
         <h4 class="se-set-group">Recent activity</h4>
         <button class="se-btn small" data-testid="mcp-activity-refresh" onClick={() => void refreshActivity()}>

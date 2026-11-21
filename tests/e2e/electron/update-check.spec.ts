@@ -157,6 +157,8 @@ test('off by default: no automatic request, no shield; switch on → check → s
     await page.keyboard.press('Escape');
     await expect(shield(page)).toHaveText('3');
     await expect(shield(page)).toHaveAttribute('data-level', 'high');
+    // The very end of the status bar's corner (after MCP and the web server, when those are on).
+    await expect(page.locator('.se-status > .se-status-corner:last-child > [data-testid="updates-shield"]:last-child')).toBeVisible();
     await shield(page).click();
     const dialog = page.locator('[data-testid="updates-findings"]');
     const rows = dialog.locator('[data-testid="updates-row"]');

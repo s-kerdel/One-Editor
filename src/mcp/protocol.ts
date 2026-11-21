@@ -32,14 +32,17 @@ export const ERR = {
   unsupportedVersion: -32022,
 } as const;
 
-/** Flat object schemas only (local models and OpenAI tooling handle these best). */
+/** Flat object schemas only (local models and OpenAI tooling handle these best); arrays of strings at most. */
 export interface PropSchema {
-  type: 'string' | 'integer' | 'boolean';
+  type: 'string' | 'integer' | 'boolean' | 'array';
   description: string;
   enum?: readonly string[];
   minimum?: number;
   maximum?: number;
   maxLength?: number;
+  /** Arrays: of strings, at most maxItems (each item at most items.maxLength, enforced only). */
+  items?: { type: 'string'; maxLength?: number };
+  maxItems?: number;
 }
 export interface InputSchema {
   type: 'object';
@@ -58,7 +61,7 @@ export interface ToolResult {
   /** Undo history group of a write (activity log → Revert). Never sent to the client. */
   journal?: string;
   /** How the activity row shows this call (e.g. `delete (folder)`, "restore from the Recycle Bin"). Never sent. */
-  audit?: { tool?: string; note?: string; ok?: boolean; code?: string };
+  audit?: { tool?: string; note?: string; ok?: boolean; code?: string; items?: number };
 }
 
 export interface ToolAnnotations {
@@ -138,6 +141,8 @@ export interface CallRecord {
   args: Record<string, unknown>;
   journal?: string;
   note?: string;
+  /** A batch: how many items it named. */
+  items?: number;
 }
 
 export interface ServerHooks {
@@ -441,7 +446,7 @@ export class McpProtocol {
     }
     const { journal, audit, ...clean } = result;
     const bytes = clean.content.reduce((n, c) => n + c.text.length, 0);
-    this.hooks.onCall?.({ tool: audit?.tool ?? name, client, ok: audit?.ok ?? !clean.isError, code: audit?.code ?? code, ms: Date.now() - t0, bytes, args, ...(journal ? { journal } : {}), ...(audit?.note ? { note: audit.note } : {}) });
+    this.hooks.onCall?.({ tool: audit?.tool ?? name, client, ok: audit?.ok ?? !clean.isError, code: audit?.code ?? code, ms: Date.now() - t0, bytes, args, ...(journal ? { journal } : {}), ...(audit?.note ? { note: audit.note } : {}), ...(audit?.items ? { items: audit.items } : {}) });
     return clean;
   }
 }
@@ -455,8 +460,8 @@ export function describeTool(t: ToolDef, version: string = LEGACY_VERSIONS[0], h
   const properties: Record<string, Omit<PropSchema, 'maxLength'>> = {};
   for (const [k, p] of Object.entries(t.inputSchema.properties)) {
     if (hidden.has(k)) continue;
-    const { maxLength: _enforcedOnly, ...shown } = p;
-    properties[k] = shown;
+    const { maxLength: _enforcedOnly, items, ...shown } = p;
+    properties[k] = items ? { ...shown, items: { type: items.type } } : shown;
   }
   const required = t.inputSchema.required?.filter((k) => !hidden.has(k));
   const inputSchema = { type: 'object', properties, ...(required?.length ? { required } : {}), additionalProperties: false };
@@ -493,6 +498,21 @@ export function checkArgs(schema: InputSchema, raw: Record<string, unknown>): Re
       if (typeof v !== 'number' || !Number.isInteger(v)) throw new ToolError('EINVAL', `"${k}" must be a whole number`);
       if (p.minimum !== undefined && v < p.minimum) throw new ToolError('EINVAL', `"${k}" must be at least ${p.minimum}`);
       if (p.maximum !== undefined && v > p.maximum) throw new ToolError('EINVAL', `"${k}" must be at most ${p.maximum}`);
+    } else if (p.type === 'array') {
+      // Lenient: one string for a list of one, or a JSON list sent as a string (small models do both).
+      if (typeof v === 'string') {
+        const t = v.trim();
+        try {
+          v = t.startsWith('[') ? JSON.parse(t) : [v];
+        } catch {
+          v = [v];
+        }
+      }
+      if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) throw new ToolError('EINVAL', `"${k}" must be a list of strings`);
+      if (!v.length) throw new ToolError('EINVAL', `"${k}" is empty`);
+      if (p.maxItems !== undefined && v.length > p.maxItems) throw new ToolError('EINVAL', `"${k}" holds at most ${p.maxItems} items`);
+      const max = p.items?.maxLength;
+      if (max !== undefined && v.some((x: string) => x.length > max)) throw new ToolError('EINVAL', `an item of "${k}" is too long (at most ${max} characters)`);
     } else if (p.type === 'boolean') {
       if (v === 'true' || v === 'false') v = v === 'true';
       if (typeof v !== 'boolean') throw new ToolError('EINVAL', `"${k}" must be true or false`);

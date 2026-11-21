@@ -129,17 +129,11 @@ test('shelf, sidebar hidden: the "show sidebar" button is a native cell of the t
     const icon = q('.se-shelf-reveal svg').getBoundingClientRect();
     const cs = getComputedStyle(q('.se-shelf-reveal'));
     const barCs = getComputedStyle(q('.se-tabbar'));
-    // Back / forward (nav/buttons.tsx, on by default) join the cell: [show sidebar] ◀ ▶ │ tabs.
-    const nav = document.querySelector('.se-navbtns');
-    const sepCs = getComputedStyle(nav ?? q('.se-shelf-reveal'));
     return {
       b: [b.left, b.top, b.bottom, b.right],
       bar: [bar.left, bar.top, bar.bottom],
-      next: (nav ?? q('.se-tabbar')).getBoundingClientRect().left,
-      cellRight: (nav ?? q('.se-shelf-reveal')).getBoundingClientRect().right,
-      sep: [sepCs.borderRightWidth, sepCs.borderRightColor, sepCs.borderBottomWidth],
       tabLeft: tab.left,
-      iconDx: icon.left + icon.width / 2 - (b.left + (b.width - parseFloat(cs.borderRightWidth)) / 2),
+      iconDx: icon.left + icon.width / 2 - (b.left + (b.width - 1) / 2),
       iconDy: icon.top + icon.height / 2 - (b.top + (b.height - 1) / 2),
       border: [cs.borderBottomWidth, cs.borderBottomColor, cs.borderRightWidth, cs.borderRightColor],
       barBorder: [barCs.borderBottomWidth, barCs.borderBottomColor],
@@ -151,12 +145,12 @@ test('shelf, sidebar hidden: the "show sidebar" button is a native cell of the t
   expect(g.b[1]).toBe(g.bar[1]);
   expect(g.b[2]).toBe(g.bar[2]);
   expect(g.b[0]).toBe(g.card + 1); // card border
-  expect(g.b[3]).toBe(g.next);
-  expect(g.cellRight).toBe(g.bar[0]);
+  expect(g.b[3]).toBe(g.bar[0]); // nothing in between (back / forward live in the status bar)
   expect(g.tabLeft).toBe(g.bar[0]);
-  // The strip's bottom rule continues under it, and a separator sets the cell apart from the tabs.
+  // The strip's bottom rule continues under it, and a separator sets it apart from the tabs.
   expect(g.border.slice(0, 2)).toEqual(g.barBorder);
-  expect(g.sep).toEqual(['1px', g.barBorder[1], g.barBorder[0]]);
+  expect(g.border[2]).toBe('1px');
+  expect(g.border[3]).toBe(g.barBorder[1]);
   // Icon centred in the cell.
   expect(Math.abs(g.iconDx)).toBeLessThanOrEqual(0.5);
   expect(Math.abs(g.iconDy)).toBeLessThanOrEqual(0.5);

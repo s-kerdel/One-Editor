@@ -45,13 +45,15 @@ export interface Survey {
   /** Hidden items directly found (dot names, key files, excluded), first few, as found. */
   hidden: string[];
   hiddenCount: number;
+  /** Sizes of everything in it (from the walk's lstat: never a file's contents). */
+  bytes: number;
   /** Changes with any entry added, removed, renamed, resized or touched. */
   fingerprint: string;
 }
 
 /** Counts a folder's contents without reading any file (hidden ones included; links are not followed). */
 export async function surveyFolder(realDir: string, key: string, isHidden: (rel: string) => boolean): Promise<Survey> {
-  const s: Survey = { files: 0, folders: 0, hidden: [], hiddenCount: 0, fingerprint: '' };
+  const s: Survey = { files: 0, folders: 0, hidden: [], hiddenCount: 0, bytes: 0, fingerprint: '' };
   const h = crypto.createHash('sha256');
   let n = 0;
   const walk = async (dir: string, rel: string, inHidden: boolean) => {
@@ -70,7 +72,10 @@ export async function surveyFolder(realDir: string, key: string, isHidden: (rel:
       if (e.isDirectory()) {
         s.folders++;
         await walk(abs, r, inHidden || hid);
-      } else s.files++;
+      } else {
+        s.files++;
+        s.bytes += st?.size ?? 0;
+      }
     }
   };
   await walk(realDir, key, false);
@@ -82,10 +87,38 @@ export const count = (n: number, one: string) => `${n.toLocaleString('en')} ${on
 export const binWord = (platform: string = process.platform) => (platform === 'darwin' ? 'Trash' : 'Recycle Bin');
 
 /** The one-line question, for the elicitation and for the two-step summary. */
+/** "12 MB", "340 kB", "2.4 GB". */
+export function sizeText(b: number): string {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${Math.ceil(b / 1024)} kB`;
+  const [n, u] = b < 1024 ** 3 ? [b / 1024 ** 2, 'MB'] : [b / 1024 ** 3, 'GB'];
+  return `${n < 10 ? n.toFixed(1).replace(/\.0$/, '') : Math.round(n)} ${u}`;
+}
+
+/** Where it goes, as it really is on this platform (Windows: by the user's choice, no prompt for a bin that is
+ *  off or too small: Windows then deletes for good, and the question says so). */
+export function whereItGoes(platform: string = process.platform): string {
+  if (platform === 'win32') return 'It goes to the Recycle Bin; if the bin is off or too small for it, it is deleted permanently.';
+  return `It goes to the ${binWord(platform)}.`;
+}
+
+const hiddenPart = (names: string[], total: number) => (total ? ` (including hidden items such as ${names.map((x) => shownName(x, 24)).join(', ')}${total > names.length ? ', …' : ''})` : '');
+
 export function folderSummary(key: string, s: Survey, platform: string = process.platform): string {
-  const names = s.hidden.map((x) => shownName(x, 24)).join(', ') + (s.hiddenCount > s.hidden.length ? ', …' : '');
-  const hidden = s.hiddenCount ? ` (including hidden items such as ${names})` : '';
-  return `Delete folder "${shownPath(key)}" and everything in it? ${count(s.files, 'file')}, ${count(s.folders, 'folder')}${hidden}. It goes to the ${binWord(platform)}.`;
+  return `Delete folder "${shownPath(key)}" and everything in it? ${count(s.files, 'file')}, ${count(s.folders, 'folder')}, ${sizeText(s.bytes)}${hiddenPart(s.hidden, s.hiddenCount)}. ${whereItGoes(platform)}`;
+}
+
+/** One question for a batch with folders: the totals and the first few names (sanitized). */
+export function batchSummary(items: Array<{ key: string; survey: Survey | null; bytes: number }>, platform: string = process.platform): string {
+  const folders = items.filter((i) => i.survey);
+  const files = items.length - folders.length;
+  const inAll = folders.reduce((a, i) => ({ files: a.files + i.survey!.files, folders: a.folders + i.survey!.folders }), { files, folders: 0 });
+  const bytes = items.reduce((n, i) => n + (i.survey ? i.survey.bytes : i.bytes), 0);
+  const hidden = folders.flatMap((i) => i.survey!.hidden).slice(0, 3);
+  const hiddenCount = folders.reduce((n, i) => n + i.survey!.hiddenCount, 0);
+  const first = items.slice(0, 3).map((i) => `"${shownPath(i.key)}"`).join(', ') + (items.length > 3 ? ` and ${items.length - 3} more` : '');
+  const what = [folders.length && `${count(folders.length, 'folder')} with everything in them`, files && count(files, 'file')].filter(Boolean).join(' and ');
+  return `Delete ${what}: ${first}? ${count(inAll.files, 'file')}, ${count(inAll.folders, 'folder')}, ${sizeText(bytes)} in all${hiddenPart(hidden, hiddenCount)}. ${whereItGoes(platform)}`;
 }
 
 export type CodeCheck = 'ok' | 'unknown' | 'expired' | 'used' | 'other' | 'changed';

@@ -271,6 +271,16 @@ export function secretLines(text: string, scope: SecretScope): { lines: string[]
   return { lines: order.map((i) => all[i]), context, names, fencesAbove };
 }
 
+/** 0-based numbers of the lines an edit may not touch: those holding a secret placeholder and their neighbours. */
+export function frozenLines(text: string, scope: SecretScope): Set<number> {
+  const out = new Set<number>();
+  for (const h of hits(text)) {
+    if (!scope.isSecret(h.name)) continue;
+    for (let i = h.first - 1; i <= h.last + 1; i++) if (i >= 0) out.add(i);
+  }
+  return out;
+}
+
 const counts = (xs: readonly string[]) => {
   const m = new Map<string, number>();
   for (const x of xs) m.set(x, (m.get(x) ?? 0) + 1);

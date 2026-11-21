@@ -99,6 +99,8 @@ test('start from the palette: info shows the address, the link needs its token, 
   await info.locator('.se-btn', { hasText: 'Close' }).click();
   const pill = page.locator('[data-testid="webserver-pill"]');
   await expect(pill).toHaveText(`:${new URL(origin).port}`);
+  // In the status bar's far-right corner (the last item, behind its │), no longer next to the folder.
+  await expect(page.locator('.se-status > .se-status-corner:last-child > [data-testid="webserver-pill"]')).toBeVisible();
   await pill.click();
   await expect(info).toBeVisible();
   const pid = (await pidOf(app))!;
@@ -106,6 +108,7 @@ test('start from the palette: info shows the address, the link needs its token, 
   await info.locator('[data-testid="webserver-stop"]').click();
   await expect(info.locator('[data-testid="webserver-state"]')).toHaveText('Stopped');
   await expect(pill).toHaveCount(0);
+  await expect(page.locator('.se-status-corner')).toHaveCount(0); // nothing else on: no corner, no │
   await expect.poll(() => refused(origin)).toBe(true);
   await expect.poll(() => alive(pid)).toBe(false);
 });

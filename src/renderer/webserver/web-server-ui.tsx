@@ -2,7 +2,8 @@
 // startup but the status-bar slot): palette commands, the status-bar pill, the info dialog and the
 // Settings → Browser mode panel. The server itself is a child process owned by main (src/main/web-server.ts);
 // this side only asks over `secEditBridge.webServer` and shows what main reports.
-import { signal } from '@preact/signals';
+// It also carries the status-bar corner's MCP icon (re-exported below: one chunk, no extra preload entry).
+import { effect, signal } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import { app } from '../app/app';
 import { addIcons, Icon } from '../app/icons';
@@ -14,6 +15,7 @@ import { STOPPED, optionsFromSettings, type WebServerOptions, type WebServerRepl
 import { webServerPill } from './slot';
 import '../app/overlays.css'; // dialog base (.se-wsrv resizes it)
 import './webserver.css';
+export { install as installMcpIndicator } from '../mcp/indicator';
 
 addIcons({
   globe: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z|M2 12h20|M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z',
@@ -56,7 +58,8 @@ export function install() {
     if (s.state === 'stopped' && s.notice && prev.state !== 'stopped') app.toast(s.notice, 'info', 6000);
   });
   void call<WebServerStatus>(b.status()).then((s) => (status.value = s), () => {});
-  webServerPill.value = Pill;
+  // In the status-bar corner only while running: an empty corner draws no │.
+  effect(() => void (webServerPill.value = status.value.state === 'running' ? Pill : null));
   registerCommands([
     { id: 'webServer.start', title: 'Start web server', keywords: KEYWORDS, when: () => !!app.workspace.value && !active(), run: () => void startServer({ showInfo: true }) },
     { id: 'webServer.stop', title: 'Stop web server', keywords: KEYWORDS, when: active, run: () => void stopServer() },

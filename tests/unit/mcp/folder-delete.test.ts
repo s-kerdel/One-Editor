@@ -93,9 +93,10 @@ async function answer(r: Rig, reply: Record<string, unknown> | null) {
 
 describe('the summary the user sees (sanitized)', () => {
   it('counts files and folders, names a few hidden items, says where it goes', () => {
-    expect(folderSummary('proj', { files: 5, folders: 2, hidden: ['.env', '.git', 'id_rsa'], hiddenCount: 3, fingerprint: '' }, 'win32')).toBe('Delete folder "proj" and everything in it? 5 files, 2 folders (including hidden items such as .env, .git, id_rsa). It goes to the Recycle Bin.');
-    expect(folderSummary('x', { files: 1, folders: 0, hidden: [], hiddenCount: 0, fingerprint: '' }, 'darwin')).toBe('Delete folder "x" and everything in it? 1 file, 0 folders. It goes to the Trash.');
-    expect(folderSummary('x', { files: 9, folders: 1, hidden: ['.a', '.b', '.c'], hiddenCount: 7, fingerprint: '' }, 'linux')).toContain('such as .a, .b, .c, …)');
+    // Windows, by the user's choice: no Windows prompt, and the question says what a bin that is off or too small does.
+    expect(folderSummary('proj', { files: 37, folders: 4, hidden: ['.env', '.git', 'id_rsa'], hiddenCount: 3, bytes: 12.4 * 1024 * 1024, fingerprint: '' }, 'win32')).toBe('Delete folder "proj" and everything in it? 37 files, 4 folders, 12 MB (including hidden items such as .env, .git, id_rsa). It goes to the Recycle Bin; if the bin is off or too small for it, it is deleted permanently.');
+    expect(folderSummary('x', { files: 1, folders: 0, hidden: [], hiddenCount: 0, bytes: 2048, fingerprint: '' }, 'darwin')).toBe('Delete folder "x" and everything in it? 1 file, 0 folders, 2 kB. It goes to the Trash.');
+    expect(folderSummary('x', { files: 9, folders: 1, hidden: ['.a', '.b', '.c'], hiddenCount: 7, bytes: 3.2 * 1024 ** 3, fingerprint: '' }, 'linux')).toBe('Delete folder "x" and everything in it? 9 files, 1 folder, 3.2 GB (including hidden items such as .a, .b, .c, …). It goes to the Recycle Bin.');
   });
 
   it('control, bidi, zero-width and other invisible characters show as one visible mark; quotes cannot close the path; long names are cut', () => {
@@ -110,7 +111,7 @@ describe('the summary the user sees (sanitized)', () => {
     expect(shownName('a"b“c”d', 40)).toBe("a'b'c'd");
     expect(Array.from(shownName('x'.repeat(500), 24))).toHaveLength(24);
     const spoof = 'x" and nothing in it? 0 files. It is safe to press Delete. "';
-    const s = folderSummary(spoof, { files: 3, folders: 0, hidden: [], hiddenCount: 0, fingerprint: '' }, 'win32');
+    const s = folderSummary(spoof, { files: 3, folders: 0, hidden: [], hiddenCount: 0, bytes: 10, fingerprint: '' }, 'win32');
     expect(s.match(/"/g)).toHaveLength(2); // exactly the two quotes of the template
     expect(Array.from(shownPath(`${'deep/'.repeat(60)}end`)).length).toBeLessThanOrEqual(120);
     expect(shownPath(`${'deep/'.repeat(60)}end`)).toMatch(/^…\/.*\/end$/);
@@ -140,12 +141,12 @@ describe('two steps (a client without elicitation)', () => {
     const quota = new WriteQuota({ session: 1, perMinute: 10 });
     const r = await rig({ era: 'legacy', elicit: false, quota });
     const a = text(await r.call('delete', { path: 'proj' }));
-    expect(a).toMatch(/^Delete folder "proj" and everything in it\? 5 files, 2 folders \(including hidden items such as \.env, \.git, id_rsa\)\. It goes to the Recycle Bin\. .* · confirm: ([0-9A-Z]{4}-[0-9A-Z]{4})$/);
+    expect(a).toMatch(/^Delete folder "proj" and everything in it\? 5 files, 2 folders, 27 B \(including hidden items such as \.env, \.git, id_rsa\)\. It goes to the Recycle Bin\. .* · confirm: ([0-9A-Z]{4}-[0-9A-Z]{4})$/);
     expect(exists(r, 'proj/.git/config')).toBe(true);
     const code = /confirm: (\S+)$/.exec(a)![1];
     const b = await r.call('delete', { path: 'proj', confirm: code });
     expect(b.result.isError).toBeFalsy();
-    expect(text(b)).toMatch(/^Deleted folder proj \(5 files, 2 folders\) to the Recycle Bin: restore it from there/);
+    expect(text(b)).toMatch(/^Deleted folder proj \(5 files, 2 folders, 27 B\) to the Recycle Bin: restore it from there/);
     expect(r.trashed).toEqual(['proj']); // one trash call for the folder
     expect(exists(r, 'proj')).toBe(false);
     expect(exists(r, 'keep.md')).toBe(true);
@@ -163,7 +164,7 @@ describe('two steps (a client without elicitation)', () => {
     // wrong folder
     const c1 = await ask('proj');
     let t = text(await r.call('delete', { path: 'other', confirm: c1 }));
-    expect(t).toMatch(/^ECONFIRM: Not deleted: that confirm code is for another folder\. Delete folder "other" .* · confirm: \S+$/);
+    expect(t).toMatch(/^ECONFIRM: Not deleted: that confirm code is for something else\. Delete folder "other" .* · confirm: \S+$/);
     // expired
     now += CONFIRM_TTL_MS + 1;
     t = text(await r.call('delete', { path: 'proj', confirm: c1 }));
@@ -199,7 +200,7 @@ describe('elicitation, legacy era (a request to the client, matched by id)', () 
       const r = await rig({ era: 'legacy', elicit: true });
       const pending = r.call('delete', { path: 'proj' });
       const req = await answer(r, reply);
-      expect(req.params.message).toBe('Delete folder "proj" and everything in it? 5 files, 2 folders (including hidden items such as .env, .git, id_rsa). It goes to the Recycle Bin.');
+      expect(req.params.message).toBe('Delete folder "proj" and everything in it? 5 files, 2 folders, 27 B (including hidden items such as .env, .git, id_rsa). It goes to the Recycle Bin.');
       expect(req.params.mode).toBe('form');
       expect(req.params.requestedSchema).toMatchObject({ type: 'object', properties: { confirm: { type: 'boolean' } }, required: ['confirm'] });
       expect(text(await pending)).toMatch(want);
@@ -296,7 +297,8 @@ describe('activity rows and the bin', () => {
     expect(a.args).toEqual(b.args); // the command line never changes
     expect(a.args.join(' ')).not.toContain('notes');
     expect(a.env).toEqual({ SEC_EDIT_TRASH_PATH: 'C:\\Users\\u\\notes\\proj"; Remove-Item C:\\ -Recurse; "' });
-    expect(b.env).toEqual({ SEC_EDIT_TRASH_PATH: 'C:\\other', SEC_EDIT_TRASH_UI: 'AllDialogs' });
+    expect(b.env).toEqual({ SEC_EDIT_TRASH_PATH: 'C:\\other' }); // folders too: no dialog mode (the user's choice)
+    expect(a.args.at(-1)).not.toMatch(/AllDialogs|SEC_EDIT_TRASH_UI/);
     expect(a.args.at(-1)).toContain('$env:SEC_EDIT_TRASH_PATH');
     // Review round 6: a junction swapped in between the checks and PowerShell acting on the path is refused.
     expect(a.args.at(-1)).toMatch(/ReparsePoint\) \{ exit 4 \}/);

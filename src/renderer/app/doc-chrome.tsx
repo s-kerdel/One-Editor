@@ -10,12 +10,26 @@ import { app } from './app';
 import * as ui from './ui';
 import { Icon } from './icons';
 import './icon-pack'; // check / alert (save state), the mode and width glyphs
-import { setDocEol } from './documents';
-import { setViewMode, currentWidth, cycleContentWidth } from './settings';
+import { save } from './documents';
+import { setViewMode, currentWidth, updateSettings, WIDTHS } from './settings';
 import { prettyKey } from './commands';
 import { holdKeys } from './lazy';
 import { expandTo, revealInTree } from './fileops';
 import { countWords } from './wordcount';
+
+/** Changes a doc's line endings (status bar toggle); saved on the next save. */
+function setDocEol(path: string, eol: 'lf' | 'crlf') {
+  const doc = app.docs.get(path);
+  if (!doc || doc.eol === eol) return;
+  doc.eol = eol;
+  doc.saved = `\u0000eol-changed\u0000${doc.saved}`; // forces dirty until saved
+  doc.dirty.value = true;
+  ui.docMetaVersion.value++;
+  if (app.settings.value.autosave) void save(path, { auto: true });
+}
+
+/** Tab-strip button: readable → wide → full → readable. */
+const cycleContentWidth = () => updateSettings({ contentWidth: WIDTHS[(WIDTHS.indexOf(currentWidth()) + 1) % 3] });
 
 // ---- status bar ------------------------------------------------------------------------------
 

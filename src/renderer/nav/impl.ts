@@ -106,7 +106,7 @@ export function jump(entry: NavEntry): Promise<boolean> {
   });
 }
 
-/** Right-click / long-press on a back / forward button: the places that way, nearest first, under it. */
+/** Right-click / long-press on a back / forward button: the places that way, nearest first, above it. */
 export async function openPlaces(dir: NavDir, anchor: HTMLElement): Promise<void> {
   const list = history.places(dir === 'back' ? -1 : 1, PLACES_MAX, exists);
   if (!list.length) return;
@@ -117,7 +117,8 @@ export async function openPlaces(dir: NavDir, anchor: HTMLElement): Promise<void
   });
   const prev = document.activeElement as HTMLElement | null;
   const r = anchor.getBoundingClientRect();
-  ui.openContextMenu({ clientX: r.left, clientY: r.bottom + 4, preventDefault() {}, stopPropagation() {} }, items);
+  // The buttons sit in the status bar: the menu host flips the list up so it ends right over the button.
+  ui.openContextMenu({ clientX: r.left, clientY: r.top - 4, preventDefault() {}, stopPropagation() {} }, items);
   // The shared menu host focuses itself while still hidden (it measures first), which never takes:
   // focus it once shown, so ↑ ↓ Enter work from the keyboard (Shift+F10 on the button).
   const focusMenu = (tries: number) =>

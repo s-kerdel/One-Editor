@@ -9,10 +9,10 @@ import { StatusBar, StatusDocStart, StatusDocEnd } from './StatusBar';
 import { afterBootIdle, lazyComponent, onIdle } from './lazy';
 import { ShelfTop, ShelfFoot, ShelfReveal, ZenButton } from './Shelf';
 import { loadClassic, setClassicPrimer } from './classic-loader';
+import { popups as loadPopups } from './fileops';
 import { panelOpen as terminalOpen, TerminalPanelSlot } from '../terminal/install';
 import { OverviewPanelLazy as OverviewPanel } from '../overview';
 import { ZenStrip, zenKeepsStatus } from './zen';
-import { NavButtons } from '../nav/buttons';
 
 const ActivityBar = lazyComponent(() => loadClassic().then((m) => m.ActivityBar));
 
@@ -28,7 +28,6 @@ export { FilesPanel } from './FileTree';
 import { ClassicFilesHead } from './FileTree';
 
 // Dialogs, context menus, the Ctrl-Tab switcher and the drop target only exist after a user action: keep them out of the startup chunk.
-const loadPopups = () => import('./Popups');
 const DialogHost = lazyComponent(() => loadPopups().then((m) => m.DialogHost));
 const ContextMenuHost = lazyComponent(() => loadPopups().then((m) => m.ContextMenuHost));
 const TabSwitcher = lazyComponent(() => loadPopups().then((m) => m.TabSwitcher));
@@ -135,8 +134,6 @@ export function Layout() {
         <section class="se-content">
           <div class="se-topline">
             {!sidebar && !classic && !zen && <ShelfReveal />}
-            {/* Go back / forward: the strip's start in every layout (zen too); Settings → Appearance hides them. */}
-            {app.settings.value['nav.buttons'] !== false && <NavButtons />}
             {/* Zen: leave it from the top right too (full screen has no window controls there). */}
             <TabBar end={zen && <ZenButton cls="se-width-btn" />} />
           </div>

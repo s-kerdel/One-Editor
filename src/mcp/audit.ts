@@ -18,7 +18,7 @@ export class AuditLog {
   constructor(private readonly file: string) {}
 
   record(row: Omit<McpActivity, 't' | 'reverted'> & { t?: number }) {
-    const line = `${JSON.stringify({ t: row.t ?? Date.now(), client: row.client, transport: row.transport, tool: row.tool, folder: row.folder, path: row.path, ok: row.ok, code: row.code, ms: row.ms, bytes: row.bytes, ...(row.journal ? { journal: row.journal } : {}), ...(row.token ? { token: row.token } : {}), ...(row.note ? { note: row.note } : {}) })}\n`;
+    const line = `${JSON.stringify({ t: row.t ?? Date.now(), client: row.client, transport: row.transport, tool: row.tool, folder: row.folder, path: row.path, ok: row.ok, code: row.code, ms: row.ms, bytes: row.bytes, ...(row.journal ? { journal: row.journal } : {}), ...(row.token ? { token: row.token } : {}), ...(row.note ? { note: row.note } : {}), ...(row.items ? { items: row.items } : {}) })}\n`;
     const check = this.writes++ % CHECK_EVERY === 0;
     // Serialised per process; the activity log is best effort (a full disk must not fail a tool call).
     this.chain = this.chain

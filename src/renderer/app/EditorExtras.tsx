@@ -3,7 +3,7 @@
 import { basename } from '@shared/paths';
 import { app } from './app';
 import * as ui from './ui';
-import { keepMine, persistSession, closeTabs, discardDoc } from './documents';
+import { save, persistSession, closeTabs, discardDoc } from './documents';
 import { reloadFromDisk } from './disk-sync';
 import { addIcons, Icon, isImagePath } from './icons';
 import './icon-pack'; // alert (conflict banner)
@@ -63,7 +63,7 @@ export function Banner() {
         <button class="se-btn small" onClick={() => reloadFromDisk(p)}>
           Use disk version
         </button>
-        <button class="se-btn small primary" onClick={() => void keepMine(p)}>
+        <button class="se-btn small primary" onClick={() => void save(p, { force: true })}>
           Keep mine
         </button>
       </div>

@@ -3,16 +3,28 @@
 import { app } from './app';
 import * as ui from './ui';
 import { registerCommands } from './commands';
-import { closeTabs, saveAll } from './documents';
+import { closeTabs, openWorkspace, saveAll } from './documents';
 import { absolutePath, copyText, deletePaths, duplicate, revealInOs, revealInTree, revealLabel, startCreate } from './fileops';
 import { setViewMode, updateSettings, activeIsMarkdown } from './settings';
 import { holdKeys } from './lazy';
 import { primeClassic } from './classic-loader';
 import { collapseAll } from './FileTree';
 import { closeAll } from './Tabs';
-import { openFolderInteractive } from './shell';
 
 const hasActive = () => !!app.activePath.value;
+
+export async function openFolderInteractive() {
+  let p = await app.backend.pickFolder().catch(() => null);
+  if (!p && app.backend.kind === 'web') {
+    p = await ui.promptDialog('Open folder', ui.recentFolders.value[0] ?? '', app.backend.os === 'win32' ? 'C:\\Users\\me\\notes' : '/home/me/notes', 'Open');
+  }
+  if (!p) return;
+  try {
+    await openWorkspace(p);
+  } catch (err) {
+    app.toast(`Cannot open folder: ${(err as Error).message}`, 'error');
+  }
+}
 /** Pickers live in the lazy Popups chunk; keys typed while it loads are replayed into the picker's input. */
 const openPicker = (fn: (m: typeof import('./Popups')) => void) => holdKeys(import('./Popups').then(fn));
 

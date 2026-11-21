@@ -131,5 +131,3 @@ export function zoom(dir: 1 | -1 | 0) {
 // ---- content width (markdown) -----------------------------------------------------------------
 export const WIDTHS = ['readable', 'wide', 'full'] as const;
 export const currentWidth = () => WIDTHS.find((w) => w === app.settings.value.contentWidth) ?? 'readable';
-/** Tab-strip button: readable → wide → full → readable. */
-export const cycleContentWidth = () => updateSettings({ contentWidth: WIDTHS[(WIDTHS.indexOf(currentWidth()) + 1) % 3] });

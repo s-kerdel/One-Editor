@@ -42,20 +42,22 @@
 | **Bookmark** a file or folder | Right-click → **Bookmark** (tree or tab). Panel: `Ctrl+Alt+K` ([below](#bookmarks)) |
 | Close tab | `Ctrl+W`, **double-click the tab name**, middle-click the tab, or its × |
 | Switch tabs | `Ctrl+Tab` (most recently used first) |
-| **Go back / forward** | `Alt+←` / `Alt+→` (macOS: `Cmd+[` / `Cmd+]`), the **← → buttons** at the start of the tab strip, or the **mouse side buttons** anywhere in the window |
+| **Go back / forward** | `Alt+←` / `Alt+→` (macOS: `Cmd+[` / `Cmd+]`), the **← → buttons** at the left of the status bar, or the **mouse side buttons** anywhere in the window |
 
 **A workspace stays inside its folder.** A link in it (symlink, Windows junction) that points **outside** the folder is not shown, opened, searched or written through. Links to places **inside** the folder work as before. Need that other folder? Open it itself.
 
 **Go back returns to where you were**: the previous file (reopened if you closed it), or the spot before a big jump (find, go to line, outline, a click far away). PDFs go back to the page before a link or a typed page. Typing and small cursor moves are not steps.
 
-**The ← → buttons** sit left of the first tab: `← → │ tabs…`. Sidebar hidden: right after the **show sidebar** button. Same spot in Classic and in zen mode.
+**The ← → buttons** sit at the **far left of the status bar**: `← → │ folder › path…`. Same spot in Shelf and Classic.
+
+**Zen mode** hides the status bar, so the buttons go with it. The shortcuts and side buttons still work. Want them? Settings → Appearance → Zen mode → **Keep the status bar**.
 
 | | |
 |---|---|
 | **Greyed out** | Nothing to go back / forward to yet |
-| **Jump several steps** | **Right-click or hold** an arrow → the recent places that way (file + heading or line). Click one |
+| **Jump several steps** | **Right-click or hold** an arrow → the recent places that way (file + heading or line), listed **above** the arrow. Click one |
 | **Keyboard** | `Tab` to an arrow · `Shift+F10` (or the menu key) opens the list · `↑` `↓` `Enter` · `Esc` closes it |
-| **Hide them** | Settings → Appearance → **Back and forward buttons**. The shortcuts and side buttons keep working |
+| **Hide them** | Settings → Appearance → **Back and forward buttons** (the `│` goes too). The shortcuts and side buttons keep working |
 
 ### Select several files
 
@@ -199,6 +201,22 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 - **Double-clicking a tab** still closes it. Only empty strip space maximizes.
 - **File overview open?** The buttons sit above it instead. Its top strip drags the window too.
 - The **window title** (taskbar, Alt+Tab) still shows the open note.
+
+### Status bar
+
+```
+← → │ folder › path · git · env ········ Ln 3, Col 1 · words · LF · UTF-8 · Markdown · Live │ MCP · 🌐 :4317 · ⛨ 3
+```
+
+**The right end shows what is switched on.** Usually it is empty (no `│` either).
+
+| Icon | Shows when | Click |
+|---|---|---|
+| **MCP** | The MCP server is on. Grey: no AI app connected. Coloured: an app is (count from 2; a short flash on each call) | Settings → MCP server → **Recent activity** |
+| **🌐 :4317** | The web server runs (browser mode) | The info box: **Open**, **Copy link**, **Stop server** |
+| **⛨ 3** | The last security check found something (red: high / critical) | The findings |
+
+Hover an icon for details (MCP: which app, last call). Desktop app only.
 
 ### Saving
 
@@ -888,7 +906,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | Content width | Readable |
 | | Zoom (desktop only) | 100% |
 | | Window frame (desktop only) | Integrated (no title bar) |
-| | Back and forward buttons (start of the tab strip) | On |
+| | Back and forward buttons (left of the status bar) | On |
 | | Zen mode: Full screen / Keep the status bar | On / Off |
 | **Editor** | View mode | Live |
 | | Formatting toolbar in live mode | On |
@@ -987,7 +1005,7 @@ Settings are **global**, not per folder.
 | Do this | How |
 |---|---|
 | **Start** | Settings → **Browser mode** → **Start web server**, or palette → **"Start web server"** |
-| **Get the link** | **Copy link** or **Open** in the info box. The status bar pill **🌐 :4317** opens it again |
+| **Get the link** | **Copy link** or **Open** in the info box. **🌐 :4317** at the right end of the status bar opens it again |
 | **See it all** | Palette → **"Web server: Show info"** (folder, address, access, limits) |
 | **Stop** | **Stop server**, palette → **"Stop web server"**, or quit One |
 
@@ -1122,18 +1140,34 @@ Only in **Read-write** folders:
 | `write_file` | Creates a file, or replaces a whole one (only with the `etag` from `read_file`: never over a newer version) |
 | `append_file` | Adds text at the end, or at the start (after the frontmatter) |
 | `patch_file` | Changes one heading section, `^block` or frontmatter key: append · prepend · replace · delete |
-| `replace_text` | Replaces one exact piece of text (it must occur once) |
-| `move` | Renames / moves a file or folder (with everything in it), never overwrites; updates links to it (**Update links on rename**) |
-| `create_folder` · `delete` | New folder · a file or folder to the **Recycle Bin**. A file delete also keeps an undo copy (even with undo copies off), or is refused |
+| `replace_text` | Replaces one exact piece of text (it must occur once), or every match in that file (`all`) |
+| `replace_in_files` | Replaces exact text in many files at once; `query` picks them with search filters (`path:` `ext:` `tag:` `lang:` `file:`); `preview` only counts |
+| `move` | Renames / moves a file or folder (with everything in it), never overwrites; updates links to it (**Update links on rename**). `paths` + `to_folder`: up to 100 items in one call |
+| `create_folder` · `delete` | New folder · files or folders to the **Recycle Bin** (`paths`: up to 100). File deletes keep undo copies (even with undo copies off), or are refused |
 
-**Deleting a folder asks you first**
+**Fewer calls, one Revert**
 
-1. The AI asks to delete a folder: **your AI app asks you to confirm**. One shows what it would delete: `Delete folder "old-project" and everything in it? 120 files, 14 folders (including hidden items such as .git, .env). It goes to the Recycle Bin.`
-2. **Yes** → the folder and everything in it go to the Recycle Bin, in one step. **No**, closing the question or no answer within 2 minutes → nothing happens.
-3. **Apps that can't ask** show you that summary in the chat first. The AI deletes only after **you** agree there (it then sends a one-time code: valid 5 minutes, for that folder as it was).
+1. **Preview first:** `replace_in_files` with `preview: true` → `14 matches in 6 files` and the list. Nothing changes.
+2. **Apply:** the same call without `preview`. Files where the change would touch a `{{secret}}` line are skipped and named; the rest are written.
+3. **One row, one Revert:** a batch (`replace_in_files`, `move` / `delete` with `paths`) is one row in **Recent activity** (`replace_in_files ×6`). Its **Revert** undoes all of it (deleted folders: from the Recycle Bin).
 
-- **Restore it from the Recycle Bin** (Trash on a Mac). A folder delete keeps no undo copy, so **Recent activity** lists it as `delete (folder)` without a Revert button.
-- **Never deleted for good:** no Recycle Bin for that folder → nothing is deleted. On Windows, if the bin is off or too small, Windows itself asks before deleting for good.
+- Up to 200 files per `replace_in_files`; each changed file counts toward the per-session change limit.
+- A batch goes on past an item that fails and answers one line per item (`ok …` or the reason).
+
+**Which AI actions ask you first**
+
+| Asks first | Does not ask (Revert undoes it) |
+|---|---|
+| Deleting a **folder** (alone or in a batch) | Writing, editing, appending, one `replace_text` |
+| Deleting **more than 10** items in one call | Moves and renames, also in a batch (nothing is lost) |
+| `replace_in_files` on **more than 10** files | Deleting up to 10 files (undo copies) · creating folders |
+
+1. **Your AI app asks you** what will happen, e.g. `Delete folder "old-project" and everything in it? 120 files, 14 folders, 37 MB (including hidden items such as .git, .env). It goes to the Recycle Bin; if the bin is off or too small for it, it is deleted permanently.` or `Replace "v1" with "v2" in 14 files (31 matches): "a.md", "b.md", "c.md" and 11 more?`
+2. **Yes** → it happens, in one step. **No**, closing the question or no answer within 2 minutes → nothing happens.
+3. **Apps that can't ask** show you that summary in the chat first. The AI goes ahead only after **you** agree there (it then sends a one-time code: valid 5 minutes, only for exactly that action on exactly those files).
+
+- **Restore a deleted folder from the Recycle Bin** (Trash on a Mac). It keeps no undo copy, so **Recent activity** lists it as `delete (folder)` without a Revert button.
+- **Windows: no extra Windows prompt.** If the Recycle Bin is off or too small for the folder, Windows deletes it permanently, and the question says so. Elsewhere: not on a fixed local drive → nothing is deleted. Mac: only on the volume with your Trash. Linux: only into your trash.
 - **Moving a folder** takes everything in it along, hidden items too (they stay hidden). Refused: links inside, a destination in a hidden or excluded place, and content your exclusions hide that would become visible.
 
 **Let it make changes (Read-write)**
@@ -1184,6 +1218,7 @@ Only in **Read-write** folders:
 - **A secret typed into a normal note *is* readable.** Keep secrets in the vault.
 - **Excluded folders are a normal setting:** removing an entry from **Excluded folders** makes that folder visible to AI apps at once, without a question. Check the list before sharing a folder.
 - **Read-only unless you say so**, per folder (see above). `--read-only` in the client setup keeps an AI app read-only whatever the folder says.
+- **See it in the status bar** (right end): **MCP** shows while the MCP server is on. **Grey** = no app connected. **Coloured** (+ a count from 2) = an AI app is connected; it flashes briefly on each call. Hover: which app, and when it last asked. Click: **Recent activity**.
 - **Off = off:** running servers stop within a second. A removed folder or revoked token is gone at once.
 - **Edge cases:** a heading that is only `#` counts as empty (no section). Frontmatter key lines over 10,000 characters are ignored by `read_file` / `patch_file`.
 
@@ -1216,7 +1251,7 @@ Small local model (8k context)? Keep the defaults or go lower. Big context (128k
 
 **Reading the shield**
 
-- **No shield** in the status bar = the last check found nothing (or no check has run yet).
+- **No shield** at the right end of the status bar = the last check found nothing (or no check has run yet).
 - **Shield + number** = that many 🔴 / 🟠 findings. **Red** shield: at least one high / critical.
 - **Click it** → the list: library, **shipped version → fixed version**, one line, **Details** (opens the advisory).
 - A library finding **may not affect One** (it depends on how the library is used): check the link.

@@ -89,7 +89,8 @@ export function install() {
         was = on;
       });
     });
-  updatesShield.value = Shield;
+  // In the status-bar corner only with findings: an empty corner draws no │.
+  effect(() => void (updatesShield.value = alerting(status.value.findings).length ? Shield : null));
   registerCommands([
     { id: 'updates.show', title: 'Security updates: Show findings', keywords: KEYWORDS, run: openFindings },
     { id: 'updates.check', title: 'Security updates: Check now', keywords: KEYWORDS, run: () => void check(true).then(openFindings) },

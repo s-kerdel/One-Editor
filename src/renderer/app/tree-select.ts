@@ -1,11 +1,14 @@
-// File tree multi-selection: pure steps + the few writes the tree makes with them. Lazy (FileTree imports it on
-// the first Ctrl / Shift click or key; the idle Popups chunk carries it too), so launch pays only for drawing.
-// State is `ui.treeMulti` (set + anchor + focus) next to `ui.treeSelection` (the focused row); `order` is the
-// visible row paths, top to bottom.
+// File tree multi-selection and keyboard: pure steps + the few writes the tree makes with them. Lazy (FileTree
+// imports it on the tree's focus and the first Ctrl / Shift click; the idle Popups chunk carries it too), so launch
+// pays only for drawing. State is `ui.treeMulti` (set + anchor + focus) next to `ui.treeSelection` (the focused
+// row); `order` is the visible row paths, top to bottom.
 import { batch } from '@preact/signals';
+import { dirname } from '@shared/paths';
 import { app } from './app';
 import * as ui from './ui';
-import { ancestors, findNode } from './tree-model';
+import { ancestors, findNode, type Row } from './tree-model';
+import { deletePaths } from './fileops';
+import { isMac } from './commands';
 
 type Sel = ui.TreeSel;
 
@@ -88,4 +91,62 @@ export function prune(order: readonly string[]) {
   if (!m) return;
   const n = pruneSel(order, m);
   if (!n || n.paths.size !== m.paths.size || n.focus !== m.focus) ui.setTreeSel(n, n?.focus ?? ui.treeSelection.value);
+}
+
+/** The tree as FileTree last rendered it: rows (inline-create row included), rows per page, its folder toggle. */
+export interface TreeView {
+  rows: readonly Row[];
+  page: number;
+  toggle(path: string, open?: boolean): void;
+}
+
+/** Type-ahead: the prefix typed so far and when its last key came (one tree on screen at a time). */
+const typeahead = { text: '', at: 0 };
+
+/** The file tree's keys (FileTree's onKeyDown once this chunk is in). True when the key was the tree's. */
+export function treeKey(e: KeyboardEvent, { rows, page, toggle }: TreeView): boolean {
+  const order = rows.filter((r) => !r.create).map((r) => r.node.path);
+  const i = rows.findIndex((r) => r.node.path === ui.treeSelection.value);
+  const cur = rows[i]?.node;
+  // `to` maps the focused index to the target; Shift extends from the focus.
+  const select = (to: (k: number) => number) => {
+    if (e.shiftKey) return pick(order, order[Math.max(0, Math.min(order.length - 1, to(order.indexOf(ui.treeSelection.value!))))], true, false);
+    const r = rows[Math.max(0, Math.min(rows.length - 1, to(i)))];
+    if (r && !r.create) ui.treeSelection.value = r.node.path;
+  };
+  const key = e.key;
+  const many = ui.treeMulti.value && order.filter(ui.isTreeSelected);
+  if (key === 'ArrowDown') select((k) => k + 1);
+  else if (key === 'ArrowUp') select((k) => (k < 0 ? 0 : k - 1));
+  else if (key === 'Home') select(() => 0);
+  else if (key === 'End') select(() => rows.length);
+  else if (key === 'PageDown') select((k) => k + page);
+  else if (key === 'PageUp') select((k) => k - page);
+  else if (key === 'ArrowRight' && cur?.kind === 'dir') {
+    if (!rows[i].expanded) toggle(cur.path, true);
+    else select((k) => k + 1);
+  } else if (key === 'ArrowLeft' && cur) {
+    if (cur.kind === 'dir' && rows[i].expanded) toggle(cur.path, false);
+    else if (dirname(cur.path) || cur.path.includes('/')) ui.treeSelection.value = dirname(cur.path);
+  } else if (key === 'Enter' && many) void openPaths(many).then(() => app.editor?.focus());
+  else if ((key === 'Enter' || key === ' ') && cur) {
+    if (cur.kind === 'dir') toggle(cur.path);
+    else void app.openFile(cur.path).then(() => key === 'Enter' && app.editor?.focus());
+  } else if (key === 'F2' && cur) ui.setTreeSel(null, (ui.renaming.value = cur.path));
+  else if ((key === 'Delete' || (key === 'Backspace' && e.metaKey)) && cur) void deletePaths(many || [cur.path]);
+  else if (key.toLowerCase() === 'a' && (isMac ? e.metaKey : e.ctrlKey) && !e.altKey) selectAll(order);
+  else if (key === 'Escape') {
+    if (ui.treeMulti.value) ui.treeMulti.value = null; // back to the focused row
+    else if (ui.treeFilter.value) ui.treeFilter.value = '';
+    else app.editor?.focus();
+  } else if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    // Type-ahead: jump to the next row starting with the typed prefix.
+    const t = typeahead;
+    t.text = performance.now() - t.at > 700 ? key.toLowerCase() : t.text + key.toLowerCase();
+    t.at = performance.now();
+    const next = [...rows.slice(i + (t.text.length === 1 ? 1 : 0)), ...rows];
+    const hit = next.find((r) => !r.create && r.node.name.toLowerCase().startsWith(t.text));
+    if (hit) ui.treeSelection.value = hit.node.path;
+  } else return false;
+  return true;
 }

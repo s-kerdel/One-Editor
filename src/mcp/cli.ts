@@ -9,7 +9,8 @@ import { writeProtocol } from './stdout-guard';
 import './env-boot'; // second: test hooks are dead in a packaged build
 import path from 'node:path';
 import { defaultConfigDir } from '../backend/appdata';
-import { MCP_CONFIG_FILE } from '../shared/mcp';
+import { MCP_CONFIG_FILE, MCP_LIVE_DIR } from '../shared/mcp';
+import { LiveFile } from './live';
 import { loadSettings, readConfig, watchFiles } from './config';
 import { OneMcpServer, SERVER_VERSION } from './server';
 import { TOKEN_ENV, matchToken } from './tokens';
@@ -84,8 +85,13 @@ if (!initial.ok) {
   console.error(`One MCP server: settings.json cannot be used (${initial.reason}). Fix it (or open One once), then try again.`);
   process.exit(1);
 }
+// "MCP active" in One: a live file for as long as this process serves (no path, text or token in it).
+const live = new LiveFile(path.join(configDir, MCP_LIVE_DIR), { client: token.name });
+live.start();
+process.on('exit', () => live.stop());
 const server = new OneMcpServer({
   configDir,
+  onActivity: () => live.touch(),
   settings: initial.settings,
   narrow: { folder: only, readOnly },
   transport: 'stdio',
@@ -102,6 +108,7 @@ async function stop(code = 0) {
   if (stopping) return;
   stopping = true;
   unwatch();
+  live.stop();
   setTimeout(() => process.exit(code), 2000).unref();
   await server.dispose().catch(() => {});
   process.exit(code);

@@ -32,7 +32,11 @@ import {
   MCP_AUDIT_FILE,
   MCP_CHANNELS as CH,
   MCP_CONFIG_FILE,
+  MCP_IDLE_MS,
+  MCP_LIVE_DIR,
   MCP_WRITES_ENABLED,
+  parseLiveFile,
+  type McpSession,
   JOURNAL_GROUP_RE,
   MAX_TOKENS,
   TOKEN_ENV,
@@ -86,6 +90,17 @@ export interface McpDeps {
   /** How long a copied setup stays on the clipboard (default 2 minutes; tests shorten it). */
   clipboardClearMs?: number;
   now?(): number;
+  /** Is this process still running? (Default: process.kill(pid, 0); EPERM = it runs, as someone else.) */
+  isAlive?(pid: number): boolean;
+}
+
+export function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0); // signal 0: a check only (Windows too: Node opens the process)
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === 'EPERM';
+  }
 }
 
 const TOKEN_STORE = 'mcp-tokens.json';
@@ -178,6 +193,81 @@ export class McpService {
       undo: { ...(cfg.undo ?? EMPTY_MCP_CONFIG.undo!) },
       tokens: (cfg.tokens ?? []).map((t) => ({ id: t.id, name: t.name, hint: t.hint, created: t.created, lastUsed: t.lastUsed ?? null, copyable: stored.has(t.id) })),
       tokenStore: this.keyring ? 'keyring' : 'once',
+      sessions: this.sessions.map((x) => ({ ...x })),
+    };
+  }
+
+  // ---- running servers ("MCP active"): their live files -------------------------------------------------
+
+  private sessions: McpSession[] = [];
+  private sessionsKey = '';
+
+  /** Reads mcp-live/: one session per running server; files of processes that are gone are removed. */
+  async scanSessions(): Promise<McpSession[]> {
+    const dir = path.join(this.deps.configDir, MCP_LIVE_DIR);
+    const now = this.deps.now?.() ?? Date.now();
+    const alive = this.deps.isAlive ?? pidAlive;
+    const out: McpSession[] = [];
+    for (const name of await fs.promises.readdir(dir).catch(() => [] as string[])) {
+      const file = path.join(dir, name);
+      if (name.endsWith('.tmp')) {
+        // A writer's temp file left behind (it died between write and rename): old ones go.
+        const st = await fs.promises.stat(file).catch(() => null);
+        if (st && now - st.mtimeMs > 60_000) await fs.promises.rm(file, { force: true }).catch(() => {});
+        continue;
+      }
+      if (!/^\d+-[a-f0-9]{8}\.json$/.test(name)) continue;
+      const live = parseLiveFile(await fs.promises.readFile(file, 'utf8').catch(() => ''));
+      if (!live || String(live.pid) !== name.split('-')[0]) continue; // half-written / foreign: left alone
+      if (!alive(live.pid)) {
+        await fs.promises.rm(file, { force: true }).catch(() => {}); // crashed: its file is ours to clean up
+        continue;
+      }
+      out.push({ client: live.client, started: live.started, lastCall: live.lastCall, idle: now - (live.lastCall ?? live.started) > MCP_IDLE_MS });
+    }
+    out.sort((a, b) => a.started - b.started);
+    return out;
+  }
+
+  /** Rescans; when the list changed, the page hears it (onChange, the usual status event). */
+  async refreshSessions(): Promise<void> {
+    const next = await this.scanSessions();
+    const key = JSON.stringify(next);
+    if (key === this.sessionsKey) return;
+    this.sessionsKey = key;
+    this.sessions = next;
+    this.deps.onChange(await this.status());
+  }
+
+  /**
+   * Watches mcp-live/ (fs.watch, plus a slow poll: a crashed process changes no file, and idle flips with
+   * time). Main side only; the first scan also cleans up after crashes. Returns the stop function.
+   */
+  watchSessions(pollMs = 15_000): () => void {
+    const dir = path.join(this.deps.configDir, MCP_LIVE_DIR);
+    let timer: NodeJS.Timeout | null = null;
+    let soon: NodeJS.Timeout | null = null;
+    let watcher: fs.FSWatcher | null = null;
+    const kick = () => {
+      if (soon) return;
+      soon = setTimeout(() => {
+        soon = null;
+        void this.refreshSessions().catch(() => {});
+      }, 200); // a burst of writes → one scan
+      soon.unref?.();
+    };
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      watcher = fs.watch(dir, kick);
+      watcher.on('error', () => {});
+    } catch {}
+    timer = setInterval(kick, pollMs);
+    timer.unref?.();
+    kick();
+    return () => {
+      if (timer) clearInterval(timer);
+      if (soon) clearTimeout(soon);
+      watcher?.close();
     };
   }
 

@@ -12,7 +12,9 @@ import { INSTRUCTIONS, OneMcpServer } from '../../../src/mcp/server';
 const BUDGET = {
   instructions: 600,
   readOnly: { raw: 5_000, visible: 4_300 },
-  withWrites: { raw: 10_000, visible: 8_500 },
+  // +700 / +700 (v0.5.2): replace_in_files and the batch params (paths, to_folder, all, confirm), each saving
+  // many calls (100 moves or deletes in one; a replace across files instead of one replace_text per file).
+  withWrites: { raw: 10_700, visible: 9_200 },
 };
 
 const BASE = path.resolve(__dirname, '../../../.tmp/mcp/unit');

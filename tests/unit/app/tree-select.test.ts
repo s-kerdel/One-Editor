@@ -2,7 +2,7 @@
 // ui.treeMulti contract (it belongs to its focus: moving treeSelection elsewhere drops it).
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as ui from '../../../src/renderer/app/ui';
-import { toggleSel, rangeSel, pruneSel, topLevel, pick, selectAll, prune } from '../../../src/renderer/app/tree-select';
+import { toggleSel, rangeSel, pruneSel, topLevel, pick, selectAll, prune, treeKey, type TreeView } from '../../../src/renderer/app/tree-select';
 
 const order = ['notes', 'notes/a.md', 'notes/b.md', 'notes/c.md', 'README.md'];
 const one = (p: string): ui.TreeSel => ({ focus: p, anchor: p, paths: new Set([p]) });
@@ -99,5 +99,67 @@ describe('ui.treeMulti', () => {
     expect(ui.treeSelection.value).toBe(ui.treeMulti.value!.focus);
     prune([]);
     expect(ui.treeMulti.value).toBeNull();
+  });
+});
+
+// The tree's keys live in the lazy chunk too (FileTree hands them over; keys before it arrives are replayed).
+describe('treeKey', () => {
+  const node = (path: string, kind: 'file' | 'dir' = 'file') => ({ name: path.split('/').pop()!, path, kind, mtime: 0 });
+  const rows = (open: boolean): TreeView['rows'] => [
+    { node: node('notes', 'dir'), depth: 0, expanded: open },
+    ...(open ? ['notes/a.md', 'notes/b.md', 'notes/c.md'].map((p) => ({ node: node(p), depth: 1, expanded: false })) : []),
+    { node: node('README.md'), depth: 0, expanded: false },
+  ];
+  const toggled: Array<[string, boolean | undefined]> = [];
+  const view = (open = true): TreeView => ({ rows: rows(open), page: 2, toggle: (p, o) => void toggled.push([p, o]) });
+  const key = (k: string, mods: Partial<KeyboardEvent> = {}) => ({ key: k, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, ...mods }) as KeyboardEvent;
+  beforeEach(() => {
+    ui.setTreeSel(null, null);
+    toggled.length = 0;
+  });
+
+  it('arrows, Home / End and pages move the focused row; Shift extends a range from it', () => {
+    ui.treeSelection.value = 'notes/a.md';
+    expect(treeKey(key('ArrowDown'), view())).toBe(true);
+    expect(ui.treeSelection.value).toBe('notes/b.md');
+    treeKey(key('ArrowUp'), view());
+    expect(ui.treeSelection.value).toBe('notes/a.md');
+    treeKey(key('End'), view());
+    expect(ui.treeSelection.value).toBe('README.md');
+    treeKey(key('PageUp'), view());
+    expect(ui.treeSelection.value).toBe('notes/b.md');
+    treeKey(key('Home'), view());
+    expect(ui.treeSelection.value).toBe('notes');
+    treeKey(key('ArrowDown', { shiftKey: true }), view());
+    treeKey(key('ArrowDown', { shiftKey: true }), view());
+    expect(list(ui.treeMulti.value)).toEqual(['notes', 'notes/a.md', 'notes/b.md']);
+    expect(ui.treeSelection.value).toBe('notes/b.md');
+    // Esc goes back to the focused row alone.
+    treeKey(key('Escape'), view());
+    expect(ui.treeMulti.value).toBeNull();
+    expect(ui.treeSelection.value).toBe('notes/b.md');
+  });
+
+  it('right opens a folder (then steps in), left closes it or goes to the parent', () => {
+    ui.treeSelection.value = 'notes';
+    treeKey(key('ArrowRight'), view(false));
+    expect(toggled).toEqual([['notes', true]]);
+    treeKey(key('ArrowRight'), view(true));
+    expect(ui.treeSelection.value).toBe('notes/a.md');
+    treeKey(key('ArrowLeft'), view(true));
+    expect(ui.treeSelection.value).toBe('notes');
+    treeKey(key('ArrowLeft'), view(true));
+    expect(toggled).toEqual([['notes', true], ['notes', false]]);
+  });
+
+  it('select all (Ctrl / Cmd + A), type-ahead, and keys that are not the tree\'s', () => {
+    ui.treeSelection.value = 'notes/a.md';
+    const mod = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? '') ? { metaKey: true } : { ctrlKey: true };
+    treeKey(key('a', mod), view());
+    expect(ui.treeMulti.value?.paths.size).toBe(5);
+    treeKey(key('r'), view());
+    expect(ui.treeSelection.value).toBe('README.md');
+    expect(treeKey(key('Tab'), view())).toBe(false);
+    expect(treeKey(key('x', { altKey: true }), view())).toBe(false);
   });
 });

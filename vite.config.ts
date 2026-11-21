@@ -32,13 +32,36 @@ function devCsp(): Plugin {
   return { name: 'sec-edit-dev-csp', apply: 'serve', transformIndexHtml: (html) => html.replace(/app:\/\/sec-edit\/assets\/ app:\/\/sec-edit\/theme-boot\.js/, "'self'") };
 }
 
+/** The entry chunk and its static imports run before any `import()` can, so listing them in an import's
+ *  preload list (`__vite__mapDeps`) only costs bytes: the helper skips loaded files. Startup chunks paid
+ *  ~0.9 kB for those entries. The set is read from the bundle before Vite writes the lists (its import
+ *  analysis is a post plugin). */
+const startupChunks = new Set<string>();
+function trackStartupChunks(): Plugin {
+  return {
+    name: 'sec-edit-startup-chunks',
+    apply: 'build',
+    generateBundle(_, bundle) {
+      startupChunks.clear();
+      const queue = Object.values(bundle).filter((c) => c.type === 'chunk' && c.isEntry).map((c) => c.fileName);
+      while (queue.length) {
+        const f = queue.pop()!;
+        const c = bundle[f];
+        if (startupChunks.has(f) || c?.type !== 'chunk') continue;
+        startupChunks.add(f);
+        queue.push(...c.imports);
+      }
+    },
+  };
+}
+
 // Renderer build. base './' so Electron can load it via file://
 export default defineConfig({
   root: fileURLToPath(new URL('./src/renderer', import.meta.url)),
   base: './',
   resolve: { alias: { '@shared': fileURLToPath(new URL('./src/shared', import.meta.url)) } },
   esbuild: { jsx: 'automatic', jsxImportSource: 'preact' },
-  plugins: [pdfjsAssets(), devCsp()],
+  plugins: [pdfjsAssets(), devCsp(), trackStartupChunks()],
   worker: { format: 'es' },
   build: {
     outDir: process.env.SEC_EDIT_RENDERER_OUT || fileURLToPath(new URL('./dist/renderer', import.meta.url)),
@@ -46,7 +69,8 @@ export default defineConfig({
     target: 'chrome120',
     sourcemap: false,
     chunkSizeWarningLimit: 4000,
-    modulePreload: { polyfill: false },
+    // index.html keeps its modulepreload links (hostType 'html'); import() lists drop the startup chunks.
+    modulePreload: { polyfill: false, resolveDependencies: (_file, deps, { hostType }) => (hostType === 'js' ? deps.filter((d) => !startupChunks.has(d)) : deps) },
     // .vite/manifest.json: the browser-mode server looks up platform/web.ts's chunk in it (index.html runs it first).
     manifest: true,
     rolldownOptions: {

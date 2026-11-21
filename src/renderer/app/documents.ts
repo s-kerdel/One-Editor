@@ -160,7 +160,7 @@ export async function openFile(path: string, reveal?: RevealTarget) {
 // ---- save / close: the code is in ./doc-save (loaded once idle after boot, or on first use) ----
 type SaveOpts = { force?: boolean; auto?: boolean; retry?: number };
 const actions = lazy<typeof import('./doc-save')>(() => import('./doc-save'));
-const save = (path: string, opts?: SaveOpts): Promise<boolean> => actions.load().then((m) => m.save(path, opts));
+export const save = (path: string, opts?: SaveOpts): Promise<boolean> => actions.load().then((m) => m.save(path, opts));
 const saveFile = (path?: string): Promise<boolean> => actions.load().then((m) => m.saveFile(path));
 export const saveAll = (): Promise<boolean> => actions.load().then((m) => m.saveAll());
 const confirmUnsaved = (paths: string[]): Promise<boolean> => actions.load().then((m) => m.confirmUnsaved(paths));
@@ -179,11 +179,6 @@ export function clearConflict(path: string) {
   const next = new Map(ui.conflicts.value);
   next.delete(path);
   ui.conflicts.value = next;
-}
-
-/** Conflict resolution: overwrite disk with the editor version. */
-export function keepMine(path: string) {
-  return save(path, { force: true });
 }
 
 // ---- close ----------------------------------------------------------------------------------
@@ -210,17 +205,6 @@ export function noteEdited(path: string, content: string) {
     clearTimeout(autosaveTimers.get(path));
     autosaveTimers.set(path, setTimeout(() => void save(path, { auto: true }), Math.max(150, app.settings.value.autosaveDelayMs)));
   }
-}
-
-/** Changes a doc's line endings (status bar toggle); saved on the next save. */
-export function setDocEol(path: string, eol: 'lf' | 'crlf') {
-  const doc = app.docs.get(path);
-  if (!doc || doc.eol === eol) return;
-  doc.eol = eol;
-  doc.saved = `\u0000eol-changed\u0000${doc.saved}`; // forces dirty until saved
-  doc.dirty.value = true;
-  ui.docMetaVersion.value++;
-  if (app.settings.value.autosave) void save(path, { auto: true });
 }
 
 // ---- external changes -----------------------------------------------------------------------

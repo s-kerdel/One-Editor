@@ -23,12 +23,12 @@ browser mode served by a local Node server. Both share one renderer.
 | `src/renderer/terminal/`, `src/main/terminal*.ts`, `src/shared/terminal.ts` (integrated terminal + Claude glue; shell's `Layout` hosts the bottom panel while `panelOpen`) | **terminal** |
 | `src/backend/git*.ts`, `src/shared/git.ts`, `src/renderer/git/` (status, tree marks, change bars, diff view, Source control pane; one `git(op, …)` RPC; the startup stub `git/install.ts` fills `gitUi` slots that FileTree / StatusBar / Popups / the editor read). **When** git runs is decided only by `backend/git-monitor.ts` (debounce, single-flight, adaptive interval, paused while hidden, multi-repo); `backend/git-wsl.ts` runs git inside WSL for `\\wsl.localhost` roots; every spawn is logged via `backend/git-activity.ts`. Read paths never write the repository; the one exception is the monitor's opt-out index stat-cache refresh (`GitService.refreshIndex`: hooks off, skipped while `index.lock` exists, never killed). Don't add renderer-side status polling: report triggers instead (`git('nudge')`, `git('visibility')`). Commit selection **is the index** (pane boxes = `stage` / `unstage`, batched in `git/selection.ts`; no app-side selection state); parts of a file = `git('hunks', path, from?)` (blocks composed from HEAD→index and index→worktree `-U0` diffs, `backend/git-hunks.ts`) and `git('stageHunks', path, picks, from?)` (`git apply --cached --unidiff-zero` with patches built from git's own diff bytes; never touches the working tree). **One way into a file's diff:** `openFileDiff(store, path, row?)` (`git/diff-open.tsx` → `openStaging` in the lazy `git/stage.ts`) serves "Diff with last commit" (menus, palette, status bar) **and** a click on a Source control row, so both show the same commit boxes; a new entry point calls it, never `openDiffWithHead` / `showDiff` directly (those are the plain view underneath). The box style is `git/check.css`, imported by the pane and the diff view (separate chunks). **Editing in the diff view** (`git/diff-edit.ts`, lazy diff chunk): git diffs only on the right side, and only when it IS the workspace file (`editableSide`: HEAD / index → working copy; never HEAD, History). **Compare** (`compareTargets`): either side that IS a workspace file (a whole file shown exactly as its document / the file on disk is now) takes typed text and blocks from the other side ("apply to the other side", both directions; `DiffViewProps.apply` + `basePath` for the left file); the clipboard, a selection and a remembered text are sources only — never render a control pointing at them; "Ignore whitespace" switches the controls off (`off` = the tooltip). The left side of a unified compare has no editor: its changes are `updateOriginalDoc` effects forwarded to the file, undone through `SideHistory` in turn with the editor's own history. It is not a second buffer: edits are forwarded to the file's open document (`app.editor.applyChanges`; no tab yet → `app.openFile` on the first edit), document changes flow back (`doc:changed`), so dirty state, `Ctrl+S`, autosave, EOL and disk conflicts are the editor's. Blocks of an edited diff are re-read from git after each `doc:saved`; a block ticked on unsaved edits saves first (`saveThenPick`). `StagingProps.toggleHunk(index, line?)` + `work` (the text the blocks refer to). **Trust gate** (`backend/git-trust.ts`, enforced in `BackendService.git` before a `GitMonitor` / `GitService` exists): a folder runs **no git at all** — no status, marks, diff, actions, WSL included — until the user says Trust in the Source control panel (`git('trust')` / `git('untrust')`; `status` answers `{ ok: false, reason: 'untrusted', repoLikely? }`, reads the UI makes by itself answer empty, everything else `EACCES`). Remembered per folder (real path, the folder's own case rule) in `<app data>/git-trust.json`, shared by desktop and browser-mode servers; recent folders migrate once. Never start git for the open folder outside `BackendService.git`. Read paths switch off **every** configured filter driver (all config scopes; only canonical Git LFS, and only when git-lfs exists). Tests trust their repos with `trustRepo()` (`tests/e2e/git-helpers.ts`) or `svc.git('trust')` | **git** |
 | `src/renderer/variables/`, `src/main/vault*.ts`, `src/shared/vault.ts` ({{variables}}, environments / targets, secrets vault, smart paste; the editor chunk holds only `variables/cm.ts`, the rest is the lazy `variables` chunk; `variables/slot.ts` is the status-bar slot) | **variables** |
-| `src/main/web-server*.ts`, `src/shared/web-server.ts`, `src/renderer/webserver/` ("Start web server": browser mode for the open folder as a child process, desktop only; `webserver/slot.ts` is the status-bar slot, the rest is the lazy `web-server-ui` chunk; Settings → Browser mode) | **shell** |
-| `src/main/update-check*.ts`, `src/shared/update-check.ts`, `src/renderer/updates/`, `scripts/shipped-deps.mjs` ("Security updates": opt-in check for a newer Electron patch / end of support / known vulnerabilities in what the build ships, desktop only. Pure rules in `shared/update-check.ts`; requests, cache `<app data>/update-check.json` (findings + summary of what was checked) and the weekly rule in `main/update-check.ts`; `updates/slot.ts` is the status-bar slot, the rest (incl. `updates/summary.tsx`, the Settings summary) is the lazy `updates-ui` chunk loaded after the idle Popups chunk; Settings → Security updates. `build-node.mjs` writes `dist/main/shipped-deps.json` from the lockfile: names + versions of every non-dev package) | **shell** |
+| `src/main/web-server*.ts`, `src/shared/web-server.ts`, `src/renderer/webserver/` ("Start web server": browser mode for the open folder as a child process, desktop only; `webserver/slot.ts` is the status-bar corner slot, the rest is the lazy `web-server-ui` chunk, which also carries the corner's MCP icon (`mcp/indicator.tsx`, re-exported: no extra chunk); Settings → Browser mode) | **shell** |
+| `src/main/update-check*.ts`, `src/shared/update-check.ts`, `src/renderer/updates/`, `scripts/shipped-deps.mjs` ("Security updates": opt-in check for a newer Electron patch / end of support / known vulnerabilities in what the build ships, desktop only. Pure rules in `shared/update-check.ts`; requests, cache `<app data>/update-check.json` (findings + summary of what was checked) and the weekly rule in `main/update-check.ts`; `updates/slot.ts` is the status-bar corner slot, the rest (incl. `updates/summary.tsx`, the Settings summary) is the lazy `updates-ui` chunk loaded after the idle Popups chunk; Settings → Security updates. `build-node.mjs` writes `dist/main/shipped-deps.json` from the lockfile: names + versions of every non-dev package) | **shell** |
 | `src/renderer/whitespace/` (trailing whitespace: paste trim via CodeMirror's `clipboardInputFilter`, trim on save through format's `beforeSave` hook in `src/format/install.ts`, the `editor.trimWhitespace` command; editor chunk only) | **variables** |
 | `src/renderer/pdf/` (PDF viewer: lazy chunk `PdfView` on pdf.js's `PDFViewer`; `engine.ts` is the only place documents are opened — security options live there; `model.ts` pure helpers; pdf.js data assets copied by `vite.config.ts` → `pdfjs/`; the worker gets `PDF_WORKER_CSP` from `src/shared/pdf.ts` in `main.ts` / `server.ts`) | **pdf** |
-| `src/mcp/`, `src/main/mcp*.ts`, `src/shared/mcp.ts`, `src/renderer/mcp/`, `build/windows/One MCP.cmd`, `build/linux/one-mcp.sh` (MCP server: a separate Node program, `dist/mcp/cli.mjs`, that MCP clients — LM Studio, Codex CLI, Claude — start over **stdio** with the app's executable in Node mode; one lazy `Workspace` + on-demand search / link indexes per shared folder; main owns `<app data>/mcp.json`; Settings → MCP server is the lazy `mcp-ui` chunk, zero startup bytes. `src/knowledge/sections.ts` (document map for `read_file` parts / `get_outline`) stays **knowledge**'s) | **mcp** |
-| `src/renderer/nav/`, `src/shared/nav.ts` (Go back / forward: `nav/install.ts` is the startup stub — two key bindings, mouse side buttons, the buttons' state `navCan`, ~0.4 kB gzip; `nav/buttons.tsx` = the tab strip's ← → (startup; with the stub's part ~0.4 kB gzip; shell's `Layout` renders them; → is the ← glyph mirrored in CSS); `nav/impl.ts` = recorder + restore + recent-places list, lazy on idle; `nav/places.ts` = list labels, lazy on first list; `nav/history.ts` = the pure stack) | **nav** |
+| `src/mcp/`, `src/main/mcp*.ts`, `src/shared/mcp.ts`, `src/renderer/mcp/`, `build/windows/One MCP.cmd`, `build/linux/one-mcp.sh` (MCP server: a separate Node program, `dist/mcp/cli.mjs`, that MCP clients — LM Studio, Codex CLI, Claude — start over **stdio** with the app's executable in Node mode; one lazy `Workspace` + on-demand search / link indexes per shared folder; main owns `<app data>/mcp.json`; Settings → MCP server is the lazy `mcp-ui` chunk, zero startup bytes; the status-bar corner icon is `mcp/indicator.tsx` (slot `mcp/slot.ts`) in the idle web-server-ui chunk. `src/knowledge/sections.ts` (document map for `read_file` parts / `get_outline`) stays **knowledge**'s) | **mcp** |
+| `src/renderer/nav/`, `src/shared/nav.ts` (Go back / forward: `nav/install.ts` is the startup stub — two key bindings, mouse side buttons, the buttons' state `navCan`, ~0.4 kB gzip; `nav/buttons.tsx` = the status bar's ← → (startup; with the stub's part ~0.4 kB gzip; shell's `StatusBar` renders them; → is the ← glyph mirrored in CSS); `nav/impl.ts` = recorder + restore + recent-places list, lazy on idle; `nav/places.ts` = list labels, lazy on first list; `nav/history.ts` = the pure stack) | **nav** |
 | `src/renderer/bookmarks/`, `src/shared/bookmarks.ts` (Bookmarks panel: one lazy chunk `bookmarks/Panel.tsx` = UI + its store `store.ts` (re-exported) + `bookmarks.css`; startup = the panel registration and its `Mod-Alt-k` command in `app/shell.ts`, the glyph in `icons.tsx`. Storage = `BackendService.bookmarks(op?)` → `<app data>/bookmarks/<folder id>.json`, see Extension points) | **shell** |
 | `tests/unit/<area>/`, `tests/e2e/<area>*.spec.ts` | the area's owner |
 
@@ -95,12 +95,15 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   arrives as a DOM mouse event **and** a BrowserWindow `app-command` (main → `app:navigate` → `backend.onNavCommand`).
   The history is per window (sessionStorage `sec-edit-nav:<root>`, 50 entries), not in the session file.
   E2E handle: `window.__secEditNav` = `{ history, go }`.
-  **Buttons** (`nav/buttons.tsx`, setting `nav.buttons`, default on): `Layout` puts them first in `.se-topline` in every
-  layout (after `ShelfReveal` when the shelf is hidden; classic; zen). Greyed out = `aria-disabled` (stays focusable),
+  **Buttons** (`nav/buttons.tsx`, setting `nav.buttons`, default on): `StatusBar` renders them **first in `.se-status`**
+  (`← → │ folder · crumbs`; both sidebar styles), so they follow the status bar: zen hides them unless
+  `zen.keepStatusBar` (keys + side buttons still work). The `│` is the group's `::after` (goes with the setting); the
+  buttons share the `.se-status-item` / `.se-status-btn` rules (app.css). **The tab strip has no nav cell** (it had
+  one in v0.5.1): `ShelfReveal` is its own ruled cell again — don't reserve strip space for them. Greyed out = `aria-disabled` (stays focusable),
   from the stub's `navCan` signals, which `impl.ts` `sync()`s only when the stack changes (never per keystroke).
   Right-click / long press / `Shift+F10` → `openPlaces` → `history.places(dir)` labelled by `describePlace`, in the
-  shared context menu; a pick is `jump(entry)` (`history.goTo`, the places in between stay). The cell is `.se-no-drag` as a
-  whole: with the integrated frame its padding would otherwise cover the sidebar sash's edge.
+  shared context menu, **opened upwards** (`clientY: r.top - 4`: the menu host flips it to end over the button, like
+  the status bar's folder menu); a pick is `jump(entry)` (`history.goTo`, the places in between stay).
 - Terminal (desktop only): `app.runInTerminal?.(code, { lang })` pastes a shell code block into the terminal
   (never presses Enter by default) — feature-detect it, it is unset in the browser. `isRunnableFence(lang)` from
   `src/renderer/terminal/run.ts` (dependency-free) says which fences get a "Run in terminal" button.
@@ -124,6 +127,17 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   refuses `openWorkspace` / `resolvePath` outside its folder, lists no recents, no process list, no `terminal.*` /
   `webserver.*` settings writes. The renderer chunk loads after the idle Popups chunk (zero startup bytes but the slot);
   browser mode has no bridge, so neither commands nor the Settings section (`SectionDef.desktopOnly`) exist there.
+- **Status bar layout** (shell, `app/StatusBar.tsx`): `← → │ folder · crumbs · save · git · vars ··· activity ·
+  [Ln/Col · words · EOL · encoding · language · mode] │ MCP · :port · ⛨ n`. The far-right **corner** (`StatusCorner`,
+  `.se-status-corner`, its `│` = `::before`) holds what is *on*: MCP server (`mcp/slot.ts`), web server
+  (`webserver/slot.ts`), security findings (`updates/slot.ts`, always last). Normally it is empty and not rendered.
+  **Corner slot pattern:** a startup `signal<ComponentType | null>` in `<area>/slot.ts` (just the signal); the lazy
+  chunk sets it **only while its icon shows** and back to `null` otherwise (an `effect` on its status), so the corner
+  and its `│` go when the last icon goes — never render `null` from a set slot. A new indicator = one slot + one
+  fixed position in `StatusCorner` (startup cost ~40 B). Its component rides in an existing idle, desktop-only chunk
+  (re-export it, like `installMcpIndicator` from `web-server-ui`; Popups calls it) rather than a new chunk, and
+  imports only **types** from a shared module another lazy chunk uses (a value import splits that module out).
+  Items after the spacer move left when the corner appears: keep corner icons rare (things that are on).
 - Browser-only renderer code lives in **`src/renderer/platform/web.ts`** (token, launch code, RPC over fetch, SSE,
   media HMAC via `platform/hmac.ts`): its own chunk, which the desktop never fetches or evaluates (perf.spec checks the
   startup chunks for its markers). Never import it statically; `platform/index.ts` keeps only sync shims
@@ -182,7 +196,7 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   (measured with bookmarks):** a lazy chunk must not statically import `app/Shelf.tsx` (only classic.tsx does,
   grandfathered): the Bookmarks panel doing so split commands / fileops / settings into three extra startup chunks
   (+2.5 kB gzip). And every lazy chunk a startup module's `import()` reaches, **with its own static deps**, is a
-  file name in the entry's preload table and an index on every such call site (`import('./Popups')` has 11): keep a
+  file name in the entry's preload table and an index on every such call site (see rule 2 for call sites): keep a
   feature in **one** chunk (the bookmarks store is re-exported by `bookmarks/Panel.tsx`, the sidebar-menu writes
   live in the Settings chunk) instead of a small shared one (~20–30 B gzip each). **Contract:** a panel that opens *itself* (not on a
   user action: auto-open on an event, a restored flag) must not while `ui.zen.value` is set; a user action may open
@@ -198,8 +212,10 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   **`ui.treeMulti`** `{ focus, anchor, paths }`, valid only while `focus === treeSelection` (a subscription in
   `ui.ts` clears it otherwise; the focus may be unselected after a Ctrl+click). Read with `ui.isTreeSelected(p)`,
   write with `ui.setTreeSel(sel | null, focus)`. The steps (toggle, range, prune of vanished rows, select all,
-  open several, `topLevel()`) are the lazy `app/tree-select.ts`: FileTree `import()`s it, so startup pays only for
-  drawing (`.selected` / `.focused`, `.se-tree.multi`, the "N selected" foot). Actions on several rows:
+  open several, `topLevel()`) and the tree's keys (`treeKey(e, view)`) are the lazy `app/tree-select.ts`: FileTree
+  `import()`s it on the tree's focus (the idle Popups chunk carries it too), so startup pays only for drawing
+  (`.selected` / `.focused`, `.se-tree.multi`, the "N selected" foot). Keys pressed before it is in are claimed and
+  replayed in order, a frame apart (rows re-render between): a new tree key goes into `treeKey`, not FileTree. Actions on several rows:
   `rowMenu(node, selection)` → `selectionMenu` in Popups (only multi-item actions; one-item ones are left out);
   `deletePaths` / `moveInto` take lists and reduce them with `topLevel()` themselves. A new multi-item tree action
   goes into `selectionMenu`; git adds its own through the optional `GitUi.menuMany(paths)`.
@@ -283,6 +299,15 @@ there only if it must beat the shell.
    **Case sensitivity is per folder, never per OS**: read `WorkspaceInfo.caseSensitive` (renderer) / `Workspace.foldsCase` (backend). A `\\wsl.localhost` root on Windows is case-sensitive; never fold case because of `process.platform` or `backend.os`.
 2. **Launch speed is a feature.** Nothing heavy at startup: Shiki, Prettier, KaTeX, Mermaid, language grammars → `import()` lazily on first use.
    Workers for CPU work (search index, formatting). Don't block first paint.
+   **Startup bundle** (`node tests/perf/bundle-report.mjs <renderer dir>`; target < 100 kB, perf.spec): a module is
+   never split by export, so a function only a lazy chunk calls still ships at startup when it lives in a startup
+   module. Put it in that chunk, or in a module only that chunk imports (`app/file-rules.ts` → Popups; `setDocEol` /
+   `cycleContentWidth` live in doc-chrome, `openFolderInteractive` in shell-commands). Every `import()` **call site**
+   in a startup chunk repeats the target's preload list: startup modules load Popups only through `popups()`
+   (`app/fileops.ts`; 11 sites were ~0.9 kB), do the same for any lazy chunk several startup modules import.
+   `vite.config.ts` (`trackStartupChunks` + `modulePreload.resolveDependencies`) drops the startup chunks from every
+   `import()` preload list: they are loaded before any import runs (~0.9 kB of no-op entries). index.html's own
+   modulepreload links are untouched.
 3. **Styling**: use CSS variables from `src/renderer/styles/app.css` (`--bg`, `--text`, `--accent`, `--code-bg`, …) so dark/light themes work.
    Corners: never hard-code `border-radius` — use `--radius-sm` / `--radius` / `--radius-lg` / `--radius-xl` (and `--radius-pill` for pills);
    "square" corner style flattens them. Text column: `--content-width`, `--editor-line-height`. Accent tokens are user-tunable: never hard-code the blue.
@@ -339,6 +364,14 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
   only; aliases in sorted path order, so they do not depend on the click order), allowing writes, code files in a
   folder, undo copies off, creating / regenerating / revoking a token; narrowing needs none. Grants never live in settings.json: `BackendService.saveSettings`
   drops every `mcp.*` key but the two result limits (`isMainOwnedKey`), and the server reads none from there.
+  **Live files ("MCP active"):** a running stdio server keeps `<app data>/mcp-live/<pid>-<random>.json` (`src/mcp/live.ts`)
+  holding only `{ v, pid, client (its token's name), started, lastCall }` — never a path, file name, query, text or
+  token. Made after the token check, `lastCall` written at most every 5 s (a trailing write keeps the newest), temp +
+  rename, removed on exit; an unwritable app data folder is skipped silently; nothing on stdout. Main
+  (`McpService.watchSessions`, started 3 s after launch: `fs.watch` + a 15 s poll) lists them as
+  `McpStatus.sessions` (`{ client, started, lastCall, idle }`, idle = no call for 2 min) and pushes changes over the
+  existing `onChange`; files of processes that are gone (`process.kill(pid, 0)`, EPERM = alive) are removed, also at
+  start; a file whose name and pid disagree is ignored. A reused pid is accepted (rare). Renderer: only the status-bar corner icon (`mcp/indicator.tsx`), which listens to `onChange` (no polling): shown while `enabled`, accent while `sessions` has entries, a 1 s pulse when the newest `lastCall` grows; click = Settings → MCP server at Recent activity (`revealActivity()` in mcp-ui).
   **Residual:** `excludeGlobs` is still a page setting, so a page can narrow the exclusions without a dialog
   (main-owned MCP excludes are a later item).
   **Access tokens** (`src/mcp/tokens.ts`, parsing in `shared/mcp.ts`; transport-neutral, a future HTTPS transport takes
@@ -411,22 +444,31 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
   (`src/shared/md-block-rules.ts`: frontmatter, `%%`, `$$`, `\pagebreak`; the preview registers the same module, so a
   new preview block rule goes there). Residual (later item: a One-side warning on Run for AI-written blocks): a new
   block without placeholders may still use a shell variable a frozen secret block exported. No variables file between note and share root → every non-built-in name is secret. Moves check
-  both places; the server never resolves a value. **Folder deletes ask the user through MCP, never an OS dialog**
-  (`delete` on a folder, `tools/write.ts` `deleteFolder`, `confirm.ts`): the question is built by the server only (a
-  sanitized folder-relative path — no control / bidi / zero-width characters, quotes replaced, parts cut at 40, the
-  whole at 120 — counts, at most 3 hidden names; no other argument text). Legacy clients that declared form
-  elicitation (2025-06-18+) get an `elicitation/create` request (our ids `one-ask-N`, 120 s, then
-  `notifications/cancelled`); 2026-07-28 clients that declared it get `resultType: "input_required"` (MRTR) with an
-  HMAC-sealed, expiring, single-use `requestState` bound to tool + folder + path + a fingerprint of every entry; a
-  changed folder is asked again. Others: two steps — a summary plus a one-time code (random, 5 min, bound to the same,
-  spent on use). Only `accept` with `confirm: true` deletes; the folder is surveyed again first. Then one trash call
-  (`noPermanent`: Windows `AllDialogs` via env so the shell itself asks before deleting for good; macOS only on the home
-  volume; Linux same-device XDG trash) — no bin → refused. No journal copy (hidden contents are never read): the audit
-  row is `delete (folder)`, note "restore from the Recycle Bin", no Revert. One quota unit, after the OK; no size cap
-  but a 1,000,000-entry survey limit. Folder `move` takes hidden items along (walked, never read); refused: links /
-  special files inside, any entry whose visibility would change (excluded by a rooted rule → visible, or visible →
-  hidden), hidden files when the nearest variables file differs; caps 10,000 visible files (link rewriting), 200,000
-  entries. Binary files are never
+  both places; the server never resolves a value. **Sweeping or unrevertable changes ask the user through MCP, never an OS dialog**
+  (`tools/write.ts` `askUser`, `confirm.ts`): a folder delete (alone or in a batch), a batch delete of more than
+  `MCP_CONFIRM_OVER` (10, `shared/mcp.ts`) items, a `replace_in_files` over more than 10 files; one question per call.
+  Everything else is unconfirmed (Revert covers it; batch moves lose nothing). The question is built by the server only:
+  sanitized folder-relative paths (no control / bidi / zero-width characters, quotes replaced, parts cut at 40, the
+  whole at 120), counts, the size (lstat sums, never contents), at most 3 hidden names, find / replace text cut at 60;
+  no other argument text. Legacy clients that declared form elicitation (2025-06-18+) get `elicitation/create` (our
+  ids `one-ask-N`, 120 s, then `notifications/cancelled`); 2026-07-28 clients that declared it get `resultType:
+  "input_required"` (MRTR) with an HMAC-sealed, expiring, single-use `requestState`; others two steps (a summary plus a
+  one-time code: random, 5 min, spent on use). Answer and code are bound to the exact operation (`target`: tool, folder,
+  path set or find + replace + scope + case) and a fingerprint of the contents (every entry / file stamp): anything else
+  or changed contents asks again. Only `accept` with `confirm: true` proceeds, after a re-survey. Folder trash: one call
+  per folder, no journal copy (hidden contents are never read): audit row `delete (folder)`, note "restore from the
+  Recycle Bin", no Revert. **Windows: by the user's choice no Recycle-Bin pre-check and no Windows prompt
+  (`OnlyErrorDialogs`): a bin that is off or too small deletes the folder permanently, and the question says so**;
+  refused off fixed local drives (exit 3) and for a reparse point (exit 4). macOS only on the home volume; Linux the
+  same-device XDG trash. Batches (`paths`, max 100; `replace_in_files`, max 200 changed files) run item by item past
+  failures, one answer line per item, one journal group (one Revert; folder entries have none), one audit row with
+  `items`; the quota counts each changed item. `replace_in_files`: `find` is literal (escaped, never a regex), `query`
+  takes file filters only (`in:` refused) via the search parser in `noRegex` mode; visible, type-allowed text files;
+  each file through `overwrite` (stamp guard + placeholder rules: files that would touch a secret line are skipped and
+  named). `replace_text all` refuses the whole call when any match touches a secret line or its neighbour (names the
+  lines). Folder `move` takes hidden items along (walked, never read); refused: links / special files inside, any entry
+  whose visibility would change, hidden files when the nearest variables file differs; caps 10,000 visible files,
+  200,000 entries. Binary files are never
   written, moved or deleted; deletes go to the Recycle Bin only (`ETRASH`, nothing deleted, when there is none); a file delete always
   keeps a journal copy, even with undo off (or is refused); folder deletes and moves: see above. **Journal**
   (`src/mcp/journal.ts`, `<app data>/mcp-history/<group>/`, mcp.json `undo { on, days }`, 100 MB cap, 64 MB per

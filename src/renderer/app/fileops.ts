@@ -7,19 +7,7 @@ import * as ui from './ui';
 import { persistSession } from './documents';
 import { ancestors, findNode, insertNode } from './tree-model';
 
-const WIN_RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i;
-
-/** Returns an error message, or null if `name` is a valid single path segment on every OS we support. */
-export function validateName(name: string): string | null {
-  const n = name.trim();
-  if (!n) return 'Name cannot be empty';
-  if (n === '.' || n === '..') return 'Invalid name';
-  if (/[\\/]/.test(n)) return 'Name cannot contain / or \\';
-  if (/[<>:"|?*\u0000-\u001f]/.test(n)) return 'Name cannot contain < > : " | ? *';
-  if (/[. ]$/.test(n)) return 'Name cannot end with a dot or space';
-  if (WIN_RESERVED.test(n)) return `"${n}" is reserved on Windows`;
-  return null;
-}
+// Name rules (validateName, trashName) and tree moves are in ./file-rules: only Popups' actions use them.
 
 export const errText = (err: unknown) => (err instanceof RpcError && err.code === 'EEXIST' ? 'A file or folder with that name already exists' : (err as Error).message);
 
@@ -97,19 +85,18 @@ export function startCreate(kind: 'file' | 'dir', parent = currentFolder()) {
   ui.creating.value = { parent, kind };
 }
 
+/** The lazy Popups chunk (dialogs, menus, rare file actions). Startup modules load it through this one
+ *  `import()`: each call site repeats the chunk's preload list in the entry chunk (11 sites were ~0.9 kB). */
+export const popups = () => import('./Popups');
 // Rare, dialog-driven actions live in the lazily loaded ./Popups chunk (kept out of the startup path).
-export const deletePaths = (paths: string[]): Promise<void> => import('./Popups').then((m) => m.deletePathsNow(paths));
-export const duplicate = (path: string): Promise<void> => import('./Popups').then((m) => m.duplicateNow(path));
+export const deletePaths = (paths: string[]): Promise<void> => popups().then((m) => m.deletePathsNow(paths));
+export const duplicate = (path: string): Promise<void> => popups().then((m) => m.duplicateNow(path));
 // Committing an inline create / rename and drag-moving files: same chunk (the inline input lives there too).
 /** Creates the file/folder typed into the tree's inline input. Returns an error message for the input, or null. */
-export const commitCreate = (parent: string, kind: 'file' | 'dir', rawName: string): Promise<string | null> => import('./Popups').then((m) => m.commitCreateNow(parent, kind, rawName));
+export const commitCreate = (parent: string, kind: 'file' | 'dir', rawName: string): Promise<string | null> => popups().then((m) => m.commitCreateNow(parent, kind, rawName));
 /** Renames `from` to a new name in the same folder. Returns an error message for the inline editor. */
-export const renameTo = (from: string, rawName: string): Promise<string | null> => import('./Popups').then((m) => m.renameToNow(from, rawName));
-export const moveInto = (paths: string[], targetDir: string): Promise<void> => import('./Popups').then((m) => m.moveIntoNow(paths, targetDir));
-
-export function trashName() {
-  return app.backend?.os === 'win32' ? 'Recycle Bin' : 'Trash';
-}
+export const renameTo = (from: string, rawName: string): Promise<string | null> => popups().then((m) => m.renameToNow(from, rawName));
+export const moveInto = (paths: string[], targetDir: string): Promise<void> => popups().then((m) => m.moveIntoNow(paths, targetDir));
 
 export function revealLabel() {
   return app.backend?.os === 'win32' ? 'Reveal in File Explorer' : app.backend?.os === 'darwin' ? 'Reveal in Finder' : 'Open containing folder';
@@ -148,4 +135,4 @@ export function revealInTree(path: string) {
 }
 
 /** Opens absolute paths handed to the app (CLI args, second instance, drag & drop). Implemented in the lazy Popups chunk. */
-export const openAbsolutePaths = (paths: string[]): Promise<void> => import('./Popups').then((m) => m.openAbsolutePathsNow(paths));
+export const openAbsolutePaths = (paths: string[]): Promise<void> => popups().then((m) => m.openAbsolutePathsNow(paths));

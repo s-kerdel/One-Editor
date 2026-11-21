@@ -104,6 +104,33 @@ test('keyboard: Shift + arrows extend, Esc goes back to the focused row, Ctrl + 
   await expect(page.locator('.cm-content')).toContainText('Daily notes');
 });
 
+test('keys pressed before the tree keyboard chunk is in are held, then applied in order on the re-rendered rows', async ({ page, ws }) => {
+  // The tree's keys + selection steps are the lazy ./tree-select (the idle Popups chunk imports it too): hold it back.
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let held = 0;
+  await page.route(/\/assets\/tree-select-[^/]+\.js$/, async (route) => {
+    held++;
+    await gate;
+    await route.continue();
+  });
+  await ws.open(page);
+  await row(page, 'README.md').click(); // rows: code, deep, notes (closed), README.md
+  await expect.poll(() => held, { message: 'the tree focus fetches the chunk' }).toBeGreaterThan(0);
+  await page.keyboard.press('ArrowUp'); // → notes
+  await page.keyboard.press('ArrowRight'); // opens notes
+  await page.keyboard.press('ArrowDown'); // → its first child: only right if the rows re-rendered in between
+  await page.keyboard.press('Shift+ArrowDown');
+  expect(await selected(page), 'nothing applied while the chunk is held').toEqual(['README.md']);
+  await expect(page.locator('.se-tree')).toBeFocused();
+  release();
+  await expect.poll(() => selected(page)).toEqual(['notes/Daily notes.md', 'notes/kubernetes.md']);
+  await expect(row(page, 'notes/kubernetes.md')).toHaveClass(/focused/);
+  // Once in, keys apply at once again.
+  await page.keyboard.press('ArrowDown');
+  await expect.poll(() => selected(page)).toEqual(['notes/windows-crlf.md']);
+});
+
 test('delete: one confirm with the count and names, folders take selected children along', async ({ page, ws }) => {
   await boot(page, ws);
   await row(page, 'code').click(); // open code/ too

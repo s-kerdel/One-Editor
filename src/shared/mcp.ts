@@ -38,6 +38,48 @@ export const MCP_CHANNELS = {
 export const MCP_CONFIG_FILE = 'mcp.json';
 /** One JSON line per tool call (never content, never a query): written by the server, read by Settings. */
 export const MCP_AUDIT_FILE = 'mcp-audit.jsonl';
+/** One small file per running stdio server (`<pid>-<random>.json`): main shows "MCP active" from these. */
+export const MCP_LIVE_DIR = 'mcp-live';
+/** A session with no call for this long is still live (its process runs), but idle. */
+export const MCP_IDLE_MS = 2 * 60_000;
+
+/**
+ * A live file's contents: the process, the app it serves (its access token's name), when it started and when
+ * it last answered a call. Never a path, a file name, a query, text or a token.
+ */
+export interface McpLiveFile {
+  v: 1;
+  pid: number;
+  client: string;
+  started: number;
+  lastCall: number | null;
+}
+
+/** A running server as main reports it (no pid: the page has no use for it). */
+export interface McpSession {
+  client: string;
+  started: number;
+  lastCall: number | null;
+  /** No call for MCP_IDLE_MS (the process is still there). */
+  idle: boolean;
+}
+
+/** A live file → its contents, or null (written by another process: every field is checked). */
+export function parseLiveFile(text: string): McpLiveFile | null {
+  let o: unknown;
+  try {
+    o = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!o || typeof o !== 'object') return null;
+  const r = o as Record<string, unknown>;
+  const time = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  if (r.v !== 1 || typeof r.pid !== 'number' || !Number.isInteger(r.pid) || r.pid <= 0 || !time(r.started)) return null;
+  if (r.lastCall !== null && !time(r.lastCall)) return null;
+  const client = typeof r.client === 'string' ? r.client.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60) : '';
+  return { v: 1, pid: r.pid, client: client || 'unknown', started: r.started as number, lastCall: (r.lastCall as number | null) ?? null };
+}
 
 /** read = the read tools only. write = write tools too (stored now; the write tools ship later). */
 export type McpMode = 'read' | 'write';
@@ -124,6 +166,10 @@ export const UNDO_DAYS = { min: 1, max: 365, def: 30 } as const;
 export const EMPTY_MCP_CONFIG: McpConfig = { version: 1, enabled: false, folders: [], undo: { on: true, days: UNDO_DAYS.def } };
 /** Grants live in mcp.json (main, behind native dialogs). A page may set only the result limits under `mcp.`;
  *  every other `mcp.*` key (mcp.allowCode, mcp.journal… of earlier builds) is refused (deny by default). */
+/** Sweeping MCP actions ask the user first (folder deletes always): a batch delete of more items than this, a
+ *  replace_in_files over more files. Revert covers everything else; this is what it cannot, or what reaches wide. */
+export const MCP_CONFIRM_OVER = 10;
+
 export const isMainOwnedKey = (k: string) => k.startsWith('mcp.') && k !== 'mcp.maxReadKB' && k !== 'mcp.maxResults';
 export const MAX_MCP_FOLDERS = 32;
 export const ALIAS_RE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
@@ -226,11 +272,13 @@ export interface McpStatus {
   tokens: Array<{ id: string; name: string; hint: string; created: number; lastUsed: number | null; copyable: boolean }>;
   /** keyring = "Copy setup" works again later; once = no OS keyring: the setup is copied when the token is made. */
   tokenStore: 'keyring' | 'once';
+  /** Running stdio servers (status bar "MCP active"), oldest first. */
+  sessions: McpSession[];
 }
 
 export type McpReply<T> = { ok: true; result: T } | { ok: false; error: { code: string; message: string } };
 
-export const NO_MCP_STATUS: McpStatus = { enabled: false, folders: [], launch: null, platform: '', writes: MCP_WRITES_ENABLED, undo: { on: true, days: UNDO_DAYS.def }, tokens: [], tokenStore: 'once' };
+export const NO_MCP_STATUS: McpStatus = { enabled: false, folders: [], launch: null, platform: '', writes: MCP_WRITES_ENABLED, undo: { on: true, days: UNDO_DAYS.def }, tokens: [], tokenStore: 'once', sessions: [] };
 
 // ---- activity (mcp-audit.jsonl) -------------------------------------------------------------------
 
@@ -253,6 +301,8 @@ export interface McpActivity {
   token?: string | null;
   /** A short note for the row, e.g. "restore from the Recycle Bin" (a folder delete keeps no undo copy). */
   note?: string | null;
+  /** A batch call (paths, replace_in_files): how many items; one row, one Revert for the whole group. */
+  items?: number | null;
 }
 
 const short = (v: unknown, max: number): string | null => (typeof v === 'string' && v ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max) : null);
@@ -284,6 +334,7 @@ export function parseActivityLine(line: string): McpActivity | null {
     journal: typeof r.journal === 'string' && JOURNAL_GROUP_RE.test(r.journal) ? r.journal : null,
     token: typeof r.token === 'string' && /^[a-f0-9]{8,32}$/.test(r.token) ? r.token : null,
     note: short(r.note, 80),
+    items: typeof r.items === 'number' && Number.isInteger(r.items) && r.items > 0 && r.items <= 100_000 ? r.items : null,
   };
 }
 

@@ -3,7 +3,6 @@ import { app } from './app';
 import * as ui from './ui';
 import { brandTitle } from '@shared/brand';
 import { addCommandSource, loadCommandSources, registerCommands } from './commands';
-import { openWorkspace } from './documents';
 import { newNote, openAbsolutePaths } from './fileops';
 import { toggleEditPreview, toggleSplit, zoom, activeIsMarkdown } from './settings';
 import { afterBootIdle, holdKeys, lazyComponent } from './lazy';
@@ -16,19 +15,6 @@ const BookmarksPanel = lazyComponent(() => import('../bookmarks/Panel').then((m)
 
 const hasActive = () => !!app.activePath.value;
 const INTERNAL_DRAG = ['application/x-sec-edit-paths', 'application/x-sec-edit-tab'];
-
-export async function openFolderInteractive() {
-  let p = await app.backend.pickFolder().catch(() => null);
-  if (!p && app.backend.kind === 'web') {
-    p = await ui.promptDialog('Open folder', ui.recentFolders.value[0] ?? '', app.backend.os === 'win32' ? 'C:\\Users\\me\\notes' : '/home/me/notes', 'Open');
-  }
-  if (!p) return;
-  try {
-    await openWorkspace(p);
-  } catch (err) {
-    app.toast(`Cannot open folder: ${(err as Error).message}`, 'error');
-  }
-}
 
 // ---- Ctrl-Tab: most-recently-used switching, committed when Ctrl is released --------------------
 function mruList(): string[] {

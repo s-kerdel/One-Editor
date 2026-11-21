@@ -58,10 +58,10 @@ async function connect(answer: Answer | null) {
   return { dir, ws, client, asked, call };
 }
 
-const SUMMARY = 'Delete folder "proj" and everything in it? 3 files, 1 folder (including hidden items such as .env, .git). It goes to the Recycle Bin.';
+const SUMMARY = 'Delete folder "proj" and everything in it? 3 files, 1 folder, 15 B (including hidden items such as .env, .git). It goes to the Recycle Bin.';
 
 for (const [label, answer, want, deleted] of [
-  ['accept, confirm=true', { action: 'accept', content: { confirm: true } }, /^Deleted folder proj \(3 files, 1 folder\) to the Recycle Bin/, true],
+  ['accept, confirm=true', { action: 'accept', content: { confirm: true } }, /^Deleted folder proj \(3 files, 1 folder, 15 B\) to the Recycle Bin/, true],
   ['accept, confirm=false', { action: 'accept', content: { confirm: false } }, /^ECANCELED: Not deleted: the user declined$/, false],
   ['decline', { action: 'decline' }, /^ECANCELED: Not deleted: the user declined$/, false],
   ['cancel', { action: 'cancel' }, /^ECANCELED: Not deleted: the user did not answer$/, false],

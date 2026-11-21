@@ -123,3 +123,28 @@ test('the right token works; activity rows name the token; revoking it ends the 
   // And it cannot start again with it.
   expect((await run(r.env(r.token))).code).toBe(1);
 });
+
+test('"MCP active": a running server has a live file (pid, the token\'s name, start, last call: nothing else); it goes when the server ends', async () => {
+  const r = await rig();
+  const liveDir = path.join(r.config, 'mcp-live');
+  const files = () => (fs.existsSync(liveDir) ? fs.readdirSync(liveDir).filter((x) => x.endsWith('.json')) : []);
+  const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, '--stdio'], env: r.env(r.token), stderr: 'pipe' });
+  const client = new Client({ name: 'live-e2e', version: '1' });
+  await client.connect(transport);
+  try {
+    await expect.poll(files, { timeout: 5000 }).toHaveLength(1);
+    const file = path.join(liveDir, files()[0]);
+    const first = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(Object.keys(first).sort()).toEqual(['client', 'lastCall', 'pid', 'started', 'v']);
+    expect(first).toMatchObject({ v: 1, client: 'LM Studio', lastCall: null });
+    expect(files()[0]).toBe(`${first.pid}-${files()[0].split('-')[1]}`);
+    const text = fs.readFileSync(file, 'utf8');
+    for (const secret of [r.token, r.ws, 'a.md']) expect(text).not.toContain(secret);
+    await client.callTool({ name: 'read_file', arguments: { path: 'a.md' } });
+    // Throttled (at most every few seconds): the last call shows up shortly.
+    await expect.poll(() => JSON.parse(fs.readFileSync(file, 'utf8')).lastCall, { timeout: 8000 }).not.toBeNull();
+  } finally {
+    await client.close();
+  }
+  await expect.poll(files, { timeout: 5000 }).toEqual([]);
+});

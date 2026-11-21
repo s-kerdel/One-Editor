@@ -47,18 +47,7 @@ export function removeNode(tree: TreeNode, path: string): TreeNode {
   return updateDir(tree, dirname(path), (dir) => ({ ...dir, children: (dir.children ?? []).filter((c) => c.name !== name) }));
 }
 
-/** Re-roots a subtree at a new path (rename / move). */
-export function repath(node: TreeNode, to: string): TreeNode {
-  const out: TreeNode = { ...node, path: to, name: basename(to) };
-  if (node.children) out.children = node.children.map((c) => repath(c, `${to}/${c.name}`));
-  return out;
-}
-
-export function moveNode(tree: TreeNode, from: string, to: string): TreeNode {
-  const node = findNode(tree, from);
-  if (!node) return tree;
-  return insertNode(removeNode(tree, from), repath(node, to));
-}
+// repath / moveNode (rename, move): ./file-rules, with the Popups chunk.
 
 export function replaceSubtree(tree: TreeNode, sub: TreeNode): TreeNode {
   if (!sub.path) return { ...sub, name: tree.name };

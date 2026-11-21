@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// Back / forward buttons (start of the tab strip): greyed out (aria-disabled, still focusable) until the
+// Back / forward buttons (start of the status bar): greyed out (aria-disabled, still focusable) until the
 // history has somewhere to go, live as that changes; labelled, with the shortcut in the tooltip.
 import { describe, it, expect } from 'vitest';
 import { render } from 'preact';
@@ -14,7 +14,10 @@ describe('NavButtons', () => {
     await act(() => render(<NavButtons />, host));
     const back = host.querySelector<HTMLButtonElement>('[aria-label="Go back"]')!;
     const fwd = host.querySelector<HTMLButtonElement>('[aria-label="Go forward"]')!;
-    expect(host.querySelector('[role="group"]')?.getAttribute('aria-label')).toBe('Navigation history');
+    const group = host.querySelector('[role="group"]')!;
+    expect(group.getAttribute('aria-label')).toBe('Navigation history');
+    // Status-bar items now: the group holds just the two arrows (its │ is CSS), no tab-strip / drag-region classes.
+    expect([group.className, ...[...group.children].map((c) => c.className)]).toEqual(['se-navbtns', 'se-navbtn', 'se-navbtn']);
     const disabled = () => [back, fwd].map((b) => b.getAttribute('aria-disabled') === 'true');
     expect(disabled()).toEqual([true, true]);
     expect(back.disabled || fwd.disabled).toBe(false);

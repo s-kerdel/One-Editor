@@ -8,20 +8,7 @@ import { app } from './app';
 import * as ui from './ui';
 import { flattenTree, findNode, type Row } from './tree-model';
 import { FileIcon, FolderIcon, Icon } from './icons';
-import {
-  absolutePath,
-  commitCreate,
-  copyText,
-  deletePaths,
-  duplicate,
-  expandTo,
-  moveInto,
-  newNote,
-  renameTo,
-  revealInOs,
-  revealLabel,
-  startCreate,
-} from './fileops';
+import { commitCreate, expandTo, moveInto, newNote, popups, renameTo, startCreate } from './fileops';
 import { persistSession, refreshTree } from './documents';
 import { isMac, runCommand } from './commands';
 import { holdKeys, lazyComponent } from './lazy';
@@ -42,13 +29,42 @@ const DRAG_MIME = 'application/x-sec-edit-paths';
 const dropTarget = signal<string | null>(null);
 /** Paths of the drag that started in this tree: lets a row refuse a folder dropped into itself. */
 let dragged: string[] | null = null;
-/** Rows as last rendered: selection ranges, Ctrl+A and actions follow what is on screen. */
-let shown: Row[] = [];
-const order = () => shown.filter((r) => !r.create).map((r) => r.node.path);
+type Steps = typeof import('./tree-select');
+/** Rows as last rendered + rows per page: selection ranges, Ctrl+A, keys and actions follow what is on screen. */
+const onScreen: import('./tree-select').TreeView = { rows: [], page: 1, toggle: toggleDir };
+const order = () => onScreen.rows.filter((r) => !r.create).map((r) => r.node.path);
 /** The selection, top to bottom: what the tree's actions work on. */
 const selection = () => order().filter(ui.isTreeSelected);
-/** Selection steps are lazy (./tree-select). They run in order and read focus + `order` when they run. */
-const step = (fn: (m: typeof import('./tree-select'), order: string[]) => unknown) => void import('./tree-select').then((m) => fn(m, order()));
+/** Selection steps and the tree's keys are lazy (./tree-select; the tree's focus fetches it). Steps run in order
+ *  and read focus + `order` when they run. */
+let steps: Steps | null = null;
+const loadSteps = () => import('./tree-select').then((m) => (steps = m));
+const step = (fn: (m: Steps, order: string[]) => unknown) => void loadSteps().then((m) => fn(m, order()));
+/** Keys pressed before ./tree-select is in: replayed in order once it is, a frame apart (rows re-render between). */
+let early: KeyboardEvent[] | null = null;
+
+function onTreeKey(e: KeyboardEvent) {
+  if (ui.renaming.value || ui.creating.value) return;
+  if (steps && !early) {
+    if (steps.treeKey(e, onScreen)) e.preventDefault(), e.stopPropagation();
+    return;
+  }
+  // Not in yet: claim the keys the tree may take (no page scroll, nothing else acts on them), apply them later.
+  if (e.key.length === 1 ? e.altKey || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() !== 'a') : !/^(Arrow|Page|Home$|End$|Enter$|Escape$|F2$|Delete$|Backspace$)/.test(e.key)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if ((early ??= []).push(e) > 1) return;
+  loadSteps().then(
+    async (m) => {
+      for (let k; (k = early![0]); early!.shift()) {
+        m.treeKey(k, onScreen);
+        await new Promise(requestAnimationFrame);
+      }
+      early = null;
+    },
+    () => (early = null),
+  );
+}
 
 function toggleDir(path: string, open?: boolean) {
   ui.setIn(ui.expanded, path, open ?? !ui.expanded.value.has(path));
@@ -61,7 +77,7 @@ export function collapseAll() {
 }
 
 // Inline rename/create input: lazy (./Popups); keys typed before it has focus are replayed into it.
-const InlineNameLazy = lazyComponent<InlineNameProps>(() => import('./Popups').then((m) => m.InlineName));
+const InlineNameLazy = lazyComponent<InlineNameProps>(() => popups().then((m) => m.InlineName));
 type InlineNameProps = { initial: string; selectStem: boolean; onCommit: (name: string) => Promise<string | null>; onDone: (committed: boolean) => void };
 function InlineName(props: InlineNameProps) {
   useLayoutEffect(() => holdKeys(Promise.resolve()), []);
@@ -69,7 +85,7 @@ function InlineName(props: InlineNameProps) {
 }
 
 // Menu definitions load with the popups chunk (first right-click / idle), not at launch.
-const rowMenu = (node: TreeNode | null, sel?: string[]) => import('./Popups').then((m) => m.rowMenu(node, sel));
+const rowMenu = (node: TreeNode | null, sel?: string[]) => popups().then((m) => m.rowMenu(node, sel));
 
 function dragText(path: string) {
   // Dropping a tree item into a note inserts a link (the editor's default text drop).
@@ -221,7 +237,6 @@ function FileTree() {
   const scroller = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(800);
-  const typeahead = useRef({ text: '', at: 0 });
   const tree = app.tree.value;
   const g = gitUi.value;
   // Git "show changes": a reduced tree with its folders open (memoised by the git chunk).
@@ -229,7 +244,8 @@ function FileTree() {
   const view = v ? v.tree : tree;
   const open = v ? v.expanded : ui.expanded.value;
   const rows = useMemo(() => flattenTree(view, open, ui.treeFilter.value, ui.creating.value), [view, open, ui.treeFilter.value, ui.creating.value]);
-  shown = rows;
+  onScreen.rows = rows;
+  onScreen.page = Math.floor(height / ROW_H);
   // Refreshes, watcher events, collapse, filter: rows that vanished leave a multi-selection.
   useEffect(() => {
     if (ui.treeMulti.peek()) step((m, o) => m.prune(o));
@@ -278,60 +294,6 @@ function FileTree() {
   const last = Math.min(rows.length, Math.ceil((scrollTop + height) / ROW_H) + 8);
   const visible = rows.slice(first, last);
 
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (ui.renaming.value || ui.creating.value) return;
-    const i = rows.findIndex((r) => r.node.path === ui.treeSelection.value);
-    const cur = rows[i]?.node;
-    // `to` maps the focused index to the target; Shift extends from the focus as it is when the step runs.
-    const select = (to: (k: number) => number) => {
-      if (e.shiftKey) return step((m, o) => m.pick(o, o[Math.max(0, Math.min(o.length - 1, to(o.indexOf(ui.treeSelection.value!))))], true, false));
-      const r = rows[Math.max(0, Math.min(rows.length - 1, to(i)))];
-      if (r && !r.create) ui.treeSelection.value = r.node.path;
-    };
-    const key = e.key;
-    const many = ui.treeMulti.value && selection();
-    let handled = true;
-    const page = Math.floor(height / ROW_H);
-    if (key === 'ArrowDown') select((k) => k + 1);
-    else if (key === 'ArrowUp') select((k) => (k < 0 ? 0 : k - 1));
-    else if (key === 'Home') select(() => 0);
-    else if (key === 'End') select(() => rows.length);
-    else if (key === 'PageDown') select((k) => k + page);
-    else if (key === 'PageUp') select((k) => k - page);
-    else if (key === 'ArrowRight' && cur?.kind === 'dir') {
-      if (!rows[i].expanded) toggleDir(cur.path, true);
-      else select((k) => k + 1);
-    } else if (key === 'ArrowLeft' && cur) {
-      if (cur.kind === 'dir' && rows[i].expanded) toggleDir(cur.path, false);
-      else if (dirname(cur.path) || cur.path.includes('/')) ui.treeSelection.value = dirname(cur.path);
-    } else if (key === 'Enter' && many) step((m) => m.openPaths(many).then(() => app.editor?.focus()));
-    else if ((key === 'Enter' || key === ' ') && cur) {
-      if (cur.kind === 'dir') toggleDir(cur.path);
-      else {
-        void app.openFile(cur.path).then(() => key === 'Enter' && app.editor?.focus());
-      }
-    } else if (key === 'F2' && cur) ui.setTreeSel(null, (ui.renaming.value = cur.path));
-    else if ((key === 'Delete' || (key === 'Backspace' && e.metaKey)) && cur) void deletePaths(many || [cur.path]);
-    else if (key.toLowerCase() === 'a' && (isMac ? e.metaKey : e.ctrlKey) && !e.altKey) step((m, o) => m.selectAll(o));
-    else if (key === 'Escape') {
-      if (ui.treeMulti.value) ui.treeMulti.value = null; // back to the focused row
-      else if (ui.treeFilter.value) ui.treeFilter.value = '';
-      else app.editor?.focus();
-    } else if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      // Type-ahead: jump to the next row starting with the typed prefix.
-      const t = typeahead.current;
-      t.text = performance.now() - t.at > 700 ? key.toLowerCase() : t.text + key.toLowerCase();
-      t.at = performance.now();
-      const order = [...rows.slice(i + (t.text.length === 1 ? 1 : 0)), ...rows];
-      const hit = order.find((r) => !r.create && r.node.name.toLowerCase().startsWith(t.text));
-      if (hit) ui.treeSelection.value = hit.node.path;
-    } else handled = false;
-    if (handled) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-  };
-
   if (!tree) return <div class="se-tree-loading" aria-busy="true">{Array.from({ length: 6 }, (_, i) => <div class="se-skel-row" style={{ width: `${50 + ((i * 37) % 40)}%` }} />)}</div>;
 
   return (
@@ -345,7 +307,8 @@ function FileTree() {
       aria-multiselectable="true"
       tabIndex={0}
       onScroll={(e) => setScrollTop((e.currentTarget as HTMLElement).scrollTop)}
-      onKeyDown={onKeyDown}
+      onFocus={() => void loadSteps()}
+      onKeyDown={onTreeKey}
       onContextMenu={(e) => ui.openContextMenu(e, rowMenu(null))}
       onDragOver={(e) => {
         if (!e.dataTransfer?.types.includes(DRAG_MIME)) return;

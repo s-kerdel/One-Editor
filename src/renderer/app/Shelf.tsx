@@ -5,7 +5,7 @@ import { Icon, PanelIcon } from './icons';
 import { persistSession } from './documents';
 import { runCommand, prettyKey } from './commands';
 import { updateSettings } from './settings';
-import { newNote } from './fileops';
+import { newNote, popups } from './fileops';
 import { PANEL_KEYS, menuPanels, openContextMenu, zen } from './ui';
 
 /** Stable hue per name, so a workspace / top-level folder always gets "its" colour. */
@@ -29,7 +29,6 @@ export function hideShelf() {
 }
 
 /** Folder switcher (Open folder… + recent folders): the menu is built in the lazy Popups chunk. */
-const popups = () => import('./Popups'); // one call site: its preload list is in the bundle once
 export const openWorkspaceMenu = (anchor: HTMLElement, placement?: 'below' | 'right' | 'above', extra?: import('./ui').MenuItem[]) =>
   void popups().then((m) => m.openWorkspaceMenu(anchor, placement, extra));
 

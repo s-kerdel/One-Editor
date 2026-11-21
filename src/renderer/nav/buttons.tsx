@@ -1,5 +1,5 @@
-// Go back / Go forward buttons at the start of the tab strip (Layout; setting `nav.buttons`).
-// Right-click, a long press or Shift+F10 lists the recent places that way (built in the lazy ./impl).
+// Go back / Go forward buttons at the status bar's start, then a rule (StatusBar; setting `nav.buttons`).
+// Right-click, a long press or Shift+F10 lists the recent places that way (built in the lazy ./impl, opens upwards).
 import type { NavDir } from '@shared/nav';
 import { Icon } from '../app/icons';
 import { NAV_KEYS, navCan, navGo, navPlaces } from './install';
@@ -15,7 +15,7 @@ function NavButton({ dir }: { dir: NavDir }) {
   const name = dir === 'back' ? 'Go back' : 'Go forward';
   return (
     <button
-      class="se-width-btn se-navbtn"
+      class="se-navbtn"
       aria-label={name}
       // aria-disabled, not disabled: stays focusable and keeps its right-click list (empty at the end)
       aria-disabled={!can}
@@ -32,15 +32,15 @@ function NavButton({ dir }: { dir: NavDir }) {
       onClick={() => (held ? (held = false) : can && navGo(dir))}
       onContextMenu={(e) => (e.preventDefault(), navPlaces(dir, e.currentTarget))} // also Shift+F10 / the menu key
     >
-      <Icon name="arrowLeft" size={16} />
+      <Icon name="arrowLeft" size={14} />
     </button>
   );
 }
 
 export function NavButtons() {
   return (
-    // no-drag as a whole: with the integrated frame its padding must not cover the sidebar sash's edge
-    <div class="se-navbtns se-no-drag" role="group" aria-label="Navigation history">
+    // the │ after the arrows is the group's ::after (app.css): hidden with them
+    <div class="se-navbtns" role="group" aria-label="Navigation history">
       <NavButton dir="back" />
       <NavButton dir="forward" />
     </div>

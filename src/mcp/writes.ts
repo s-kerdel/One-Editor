@@ -211,7 +211,7 @@ export async function makeDir(c: WriteCtx, t: Target): Promise<{ journal?: strin
  * that is off or too small deletes for good, so the copy is the real safety net. No room for it (quota, or
  * over 16 MB) = the delete is refused.
  */
-export async function trashFile(c: WriteCtx, t: Target, expect: Stamp): Promise<{ journal?: string }> {
+export async function trashFile(c: WriteCtx, t: Target, expect: Stamp, group?: string): Promise<{ journal?: string }> {
   const ws = await c.folder.workspace();
   let prev: Buffer | null = null;
   const toBin = async (abs: string) => {
@@ -236,7 +236,7 @@ export async function trashFile(c: WriteCtx, t: Target, expect: Stamp): Promise<
   } catch (err) {
     throw writeError(err, t.key);
   }
-  const g = c.journal.newGroup();
+  const g = group ?? c.journal.newGroup();
   await c.journal.add(g, { client: c.client, tool: c.tool, root: c.folder.root, folder: c.folder.alias, op: 'delete', path: t.key, after: null }, prev, { force: true }).catch((err) => console.error('[mcp] journal', err));
   c.folder.changed([{ type: 'unlink', path: t.key }]);
   return { journal: g };
