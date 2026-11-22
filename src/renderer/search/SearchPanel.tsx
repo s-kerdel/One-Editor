@@ -153,12 +153,18 @@ function visibleResults(): SearchResult[] {
   return d.size ? res.filter((r) => !d.has(r.path)) : res;
 }
 
+/**
+ * Real hit lines. A file found only by its name / extension (a query like "yaml") carries one synthetic `path` row instead:
+ * not a hit to show or fold, the file row itself opens the file.
+ */
+const hasHits = (r: SearchResult) => r.matches.some((m) => m.context !== 'path');
+
 export function flatRows(): Row[] {
   const rows: Row[] = [];
   const col = collapsed.value;
   for (const r of visibleResults()) {
     rows.push({ kind: 'file', r });
-    if (!col.has(r.path)) r.matches.forEach((m, i) => rows.push({ kind: 'match', r, m, i }));
+    if (hasHits(r) && !col.has(r.path)) r.matches.forEach((m, i) => rows.push({ kind: 'match', r, m, i }));
   }
   return rows;
 }
@@ -184,12 +190,13 @@ export function stepResult(dir: 1 | -1) {
   let i = selected.value;
   for (let n = 0; n < rows.length; n++) {
     i = (i + dir + rows.length) % rows.length;
-    if (rows[i].kind === 'match') break;
+    const r = rows[i];
+    if (r.kind === 'match' || !hasHits(r.r)) break; // a hit line, or a file found by its name only
   }
   const row = rows[i];
-  if (row?.kind !== 'match') return;
+  if (!row || (row.kind === 'file' && hasHits(row.r))) return;
   selected.value = i;
-  void openMatch(row.r.path, row.m);
+  void openMatch(row.r.path, row.kind === 'match' ? row.m : null);
 }
 
 // ---------------------------------------------------------------- replace actions
@@ -406,16 +413,18 @@ export function SearchPanel() {
         return move(selected.value - 15);
       case 'ArrowLeft':
         if (cur?.kind === 'match') return move(rows.findIndex((r) => r.kind === 'file' && r.r === cur.r));
-        if (cur?.kind === 'file') toggleGroup(cur.r.path, true);
+        if (cur?.kind === 'file' && hasHits(cur.r)) toggleGroup(cur.r.path, true);
         e.preventDefault();
         return;
       case 'ArrowRight':
-        if (cur?.kind === 'file') toggleGroup(cur.r.path, false);
+        if (cur?.kind === 'file' && hasHits(cur.r)) toggleGroup(cur.r.path, false);
         e.preventDefault();
         return;
       case 'Enter':
-        if (cur?.kind === 'file') toggleGroup(cur.r.path);
-        else if (cur?.kind === 'match') void openMatch(cur.r.path, cur.m, list.current);
+        if (cur?.kind === 'file') {
+          if (hasHits(cur.r)) toggleGroup(cur.r.path);
+          else void openMatch(cur.r.path, null, list.current);
+        } else if (cur?.kind === 'match') void openMatch(cur.r.path, cur.m, list.current);
         e.preventDefault();
         return;
       case 'Delete':
@@ -623,7 +632,9 @@ export function SearchPanel() {
           const sel = idx === selected.value;
           if (row.kind === 'file') {
             const r = row.r;
-            const open = !collapsed.value.has(r.path);
+            // A file found only by its name / extension has no hit lines to show: no group to fold, a click opens the file.
+            const hits = hasHits(r);
+            const open = hits && !collapsed.value.has(r.path);
             const base = basename(r.path);
             const dir = dirname(r.path);
             const off = r.path.length - base.length;
@@ -633,17 +644,16 @@ export function SearchPanel() {
               <div
                 class={`se-sr-row se-sr-file${sel ? ' selected' : ''}`}
                 role="treeitem"
-                aria-expanded={open}
+                aria-expanded={hits ? open : undefined}
                 data-path={r.path}
                 title={r.path}
                 onClick={() => {
                   selected.value = idx;
-                  toggleGroup(r.path);
+                  if (hits) toggleGroup(r.path);
+                  else void openMatch(r.path, null);
                 }}
               >
-                <span class="se-sr-caret">
-                  <IconChevron open={open} />
-                </span>
+                <span class="se-sr-caret">{hits && <IconChevron open={open} />}</span>
                 <span class="se-sr-icon">{fileIcon(r.path)}</span>
                 <span class="se-sr-name">
                   <HighlightRanges text={base} ranges={baseRanges} cls="se-hit-path" />

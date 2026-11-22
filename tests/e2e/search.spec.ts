@@ -1,10 +1,12 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './harness';
 
+// The app's "Mod" key is ⌘ on a Mac (Chromium reports MacIntel there) and Ctrl elsewhere.
+const MOD = process.platform === 'darwin' ? 'Meta' : 'Control';
 const SHOTS = process.env.SEC_EDIT_SHOTS_DIR || '/tmp/sec-edit-search';
 
 async function openSearchPanel(page: Page, replace = false) {
-  await page.keyboard.press(replace ? 'Control+Shift+h' : 'Control+Shift+f');
+  await page.keyboard.press(replace ? `${MOD}+Shift+h` : `${MOD}+Shift+f`);
   const input = page.getByLabel('Search query');
   await expect(input).toBeFocused();
   return input;
@@ -47,11 +49,33 @@ test('Ctrl+Shift+F: --force-with-lease hits README.md as bash code; click select
   expect(errors).toEqual([]);
 });
 
+test('a file found only by its name (no hit lines) has no fold arrow and opens on click or Enter', async ({ page, ws }) => {
+  await ws.write('settings-sample.yaml', 'name: demo\nport: 3\n'); // matches "yaml" by its extension only: no line contains it
+  await ws.open(page);
+  const input = await openSearchPanel(page);
+  await input.fill('yaml');
+  const row = page.locator('.se-sr-file[data-path="settings-sample.yaml"]');
+  await expect(row).toHaveCount(1);
+  await expect(row.locator('.se-sr-caret svg')).toHaveCount(0);
+  await expect(row).not.toHaveAttribute('aria-expanded', /.*/);
+  await row.click();
+  await expect.poll(async () => (await editorState(page)).path).toBe('settings-sample.yaml');
+  // keyboard: Enter on the selected file row opens it too
+  await page.evaluate(() => (window as any).__secEdit.openFile('README.md'));
+  await expect.poll(async () => (await editorState(page)).path).toBe('README.md');
+  await row.click();
+  await page.evaluate(() => (window as any).__secEdit.openFile('README.md'));
+  await expect.poll(async () => (await editorState(page)).path).toBe('README.md');
+  await page.locator('.se-search-results').focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await editorState(page)).path).toBe('settings-sample.yaml');
+});
+
 test('Ctrl+Shift+F pre-fills the editor selection', async ({ page, ws }) => {
   await ws.open(page);
   await page.evaluate(() => (window as any).__secEdit.openFile('README.md', { line: 11, col: 4, length: 7 }));
   await expect.poll(() => editorState(page)).toMatchObject({ path: 'README.md', selectionLength: 7 });
-  await page.keyboard.press('Control+Shift+f');
+  await page.keyboard.press(`${MOD}+Shift+f`);
   await expect(page.getByLabel('Search query')).toHaveValue('artisan');
   await expect(resultRow(page, 'README.md')).toHaveCount(1);
 });
@@ -75,7 +99,7 @@ test('unsaved typed text is immediately searchable', async ({ page, ws }) => {
   await page.locator('.se-tree-row', { hasText: 'README.md' }).click();
   await expect(page.locator('.cm-content')).toContainText('Welcome');
   await page.locator('.cm-content').click();
-  await page.keyboard.press('Control+End');
+  await page.keyboard.press(`${MOD}+End`);
   await page.keyboard.type('\nzanzibar-quux --dry-run');
   const input = await openSearchPanel(page);
   await input.fill('zanzibar-quux --dry-run');
@@ -107,7 +131,7 @@ test('keyboard: Enter opens first hit, F4 / Shift+F4 step through results', asyn
   await page.keyboard.press('Shift+F4');
   await expect.poll(() => editorState(page)).toMatchObject({ line: 6 });
   // history: ↑ in an empty box recalls the last query
-  await page.keyboard.press('Control+Shift+f');
+  await page.keyboard.press(`${MOD}+Shift+f`);
   await input.fill('');
   await input.press('ArrowUp');
   await expect(input).toHaveValue('kubectl');
@@ -141,7 +165,7 @@ test('replace in files writes closed files to disk and updates open docs', async
 
 test('command palette: "sav" finds Save file, shows its keybinding; recent commands go first', async ({ page, ws }) => {
   await ws.open(page);
-  await page.keyboard.press('Control+Shift+p');
+  await page.keyboard.press(`${MOD}+Shift+p`);
   const input = page.getByRole('dialog').locator('input');
   await expect(input).toBeFocused();
   await expect(input).toHaveValue('>');
@@ -150,7 +174,7 @@ test('command palette: "sav" finds Save file, shows its keybinding; recent comma
   // "Save file" — the shell titles it "File: Save"; assert on the command id, not the wording
   await expect(first).toHaveAttribute('data-command-id', 'file.save');
   await expect(first).toContainText('Save');
-  await expect(first.locator('kbd').last()).toHaveText('S');
+  await expect(first.locator('kbd').last()).toHaveText(/^⌘?S$/); // one key per chip on Windows / Linux (Ctrl, S), one chip on a Mac (⌘S)
   await expect(first.locator('.se-pal-label mark.se-fz')).toHaveText('Sav');
   // word order doesn't matter
   await input.fill('>save file');
@@ -168,7 +192,7 @@ test('command palette: "sav" finds Save file, shows its keybinding; recent comma
 
 test('quick open: fuzzy files, #headings, file:line and "Found in content"', async ({ page, ws }) => {
   await ws.open(page);
-  await page.keyboard.press('Control+p');
+  await page.keyboard.press(`${MOD}+p`);
   const input = page.getByRole('dialog').locator('input');
   await expect(input).toBeFocused();
   await page.keyboard.type('kube');
@@ -184,13 +208,13 @@ test('quick open: fuzzy files, #headings, file:line and "Found in content"', asy
   await page.keyboard.press('Enter');
   await expect.poll(async () => (await editorState(page)).path).toBe('notes/kubernetes.md');
   // file:line
-  await page.keyboard.press('Control+p');
+  await page.keyboard.press(`${MOD}+p`);
   await expect(page.getByRole('dialog').locator('input')).toBeFocused();
   await page.keyboard.type('readme:11');
   await page.keyboard.press('Enter');
   await expect.poll(() => editorState(page)).toMatchObject({ path: 'README.md', line: 10 });
   // @ headings in current file
-  await page.keyboard.press('Control+Shift+o');
+  await page.keyboard.press(`${MOD}+Shift+o`);
   await expect(page.getByRole('dialog').locator('input')).toBeFocused();
   await expect(page.getByRole('dialog').locator('input')).toHaveValue('@');
   await expect(page.locator('.se-pal-heading')).toHaveCount(2);
@@ -208,7 +232,7 @@ test('openSearch API (tag search) + screenshots of panel and palette', async ({ 
   await expect(page.locator('.se-sr-file')).toHaveCount(3);
   await page.locator('.se-sidebar').evaluate((el) => ((el as HTMLElement).style.width = '340px'));
   await page.screenshot({ path: `${SHOTS}/panel.png` });
-  await page.keyboard.press('Control+Shift+p');
+  await page.keyboard.press(`${MOD}+Shift+p`);
   await expect(page.getByRole('dialog').locator('input')).toBeFocused();
   await page.keyboard.type('se');
   await page.waitForTimeout(300); // let the pop-in animation finish
@@ -226,7 +250,7 @@ test('openSearch API (tag search) + screenshots of panel and palette', async ({ 
   await page.evaluate(() => (window as any).__secEdit.openSearch('kubectl OR artisan OR render'));
   await expect(page.locator('.se-sr-file')).toHaveCount(3);
   await page.screenshot({ path: `${SHOTS}/panel-light.png` });
-  await page.keyboard.press('Control+p');
+  await page.keyboard.press(`${MOD}+p`);
   await expect(page.getByRole('dialog').locator('input')).toBeFocused();
   await page.keyboard.type('artisan');
   await expect(page.locator('.se-pal-section', { hasText: 'Found in content' })).toBeVisible();
