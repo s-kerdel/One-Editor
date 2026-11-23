@@ -649,6 +649,8 @@ export class BackendService {
         return null;
       case 'hunks':
         return { mode: 'file', reason: 'unavailable' };
+      case 'numstat':
+        return null;
       default:
         throw new BackendFailure('EACCES', 'Git is off in this folder until you trust it (Source control panel)');
     }
@@ -821,6 +823,15 @@ export class BackendService {
       case 'cancel':
         for (const rel of m.repoRels) m.service(rel)?.cancel(a);
         return null;
+      case 'numstat': {
+        // Every repository in the folder (a nested one's paths get its folder in front); null = none answered.
+        let rows: import('../shared/git').GitNumstatRow[] | null = null;
+        for (const rel of m.repoRels.length ? m.repoRels.slice(0, 8) : ['']) {
+          const part = await m.service(rel)?.numstat();
+          if (part) rows = [...(rows ?? []), ...part.map((f) => ({ ...f, path: ws(rel, f.path) }))];
+        }
+        return rows;
+      }
     }
   }
 

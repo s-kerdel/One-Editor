@@ -57,13 +57,23 @@ describe('terminal settings', () => {
   it('reads, validates and clamps', () => {
     expect(readTerminalSettings({})).toEqual(TERMINAL_DEFAULTS);
     expect(TERMINAL_DEFAULTS).toMatchObject({ scrollback: 2000, gpu: 'auto', prewarm: false }); // scrollback is per terminal (memory)
-    expect(readTerminalSettings({ 'terminal.defaultShell': ' wsl:Ubuntu ', 'terminal.fontSize': 99, 'terminal.scrollback': 12.4, 'terminal.runPressesEnter': true, 'terminal.gpuAcceleration': 'off', 'terminal.prewarm': true })).toEqual({ defaultShell: 'wsl:Ubuntu', fontSize: 32, scrollback: 100, runPressesEnter: true, gpu: 'off', prewarm: true, followClaude: true });
+    expect(readTerminalSettings({ 'terminal.defaultShell': ' wsl:Ubuntu ', 'terminal.fontSize': 99, 'terminal.scrollback': 12.4, 'terminal.runPressesEnter': true, 'terminal.gpuAcceleration': 'off', 'terminal.prewarm': true })).toEqual({ defaultShell: 'wsl:Ubuntu', fontSize: 32, scrollback: 100, runPressesEnter: true, gpu: 'off', prewarm: true, followClaude: false, followOpencode: false });
     expect(readTerminalSettings({ 'terminal.gpuAcceleration': 'maybe', 'terminal.prewarm': 'yes' })).toMatchObject({ gpu: 'auto', prewarm: false });
     expect(readTerminalSettings({ 'terminal.defaultShell': 'C:\\evil.exe', 'terminal.fontSize': '14', 'terminal.runPressesEnter': 'yes' })).toEqual(TERMINAL_DEFAULTS);
   });
 
   it('registry entries follow the registry rules (short one-line descriptions, defaults in range)', () => {
-    expect(TERMINAL_SETTING_DEFS.map((d) => d.key)).toEqual(['terminal.defaultShell', 'terminal.fontSize', 'terminal.scrollback', 'terminal.runPressesEnter', 'terminal.prewarm', 'terminal.gpuAcceleration', 'claude.follow']);
+    expect(TERMINAL_SETTING_DEFS.map((d) => d.key)).toEqual(['terminal.defaultShell', 'terminal.fontSize', 'terminal.scrollback', 'terminal.runPressesEnter', 'terminal.prewarm', 'terminal.gpuAcceleration', 'terminal.cmdSendsCtrl', 'claude.follow', 'opencode.follow']);
+    // Two previews, both off until asked for; each has its own key, the Opencode one directly below Claude's.
+    const follow = TERMINAL_SETTING_DEFS.slice(-2);
+    expect(follow.map((d) => [d.key, d.label, d.default, d.control.type])).toEqual([
+      ['claude.follow', 'Follow Claude’s edits (preview)', false, 'toggle'],
+      ['opencode.follow', 'Follow Opencode’s edits (preview)', false, 'toggle'],
+    ]);
+    expect(readTerminalSettings({})).toMatchObject({ followClaude: false, followOpencode: false });
+    expect(readTerminalSettings({ 'claude.follow': true })).toMatchObject({ followClaude: true, followOpencode: false });
+    expect(readTerminalSettings({ 'opencode.follow': true })).toMatchObject({ followClaude: false, followOpencode: true });
+    expect(readTerminalSettings({ 'claude.follow': 'yes', 'opencode.follow': 1 })).toMatchObject({ followClaude: false, followOpencode: false });
     for (const d of TERMINAL_SETTING_DEFS) {
       expect(d.description.length, d.key).toBeLessThanOrEqual(100);
       expect(d.description).not.toContain('\n');

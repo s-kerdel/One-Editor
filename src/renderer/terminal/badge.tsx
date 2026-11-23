@@ -26,6 +26,7 @@ const LOOK: Record<ShellKind, { tone: Tone; glyph: keyof typeof GLYPH }> = {
   sh: { tone: 'green', glyph: 'dollar' },
   other: { tone: 'green', glyph: 'dollar' },
   claude: { tone: 'neutral', glyph: 'spark' },
+  opencode: { tone: 'neutral', glyph: 'spark' },
 };
 
 export const badgeLook = (kind: ShellKind | string) => LOOK[kind as ShellKind] ?? LOOK.other;

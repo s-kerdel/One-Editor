@@ -1,6 +1,6 @@
 // Shell detection, WSL parsing, spawn planning and environment rules — Windows fixtures run on Linux.
 import { describe, it, expect } from 'vitest';
-import { decodeWslOutput, detectClaude, detectShells, parseWslList, pickDefaultShell, planClaude, planSpawn, pwshName, which, windowsBuildOf, wslPathFor, wslUncInfo, type DetectEnv } from '../../../src/main/terminal-shells';
+import { decodeWslOutput, detectClaude, detectOpencode, planOpencode, detectShells, parseWslList, pickDefaultShell, planClaude, planSpawn, pwshName, which, windowsBuildOf, wslPathFor, wslUncInfo, type DetectEnv } from '../../../src/main/terminal-shells';
 import { prettyDistro, prettyExe, uniqueNames } from '../../../src/shared/terminal';
 import { buildTerminalEnv, resolveTerminalCwd } from '../../../src/main/terminal';
 import { isTerminalMethod, TERMINAL_RPC_METHODS } from '../../../src/shared/terminal';
@@ -365,3 +365,28 @@ describe('friendly profile names', () => {
   });
 });
 
+
+describe('opencode detection + start plan', () => {
+  it('finds the CLI on PATH or in the installer folders; says how to install when missing', async () => {
+    expect((await detectOpencode(machine({ platform: 'darwin', env: { HOME: '/Users/me', PATH: '/usr/bin' }, files: ['/Users/me/.opencode/bin/opencode'] }))).path).toBe('/Users/me/.opencode/bin/opencode');
+    expect((await detectOpencode(machine({ platform: 'linux', env: { HOME: '/h', PATH: '/opt/x/bin' }, files: ['/opt/x/bin/opencode', '/h/.opencode/bin/opencode'] }))).path).toBe('/opt/x/bin/opencode');
+    const none = await detectOpencode(machine({ platform: 'linux', env: { HOME: '/h', PATH: '/usr/bin' }, files: [] }));
+    expect(none).toMatchObject({ available: false, install: expect.stringContaining('opencode') });
+  });
+
+  it('attaches to One\'s server: address in argv, the password only in the environment', () => {
+    const plan = planOpencode({ available: true, path: '/h/.opencode/bin/opencode' }, '/ws', { platform: 'linux', env: { PATH: '/usr/bin' }, server: { url: 'http://127.0.0.1:4000', password: 'pw-123456789' } });
+    expect(plan.file).toBe('/h/.opencode/bin/opencode');
+    expect(plan.args).toEqual(['--server', 'http://127.0.0.1:4000']);
+    expect(JSON.stringify(plan.args)).not.toContain('pw-123456789');
+    expect(plan.env).toMatchObject({ OPENCODE_PASSWORD: 'pw-123456789' });
+    expect(planOpencode({ available: true, path: '/x/opencode' }, '/ws', { platform: 'linux', env: {} }).args).toEqual([]);
+  });
+
+  it('Windows npm shim (opencode.cmd) goes through cmd.exe', () => {
+    const plan = planOpencode({ available: true, path: 'C:\\Users\\me\\AppData\\Roaming\\npm\\opencode.cmd' }, 'C:\\ws', { platform: 'win32', env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe', Path: 'C:\\Windows' }, server: { url: 'http://127.0.0.1:4000', password: 'pw-123456789' } });
+    expect(plan.file).toBe('C:\\Windows\\System32\\cmd.exe');
+    expect(String(plan.args)).toContain('opencode.cmd');
+    expect(String(plan.args)).not.toContain('pw-123456789');
+  });
+});

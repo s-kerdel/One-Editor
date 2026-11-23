@@ -37,7 +37,12 @@ export class FakeBackend implements TerminalBackend {
     this.spawned.push(req);
     // Like main: an explicit id, else the preferred one when this machine has it, else the automatic default.
     const want = req.shellId ?? (req.prefer && this.list.shells.some((s) => s.id === req.prefer) ? req.prefer : this.list.defaultId);
-    const shell = req.preset === 'claude' ? { id: 'claude', name: 'Claude Code', kind: 'claude' as const, path: '/usr/bin/claude', args: [] } : this.list.shells.find((s) => s.id === want)!;
+    const shell =
+      req.preset === 'claude'
+        ? { id: 'claude', name: 'Claude Code', kind: 'claude' as const, path: '/usr/bin/claude', args: [] }
+        : req.preset === 'opencode'
+          ? { id: 'opencode', name: 'Opencode', kind: 'opencode' as const, path: '/usr/bin/opencode', args: [] }
+          : this.list.shells.find((s) => s.id === want)!;
     return { id: this.nextId++, pid: 1000 + this.nextId, shell, cwd: req.cwd ?? '' };
   }
   write(id: number, d: string) {

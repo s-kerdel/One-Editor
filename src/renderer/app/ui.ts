@@ -34,7 +34,7 @@ export const zen = signal<ZenSaved | null>(null);
  *  the file overview has its strip (it was open before zen); '' = off. */
 export const zenAttr = (keepStatus: boolean) => (zen.value ? `on${keepStatus ? ' status' : ''}${zen.value.overviewVisible ? ' ov' : ''}` : '');
 /** Shortcuts shown in the sidebar panel switchers' tooltips (shelf pills, classic icon bar, zen strip). */
-export const PANEL_KEYS: Record<string, string> = { search: 'Mod-Shift-f', bookmarks: 'Mod-Alt-k', outline: 'Mod-Alt-o', backlinks: 'Mod-Alt-l' };
+export const PANEL_KEYS: Record<string, string> = { search: 'Mod-Shift-f', bookmarks: 'Mod-Alt-k', outline: 'Mod-Alt-o', backlinks: 'Mod-Alt-l', aichanges: 'Mod-Alt-a' };
 /** The sidebar menu (shelf pills, classic icon bar, zen strip) from `pref` = setting `sidebar.panels` { order, hidden }
  *  (Settings → Appearance → Sidebar menu). A registered panel the order lacks (new in a later version) goes in right
  *  after its default predecessor, never hidden; ids nobody registers are skipped; `open` (the shown panel) stays

@@ -33,6 +33,7 @@ import {
   type GitEntry,
   type GitFileState,
   type GitHeadFile,
+  type GitNumstatRow,
   type GitRepoState,
   type GitStatus,
   type GitStatusResult,
@@ -43,6 +44,7 @@ import {
 } from '../shared/git';
 import { DETAIL_FORMAT, LOCAL_BRANCH_FORMAT, LOG_FORMAT, TRACE2_ENV, gitMessage, isAuthError, parseDetails, parseLocalBranches, parseLog, parseNameStatus, parseRemoteRefs, splitTrace2, terminalCommand } from './git-ops';
 import { gitSubcommand, logGitActivity } from './git-activity';
+import { parseNumstat } from './git-numstat';
 import { buildPatch, composeBlocks, hunksForPicks, parseFileRecord, parseZeroDiff, type Block, type ParsedZeroDiff } from './git-hunks';
 import { WslGit, parseNetUse, parseWslPath, resolveMappedDrive, toUncPath, type WslPath } from './git-wsl';
 
@@ -70,8 +72,6 @@ const MAX_DIFF_BYTES = 8 * 1024 * 1024;
 export const GIT_MAX_ENTRIES = 50_000;
 const MIN_VERSION: [number, number] = [2, 18]; // porcelain v2, --absolute-git-dir, --ignored=matching
 const T_QUICK = 5_000;
-const T_STATUS = 20_000;
-const T_READ = 10_000;
 /**
  * The first git processes for a folder (`--version`, `rev-parse`, the filter config): they pay what a
  * first launch can cost (macOS: the `/usr/bin/git` shim, a folder-permission prompt that holds file
@@ -80,6 +80,8 @@ const T_READ = 10_000;
  * commands that follow; a miss is not final (GitMonitor looks again on Retry / window focus).
  */
 const T_DISCOVER = 15_000;
+const T_STATUS = 20_000;
+const T_READ = 10_000;
 /** Status output is parsed in slices this big when it arrives all at once. */
 const FEED_SLICE = 256 * 1024;
 /** Background lists (branches / history / commit files): generous, but visible when exceeded. */
@@ -501,10 +503,10 @@ export interface GitServiceOptions {
   watchDebounceMs?: number;
   /** Timeout for background lists (branches / history / commit files). */
   lowTimeoutMs?: number;
-  /** Repositories under \\wsl.localhost\<distro>\…: run git inside the distro ('auto', default) or not. */
-  wsl?: {
   /** Tests: shorter time limits for the first look at a folder (`discover`) and for actions (`action`). */
   timeouts?: { discover?: number; action?: number };
+  /** Repositories under \\wsl.localhost\<distro>\…: run git inside the distro ('auto', default) or not. */
+  wsl?: {
     mode?: 'auto' | 'off';
     /** wsl.exe (tests: a fake). */
     exe?: string;
@@ -676,8 +678,6 @@ export class GitService {
     this.repoP = null;
   }
 
-  private async discover(): Promise<Repo | GitUnavailable> {
-    const git = (await this.wslGit()) ?? (await locateGit({ gitPath: this.opts.gitPath, platform: this.platform, env: this.opts.env ?? process.env }));
   /**
    * Look again after a failed discovery (the user's Retry, see GitMonitor). A discovery still running is
    * waited for and shared, and only a failed one is dropped: two discoveries never run side by side.
@@ -692,6 +692,8 @@ export class GitService {
     return this.probe();
   }
 
+  private async discover(): Promise<Repo | GitUnavailable> {
+    const git = (await this.wslGit()) ?? (await locateGit({ gitPath: this.opts.gitPath, platform: this.platform, env: this.opts.env ?? process.env }));
     if (!git) return { ok: false, reason: 'no-git', ...(hasDotGitAbove(this.root) ? { repoLikely: true } : {}) };
     const limit = this.opts.timeouts?.discover ?? T_DISCOVER;
     const r = await this.exec(git, ['rev-parse', '--show-toplevel', '--show-prefix', '--absolute-git-dir', '--git-common-dir'], { timeoutMs: limit, maxBytes: 64 * 1024, trigger: 'discover' });
@@ -889,6 +891,20 @@ export class GitService {
     const r = await this.git(repo, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', rev, '--', `:(top,literal)${repoPath}`], { timeoutMs: T_READ, maxBytes: MAX_DIFF_BYTES });
     if (r.code !== 0 || r.overflow) return null;
     return toLf(r.stdout.toString('utf8'));
+  }
+
+  /**
+   * Added / removed line counts of every tracked file under the workspace folder that differs from HEAD (work tree,
+   * staged or not), paths relative to that folder (`--relative`: also right when the folder is below the repository
+   * root). null: no repository, no commit yet, too much output. Read only; never runs external diff / textconv.
+   */
+  async numstat(): Promise<GitNumstatRow[] | null> {
+    const repo = await this.repo();
+    if (!repo.ok) return null;
+    const args = ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', '--relative', '--raw', '--numstat', '-z', '--ignore-submodules=dirty', 'HEAD', '--'];
+    const r = await this.git(repo, args, { timeoutMs: T_READ, maxBytes: MAX_DIFF_BYTES, trigger: 'numstat' });
+    if (r.code !== 0 || r.overflow) return null;
+    return parseNumstat(r.stdout.toString('utf8'));
   }
 
   // ---- tier 2: source control (mutating) ----------------------------------------------------

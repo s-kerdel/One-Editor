@@ -26,6 +26,7 @@ export function terminalBridge(ipc: IpcRendererLike) {
     onData: listen(CH.data),
     onExit: listen(CH.exit),
     onFollow: listen(CH.follow),
+    onChanges: listen(CH.changes),
   };
 }
 

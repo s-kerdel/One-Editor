@@ -102,7 +102,7 @@ class World {
 }
 
 const numbered = (n: number, edits: Record<number, string> = {}) => Array.from({ length: n }, (_, i) => edits[i + 1] ?? `line ${i + 1}`).join('\n');
-const edit = (path: string, line: number, text?: string, id = 1): TerminalFollowEvent => ({ id, kind: 'edit', path, lines: [[line, line]], ...(text ? { probe: { line, text } } : {}) });
+const edit = (path: string, line: number, text?: string, id = 1, agent: TerminalFollowEvent['agent'] = 'claude'): TerminalFollowEvent => ({ id, agent, kind: 'edit', path, lines: [[line, line]], ...(text ? { probe: { line, text } } : {}) });
 const settle = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
 
 let w: World;
@@ -110,7 +110,7 @@ let clock = 1_000_000;
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime((clock += 100_000)); // never back in time between tests
-  onFollowEvent({ id: 1, kind: 'prompt' }); // a new turn: nothing left from the test before
+  onFollowEvent({ id: 1, agent: 'claude', kind: 'prompt' }); // a new turn: nothing left from the test before
   w = new World();
 });
 afterEach(async () => {
@@ -178,7 +178,7 @@ describe('the queue', () => {
     expect(w.flashes.map((f) => f.path)).toEqual(['a.ts', 'c.ts']);
     w.activate('b.ts'); // the user looks at it later
     expect(w.lines()).toEqual({ flash: [], marks: [3] });
-    onFollowEvent({ id: 1, kind: 'stop' });
+    onFollowEvent({ id: 1, agent: 'claude', kind: 'stop' });
     expect(w.toasts.at(-1)).toBe('Claude changed 3 files this turn');
   });
 
@@ -220,15 +220,49 @@ describe('the queue', () => {
     expect(w.lines().marks).toEqual([2]);
     w.activate(`f${n - 1}.ts`);
     expect(w.lines().marks).toEqual([]);
-    onFollowEvent({ id: 1, kind: 'stop' });
+    onFollowEvent({ id: 1, agent: 'claude', kind: 'stop' });
     expect(w.toasts.at(-1)).toBe(`Claude changed ${FOLLOW_LIMITS.files} files this turn`);
+  });
+
+  it('names the agent the terminal runs: "Opencode edited …", "Claude edited …" (an event without one is Claude\'s)', async () => {
+    w.disk.set('a.ts', numbered(10));
+    w.disk.set('b.ts', numbered(10));
+    w.disk.set('c.ts', numbered(10));
+    w.activate('a.ts');
+    onFollowEvent({ id: 2, agent: 'opencode', kind: 'prompt' });
+    onFollowEvent(edit('a.ts', 2, undefined, 2, 'opencode'));
+    await settle(0);
+    expect(w.toasts).toEqual(['Opencode edited a.ts']);
+    onFollowEvent(edit('b.ts', 3, undefined, 2, 'opencode'));
+    await settle(1001); // past the "hopping between files" window
+    onFollowEvent({ id: 2, agent: 'opencode', kind: 'stop' });
+    expect(w.toasts.at(-1)).toBe('Opencode changed 2 files this turn');
+    // Another terminal, Claude's: its own count, its own name.
+    onFollowEvent(edit('c.ts', 4, undefined, 1));
+    await settle(0);
+    expect(w.toasts.at(-1)).toBe('Claude edited c.ts');
+    onFollowEvent({ id: 1, kind: 'edit', path: 'a.ts', lines: [[5, 5]] } as unknown as TerminalFollowEvent); // an older main: no agent
+    await settle(5001);
+    onFollowEvent({ id: 1, kind: 'stop' } as unknown as TerminalFollowEvent);
+    expect(w.toasts.at(-1)).toBe('Claude changed 2 files this turn');
+    expect(w.toasts.some((t) => /^Claude edited a\.ts$/.test(t))).toBe(true);
+  });
+
+  it('a terminal that ended mid-turn leaves nothing behind for good: the turns kept are bounded', async () => {
+    w.disk.set('a.ts', numbered(10));
+    w.activate('a.ts');
+    for (let id = 100; id < 180; id++) onFollowEvent(edit('a.ts', 2, undefined, id)); // 80 terminals, none says Stop
+    await settle(0);
+    onFollowEvent(edit('b.ts', 2, undefined, 100)); // the first one again: its old turn is gone, this is file 1 of a new one
+    onFollowEvent({ id: 100, agent: 'claude', kind: 'stop' });
+    expect(w.toasts.some((t) => /changed \d+ files/.test(t))).toBe(false);
   });
 
   it('ignores events it does not know and line ranges that are not ranges', async () => {
     w.disk.set('a.ts', numbered(10));
     w.activate('a.ts');
     for (const bad of [null, {}, { id: 1, kind: 'edit' }, { id: 1, kind: 'run', path: 'a.ts' }, { id: 'x', kind: 'edit', path: 'a.ts' }, { id: 1, kind: 'edit', path: 7 }]) onFollowEvent(bad as unknown as TerminalFollowEvent);
-    onFollowEvent({ id: 1, kind: 'edit', path: 'a.ts', lines: [[0, 2], [3, 2], ['1', 2], [1.5, 2], [4], 'x', [5, 6]] as never });
+    onFollowEvent({ id: 1, agent: 'claude', kind: 'edit', path: 'a.ts', lines: [[0, 2], [3, 2], ['1', 2], [1.5, 2], [4], 'x', [5, 6]] as never });
     await settle(0);
     expect(w.flashes.map((f) => f.lines)).toEqual([[[5, 6]]]);
   });
@@ -245,9 +279,9 @@ describe('"changed this turn" marks', () => {
     w.view.dispatch({ changes: { from: 0, insert: 'two\nnew lines\n' } }); // the user types above it
     expect(w.lines().marks).toEqual([7]);
     expect(w.view.state.doc.line(7).text).toBe('claude');
-    onFollowEvent({ id: 1, kind: 'stop' }); // the end of the turn keeps them
+    onFollowEvent({ id: 1, agent: 'claude', kind: 'stop' }); // the end of the turn keeps them
     expect(w.lines().marks).toEqual([7]);
-    onFollowEvent({ id: 1, kind: 'prompt' });
+    onFollowEvent({ id: 1, agent: 'claude', kind: 'prompt' });
     expect(w.lines().marks).toEqual([]);
   });
 

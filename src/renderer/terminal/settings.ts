@@ -12,6 +12,7 @@ export const TERMINAL_SETTING_KEYS = {
   cmdSendsCtrl: 'terminal.cmdSendsCtrl',
   prewarm: 'terminal.prewarm',
   followClaude: 'claude.follow',
+  followOpencode: 'opencode.follow',
 } as const;
 
 export interface TerminalSettings {
@@ -24,12 +25,17 @@ export interface TerminalSettings {
   gpu: 'auto' | 'on' | 'off';
   /** Keep one shell of the default profile started in the background, ready for the next "new terminal". */
   prewarm: boolean;
-  /** Show the files Claude Code edits (started from One) as it edits them. */
+  /** Show the files Claude Code edits (started from One) as it edits them, and list them in "AI changes". */
   followClaude: boolean;
+  /** The same for Opencode (One then starts it against a private `opencode serve`). */
+  followOpencode: boolean;
 }
 
+/** The "follow edits" switch of one agent: each gates only its own agent's terminals. */
+export const followsAgent = (s: TerminalSettings, agent: 'claude' | 'opencode'): boolean => (agent === 'opencode' ? s.followOpencode : s.followClaude);
+
 // Scrollback is per terminal: 2000 lines × ~120 columns ≈ 3 MB at most each (5000 was ≈ 7 MB).
-export const TERMINAL_DEFAULTS: TerminalSettings = { defaultShell: '', fontSize: 13, scrollback: 2000, runPressesEnter: false, gpu: 'auto', prewarm: false, followClaude: true };
+export const TERMINAL_DEFAULTS: TerminalSettings = { defaultShell: '', fontSize: 13, scrollback: 2000, runPressesEnter: false, gpu: 'auto', prewarm: false, followClaude: false, followOpencode: false };
 export const FONT_RANGE = { min: 8, max: 32 };
 export const SCROLLBACK_RANGE = { min: 100, max: 100000 };
 
@@ -45,8 +51,19 @@ export function readTerminalSettings(s: Record<string, unknown>): TerminalSettin
     runPressesEnter: typeof s[K.runPressesEnter] === 'boolean' ? (s[K.runPressesEnter] as boolean) : TERMINAL_DEFAULTS.runPressesEnter,
     gpu: s[K.gpu] === 'on' ? 'on' : s[K.gpu] === 'off' ? 'off' : 'auto',
     prewarm: s[K.prewarm] === true,
-    followClaude: s[K.followClaude] !== false,
+    // Both previews are opt-in: only an explicit `true` turns one on.
+    followClaude: s[K.followClaude] === true,
+    followOpencode: s[K.followOpencode] === true,
   };
+}
+
+/**
+ * macOS key policy (./keys): is a Cmd chord in the terminal read as the Ctrl chord? 'auto' = only when a
+ * keyboard remapper made it out of one. Read on its own: only the key handling uses it, not the manager.
+ */
+export function readCmdSendsCtrl(s: Record<string, unknown>): CmdSendsCtrl {
+  const v = s[TERMINAL_SETTING_KEYS.cmdSendsCtrl];
+  return v === 'on' ? 'on' : v === 'off' ? 'off' : 'auto';
 }
 
 /** Registry entries (phase 2: add 'terminal' to SectionId + SECTIONS, then `...TERMINAL_SETTING_DEFS` into defs). */
@@ -57,15 +74,6 @@ export const TERMINAL_SECTION = { id: 'terminal', title: 'Terminal', icon: 'term
 export const TERMINAL_SETTING_DEFS: TerminalSettingDef[] = [
   {
     key: TERMINAL_SETTING_KEYS.defaultShell,
-/**
- * macOS key policy (./keys): is a Cmd chord in the terminal read as the Ctrl chord? 'auto' = only when a
- * keyboard remapper made it out of one. Read on its own: only the key handling uses it, not the manager.
- */
-export function readCmdSendsCtrl(s: Record<string, unknown>): CmdSendsCtrl {
-  const v = s[TERMINAL_SETTING_KEYS.cmdSendsCtrl];
-  return v === 'on' ? 'on' : v === 'off' ? 'off' : 'auto';
-}
-
     section: 'terminal',
     label: 'Default shell',
     description: 'Shell id for new terminals (pwsh, cmd, wsl:Ubuntu, bash…). Empty = automatic.',
@@ -125,14 +133,6 @@ export function readCmdSendsCtrl(s: Record<string, unknown>): CmdSendsCtrl {
     desktopOnly: true,
   },
   {
-    key: TERMINAL_SETTING_KEYS.followClaude,
-    section: 'terminal',
-    label: 'Follow Claude’s edits (preview)',
-    description: 'Show each file Claude Code changes, at the changed lines. For Claude started from One.',
-    keywords: ['claude', 'ai', 'hooks', 'highlight', 'diff', 'agent'],
-    default: TERMINAL_DEFAULTS.followClaude,
-    control: { type: 'toggle' },
-  {
     key: TERMINAL_SETTING_KEYS.cmdSendsCtrl,
     section: 'terminal',
     label: '⌘ chords act as Ctrl (macOS)',
@@ -142,6 +142,24 @@ export function readCmdSendsCtrl(s: Record<string, unknown>): CmdSendsCtrl {
     control: { type: 'segmented', options: [{ v: 'auto', label: 'Automatic' }, { v: 'on', label: 'Always' }, { v: 'off', label: 'Never' }] },
     desktopOnly: true,
   },
+  {
+    key: TERMINAL_SETTING_KEYS.followClaude,
+    section: 'terminal',
+    label: 'Follow Claude’s edits (preview)',
+    description: 'Show each file Claude Code changes and list them in AI changes. For Claude started from One.',
+    keywords: ['claude', 'ai', 'hooks', 'highlight', 'diff', 'agent', 'changes'],
+    default: TERMINAL_DEFAULTS.followClaude,
+    control: { type: 'toggle' },
+    desktopOnly: true,
+  },
+  {
+    key: TERMINAL_SETTING_KEYS.followOpencode,
+    section: 'terminal',
+    label: 'Follow Opencode’s edits (preview)',
+    description: 'Show each file Opencode changes and list them in AI changes. For Opencode started from One.',
+    keywords: ['opencode', 'ai', 'server', 'highlight', 'diff', 'agent', 'changes'],
+    default: TERMINAL_DEFAULTS.followOpencode,
+    control: { type: 'toggle' },
     desktopOnly: true,
   },
 ];

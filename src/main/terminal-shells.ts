@@ -3,7 +3,7 @@
 // on Linux with path.win32 and fixtures.
 import path from 'node:path';
 import { BackendFailure } from '../backend/errors';
-import { prettyDistro, prettyExe, uniqueNames, wslUncInfo, type ClaudeInfo, type ShellInfo, type ShellKind } from '../shared/terminal';
+import { prettyDistro, prettyExe, uniqueNames, wslUncInfo, type ClaudeInfo, type OpencodeInfo, type ShellInfo, type ShellKind } from '../shared/terminal';
 export { wslUncInfo };
 
 type PlatformPath = typeof path.posix;
@@ -331,3 +331,55 @@ export function planClaude(info: ClaudeInfo, cwd: string, o: { platform: string;
   return { file: exe, args: follow ? ['--settings', follow.settings] : [], cwd, env };
 }
 
+
+// ---------------------------------------------------------------- opencode
+
+export const opencodeInstall = (platform: string) => (platform === 'win32' ? 'npm i -g opencode-ai' : 'curl -fsSL https://opencode.ai/install | bash');
+export const opencodeHint = (platform: string) => `Opencode is not installed. In ${platform === 'win32' ? 'PowerShell' : 'a terminal'}: ${opencodeInstall(platform)} — then refresh.`;
+
+/** Finds the `opencode` CLI natively (PATH + the installers' usual folders). Inside WSL is not looked up (yet). */
+export async function detectOpencode(d: DetectEnv): Promise<OpencodeInfo> {
+  const win = d.platform === 'win32';
+  const P = pathFor(String(d.platform));
+  const e = (k: string) => envGet(d.env, k, win);
+  const home = win ? e('USERPROFILE') : e('HOME');
+  const cands = win
+    ? [await which('opencode', d), e('APPDATA') && P.join(e('APPDATA')!, 'npm', 'opencode.cmd'), home && P.join(home, '.opencode', 'bin', 'opencode.exe')]
+    : [await which('opencode', d), ...(home ? [P.join(home, '.opencode/bin/opencode'), P.join(home, '.local/bin/opencode'), P.join(home, '.npm-global/bin/opencode')] : []), '/opt/homebrew/bin/opencode', '/usr/local/bin/opencode'];
+  const found = await firstExisting(cands, d);
+  return found ? { available: true, path: found } : { available: false, hint: opencodeHint(String(d.platform)), install: opencodeInstall(String(d.platform)) };
+}
+
+/**
+ * How main starts its private server for an Opencode terminal: `opencode serve` on loopback, a port of the OS's
+ * choice. An npm shim (opencode.cmd) cannot be started directly on Windows (Node refuses .cmd / .bat without a
+ * shell): it goes through cmd.exe like the TUI below, as one verbatim command line.
+ */
+export function planOpencodeServe(bin: string, o: { platform: string; env: Record<string, string | undefined> }): { file: string; args: string[]; verbatim: boolean } {
+  const args = ['serve', '--hostname', '127.0.0.1', '--port', '0'];
+  if (o.platform !== 'win32' || !/\.(cmd|bat)$/i.test(bin)) return { file: bin, args, verbatim: false };
+  const comspec = envGet(o.env, 'ComSpec', true) || path.win32.join(envGet(o.env, 'SystemRoot', true) || 'C:\\Windows', 'System32', 'cmd.exe');
+  return { file: comspec, args: ['/D', cmdTail('/C', `${cmdQuote(bin)} ${args.join(' ')}`)], verbatim: true };
+}
+
+/**
+ * How to start the Opencode TUI: plain `opencode` in the folder, or — with One's private server (the
+ * "Follow Opencode's edits" setting) — `opencode --server <url>`, the generated password in the terminal's
+ * environment only (never in argv: the process list shows argv).
+ */
+export function planOpencode(info: OpencodeInfo, cwd: string, o: { platform: string; env: Record<string, string | undefined>; server?: { url: string; password: string } }): SpawnPlan {
+  const win = o.platform === 'win32';
+  const exe = info.path!;
+  const P = pathFor(o.platform);
+  const pathKey = win ? (Object.keys(o.env).find((k) => k.toLowerCase() === 'path') ?? 'Path') : 'PATH';
+  const env: Record<string, string> = { [pathKey]: [P.dirname(exe), envGet(o.env, 'PATH', win)].filter(Boolean).join(P.delimiter) };
+  if (o.server) env.OPENCODE_PASSWORD = o.server.password;
+  const args = o.server ? ['--server', o.server.url] : [];
+  if (win && /\.(cmd|bat)$/i.test(exe)) {
+    const comspec = envGet(o.env, 'ComSpec', true) || P.join(envGet(o.env, 'SystemRoot', true) || 'C:\\Windows', 'System32', 'cmd.exe');
+    const run = [cmdQuote(exe), ...args.map(cmdQuote)].join(' ');
+    if (isUncPath(cwd)) return { file: comspec, args: `/D ${cmdTail('/C', `pushd ${cmdQuote(cwd)} && ${run}`)}`, cwd: envGet(o.env, 'USERPROFILE', true) || 'C:\\', env };
+    return { file: comspec, args: `/D ${cmdTail('/C', run)}`, cwd, env };
+  }
+  return { file: exe, args, cwd, env };
+}

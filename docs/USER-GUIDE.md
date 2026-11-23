@@ -811,6 +811,8 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 
 **Claude edits a file → One shows it.** Only for Claude started from One (the steps above).
 
+**Off until you turn it on:** Settings → Terminal → **Follow Claude's edits (preview)**, or palette → **"Claude: Toggle follow edits"**. It applies to **new** Claude terminals.
+
 1. The file **opens** at the changed lines, which **flash green** for a few seconds.
 2. A note says **"Claude edited `src/a.php`"**. In a git folder it has a **Diff** button.
 3. Your cursor **stays in the terminal**. Typing in another file? One only shows the note.
@@ -820,14 +822,36 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
   - It stays until your **next prompt** to Claude.
   - It moves along when you type above it.
   - Other files Claude changed get their bars when you open them.
-  - Remove them now: palette → **"Claude: Clear change marks"**.
+  - Remove them now: palette → **"AI changes: Clear change marks"**.
 - **Unsaved edits are yours.** Such a file is not reloaded or marked: you get the usual **changed on disk** banner.
 - **Many files at once?** One jumps to the newest; the files in between keep their bars.
 
-- **Turn it off:** palette → **"Claude: Toggle follow edits"**, or Settings → Terminal. Applies to **new** Claude terminals.
+- **Turn it off:** the same setting or palette command. Claude then starts like in any terminal.
 - **Your Claude settings are not changed.** One passes its own hooks with `claude --settings`.
-- **Not followed (yet):** files Claude changes through shell commands; files outside the open folder (never opened).
+- **Not shown as they happen:** files Claude changes through shell commands (they appear in **AI changes** when the turn ends); files outside the open folder (never opened).
 - **Windows without WSL:** needs **Git Bash** (Claude Code runs hooks with it).
+
+### Opencode, and the AI changes list (preview)
+
+**Opencode works the same way, with its own switch.** Start it from the ▾ card (**Opencode**) or palette → **"Opencode: Open Opencode"**.
+
+- **Follow it:** Settings → Terminal → **Follow Opencode's edits (preview)**, or palette → **"Opencode: Toggle follow edits"**. Off by default; new Opencode terminals only.
+- **Off:** Opencode starts exactly as in any terminal. **On:** One starts a private Opencode server on this computer for that terminal and stops it with the terminal.
+- **Each switch is for its own assistant.** Claude on and Opencode off (or the other way round) is fine.
+
+**AI changes** (sidebar, `Ctrl+Alt+A`) lists what the assistant changed, **turn by turn**.
+
+1. **One group per turn:** "Turn 3 · 4 files · +120 −8". The **newest turn is open**, older ones are folded.
+2. **Click a header** to fold or unfold it. A new turn folds the older ones again.
+3. **Click a file** to open it. `↑` `↓` move, `←` `→` fold and unfold, `Enter` opens.
+
+- **Right-click a file:** Open · Show diff vs last commit · Reveal in Files · Copy path · **Mark as reviewed** (the row dims until the assistant changes it again).
+- **Right-click a turn:** Collapse others · Expand all · Mark all as reviewed · Copy file list.
+- **Dim numbers are estimates** (the assistant is still working). They turn exact when the turn ends.
+  - Claude: counted by git against your last commit, so the folder must be a **trusted git repository**. Otherwise the estimates stay.
+  - New files git does not track yet keep their estimate.
+- **✕ clears the list.** Cleared files come back only when they change again.
+- **Two assistants at once?** A switcher above the list picks the terminal.
 
 ## 8. Git
 
@@ -1035,6 +1059,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | "Run in terminal" presses Enter | Off |
 | | Keep a terminal ready (next one opens instantly) | Off |
 | | GPU acceleration | Automatic (only on a hardware GPU) |
+| | ⌘ chords act as Ctrl (macOS) | Automatic (only for a Windows-style key remap) |
 | **Browser mode** (desktop only) | Port | Automatic (4317, else the next free one) |
 | | Who can connect | This computer |
 | **MCP server** (desktop only) | Text per read | 16 kB |
@@ -1059,7 +1084,6 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 
 - **The accent is tuned per theme.** The same pick is lightened in dark and darkened in light, so it stays readable.
 - **Line numbers** never show in live or reading view. Code files always have them.
-| | ⌘ chords act as Ctrl (macOS) | Automatic (only for a Windows-style key remap) |
 
 ### Attachment locations
 

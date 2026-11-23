@@ -29,13 +29,47 @@ describe('claudePrompt', () => {
   });
 });
 
+describe('follow edits: one setting per agent', () => {
+  const flags = async (set: { followClaude?: boolean; followOpencode?: boolean }) => {
+    const r = managerRig();
+    Object.assign(r.settings, set);
+    await r.m.create({ preset: 'claude' });
+    await r.m.create({ preset: 'opencode' });
+    await r.m.create();
+    return r.b.spawned.map((q) => [q.preset ?? 'shell', q.follow ?? false]);
+  };
+  it('both off by default: each agent starts as in any terminal', async () => {
+    expect(await flags({})).toEqual([['claude', false], ['opencode', false], ['shell', false]]);
+  });
+  it('each toggle turns on its own agent only', async () => {
+    expect(await flags({ followClaude: true })).toEqual([['claude', true], ['opencode', false], ['shell', false]]);
+    expect(await flags({ followOpencode: true })).toEqual([['claude', false], ['opencode', true], ['shell', false]]);
+    expect(await flags({ followClaude: true, followOpencode: true })).toEqual([['claude', true], ['opencode', true], ['shell', false]]);
+  });
+  it('a restart keeps the agent and reads its setting again; the launcher keeps both tiles across a shell-list reload', async () => {
+    const r = managerRig();
+    r.b.list = { ...r.b.list, claude: { available: true, via: 'native', path: '/usr/bin/claude' }, opencode: { available: true, path: '/usr/bin/opencode' } };
+    await r.m.ensureClaude();
+    const s = (await r.m.create({ preset: 'opencode' }))!;
+    expect(s.shell).toMatchObject({ kind: 'opencode', name: 'Opencode' });
+    r.settings.followOpencode = true;
+    await r.m.restart(s.id);
+    expect(r.b.spawned.map((q) => [q.preset, q.follow ?? false])).toEqual([['opencode', false], ['opencode', true]]);
+    // A plain shell-list load (no agent lookup) after the default shell changed must not drop what the deeper lookup found.
+    r.b.list = { ...r.b.list, claude: undefined, opencode: undefined };
+    r.settings.defaultShell = 'zsh';
+    await r.m.loadShells();
+    expect(r.m.shells.value).toMatchObject({ claude: { available: true }, opencode: { available: true } });
+  });
+});
+
 describe('TerminalManager.askClaude', () => {
   it('starts Claude Code once, waits for it, pre-fills — no Enter; then reuses the same terminal', async () => {
     const r = managerRig();
     r.b.list = { ...r.b.list, claude: { available: true, via: 'native', path: '/usr/bin/claude' } };
     const p = r.m.askClaude('@notes/a.md ');
     await flush(20);
-    expect(r.b.spawned).toEqual([{ shellId: undefined, prefer: undefined, cwd: undefined, cols: 80, rows: 24, preset: 'claude', follow: true }]);
+    expect(r.b.spawned).toEqual([{ shellId: undefined, prefer: undefined, cwd: undefined, cols: 80, rows: 24, preset: 'claude' }]); // follow is off by default
     r.b.emitData(1, '╭ Claude Code ╮');
     expect(await p).toBe(true);
     const v = FakeView.all[0];

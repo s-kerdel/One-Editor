@@ -2,7 +2,7 @@
 // (`secEditBridge.terminal`, see src/main/terminal-bridge.ts); the browser build gets an unavailable
 // backend (no shell over HTTP, ever). Tests drive the UI with a fake.
 import { RpcError } from '../platform';
-import { TERMINAL_LIMITS, type ShellList, type TerminalDataEvent, type TerminalExitEvent, type TerminalFollowEvent, type TerminalReply, type TerminalSpawnRequest, type TerminalSpawnResult } from '@shared/terminal';
+import { TERMINAL_LIMITS, type ShellList, type TerminalDataEvent, type TerminalExitEvent, type TerminalChangesEvent, type TerminalFollowEvent, type TerminalReply, type TerminalSpawnRequest, type TerminalSpawnResult } from '@shared/terminal';
 
 export interface TerminalBackend {
   /** false → the panel only explains why (browser build). */
@@ -19,8 +19,10 @@ export interface TerminalBackend {
   kill(id: number): Promise<void>;
   onData(cb: (e: TerminalDataEvent) => void): () => void;
   onExit(cb: (e: TerminalExitEvent) => void): () => void;
-  /** Claude Code edited a file / ended its turn (optional: older preloads, fakes). */
+  /** An agent terminal (Claude Code, Opencode) edited a file / ended its turn (optional: older preloads, fakes). */
   onFollow?(cb: (e: TerminalFollowEvent) => void): () => void;
+  /** An agent terminal's change list moved (optional like onFollow). */
+  onChanges?(cb: (e: TerminalChangesEvent) => void): () => void;
 }
 
 /** Shape of `secEditBridge.terminal` (src/main/terminal-bridge.ts). */
@@ -34,6 +36,7 @@ export interface TerminalBridgeLike {
   onData(cb: (payload: unknown) => void): () => void;
   onExit(cb: (payload: unknown) => void): () => void;
   onFollow?(cb: (payload: unknown) => void): () => void;
+  onChanges?(cb: (payload: unknown) => void): () => void;
 }
 
 const unwrap = async <T>(p: Promise<unknown>): Promise<T> => {
@@ -75,6 +78,7 @@ export function bridgeTerminalBackend(b: TerminalBridgeLike): TerminalBackend {
       }),
     onExit: (cb) => b.onExit((p) => cb(p as TerminalExitEvent)),
     onFollow: (cb) => b.onFollow?.((p) => cb(p as TerminalFollowEvent)) ?? (() => {}),
+    onChanges: (cb) => b.onChanges?.((p) => cb(p as TerminalChangesEvent)) ?? (() => {}),
   };
 }
 

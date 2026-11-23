@@ -20,8 +20,8 @@ browser mode served by a local Node server. Both share one renderer.
 | `src/format/`, `src/shared/languages.ts`, `src/shared/associations.ts` (file type associations: see "A file's language") | **format** |
 | `src/knowledge/`, `src/renderer/knowledge/`, `src/shared/wikilinks.ts` | **knowledge** |
 | `src/renderer/overview/` (file overview, right column; shell's `Layout` hosts it, state in `ui.overviewVisible` / `ui.overviewWidth`) | **overview** |
-| `src/renderer/terminal/`, `src/main/terminal*.ts`, `src/shared/terminal.ts` (integrated terminal + Claude glue; shell's `Layout` hosts the bottom panel while `panelOpen`) | **terminal** |
-| `src/backend/git*.ts`, `src/shared/git.ts`, `src/renderer/git/` (status, tree marks, change bars, diff view, Source control pane; one `git(op, …)` RPC; the startup stub `git/install.ts` fills `gitUi` slots that FileTree / StatusBar / Popups / the editor read). **When** git runs is decided only by `backend/git-monitor.ts` (debounce, single-flight, adaptive interval, paused while hidden, multi-repo); `backend/git-wsl.ts` runs git inside WSL for `\\wsl.localhost` roots; every spawn is logged via `backend/git-activity.ts`. Read paths never write the repository; the one exception is the monitor's opt-out index stat-cache refresh (`GitService.refreshIndex`: hooks off, skipped while `index.lock` exists, never killed). Don't add renderer-side status polling: report triggers instead (`git('nudge')`, `git('visibility')`). Commit selection **is the index** (pane boxes = `stage` / `unstage`, batched in `git/selection.ts`; no app-side selection state); parts of a file = `git('hunks', path, from?)` (blocks composed from HEAD→index and index→worktree `-U0` diffs, `backend/git-hunks.ts`) and `git('stageHunks', path, picks, from?)` (`git apply --cached --unidiff-zero` with patches built from git's own diff bytes; never touches the working tree). **One way into a file's diff:** `openFileDiff(store, path, row?)` (`git/diff-open.tsx` → `openStaging` in the lazy `git/stage.ts`) serves "Diff with last commit" (menus, palette, status bar) **and** a click on a Source control row, so both show the same commit boxes; a new entry point calls it, never `openDiffWithHead` / `showDiff` directly (those are the plain view underneath). The box style is `git/check.css`, imported by the pane and the diff view (separate chunks). **Editing in the diff view** (`git/diff-edit.ts`, lazy diff chunk): git diffs only on the right side, and only when it IS the workspace file (`editableSide`: HEAD / index → working copy; never HEAD, History). **Compare** (`compareTargets`): either side that IS a workspace file (a whole file shown exactly as its document / the file on disk is now) takes typed text and blocks from the other side ("apply to the other side", both directions; `DiffViewProps.apply` + `basePath` for the left file); the clipboard, a selection and a remembered text are sources only — never render a control pointing at them; "Ignore whitespace" switches the controls off (`off` = the tooltip). The left side of a unified compare has no editor: its changes are `updateOriginalDoc` effects forwarded to the file, undone through `SideHistory` in turn with the editor's own history. It is not a second buffer: edits are forwarded to the file's open document (`app.editor.applyChanges`; no tab yet → `app.openFile` on the first edit), document changes flow back (`doc:changed`), so dirty state, `Ctrl+S`, autosave, EOL and disk conflicts are the editor's. Blocks of an edited diff are re-read from git after each `doc:saved`; a block ticked on unsaved edits saves first (`saveThenPick`). `StagingProps.toggleHunk(index, line?)` + `work` (the text the blocks refer to). **Trust gate** (`backend/git-trust.ts`, enforced in `BackendService.git` before a `GitMonitor` / `GitService` exists): a folder runs **no git at all** — no status, marks, diff, actions, WSL included — until the user says Trust in the Source control panel (`git('trust')` / `git('untrust')`; `status` answers `{ ok: false, reason: 'untrusted', repoLikely? }`, reads the UI makes by itself answer empty, everything else `EACCES`). Remembered per folder (real path, the folder's own case rule) in `<app data>/git-trust.json`, shared by desktop and browser-mode servers; recent folders migrate once. Never start git for the open folder outside `BackendService.git`. Read paths switch off **every** configured filter driver (all config scopes; only canonical Git LFS, and only when git-lfs exists). Tests trust their repos with `trustRepo()` (`tests/e2e/git-helpers.ts`) or `svc.git('trust')` | **git** |
+| `src/renderer/terminal/`, `src/main/terminal*.ts`, `src/shared/terminal.ts` (integrated terminal + Claude Code / Opencode glue; shell's `Layout` hosts the bottom panel while `panelOpen`) | **terminal** |
+| `src/backend/git*.ts`, `src/shared/git.ts`, `src/renderer/git/` (status, tree marks, change bars, diff view, Source control pane; one `git(op, …)` RPC; the startup stub `git/install.ts` fills `gitUi` slots that FileTree / StatusBar / Popups / the editor read). **When** git runs is decided only by `backend/git-monitor.ts` (debounce, single-flight, adaptive interval, paused while hidden, multi-repo); `backend/git-wsl.ts` runs git inside WSL for `\\wsl.localhost` roots; every spawn is logged via `backend/git-activity.ts`. Read paths never write the repository; the one exception is the monitor's opt-out index stat-cache refresh (`GitService.refreshIndex`: hooks off, skipped while `index.lock` exists, never killed). Don't add renderer-side status polling: report triggers instead (`git('nudge')`, `git('visibility')`). **Git gave no answer in time** (every call has a time limit; the first look at a folder gets 15 s, `T_DISCOVER`): the backend sends a code, never a wording — `reason: 'timeout'` (status), `error: 'timeout'` (background lists), `GitActionResult.timeout` (actions) — and every surface shows the one sentence `GIT_TIMEOUT_TEXT` (`shared/git.ts`) once: status texts go through `unavailableText()` (`git/ui.tsx`), never `reason text + message`. Each surface offers one button, **Retry**, and it **only reads the repository again** — `GitStore.retry()` (one at a time, `retrying` signal → a `fresh` status): pane (`Unavailable`), status-bar item, the failed action's box and toast (`retryRead` in `git/actions.ts`), diff opener toast. **Retry never runs a failed action again** (no fetch / pull / push / stage / commit / switch from a retry button, no re-opened diff): the user starts it again by hand once git answers; don't add a "repeat the action" path. A failed first look is not final: `GitMonitor.retryDiscovery()` (single-flight, `GitService.reprobe()`) runs on a `fresh` status and, after a timeout, on window focus (≥ 10 s apart). Commit selection **is the index** (pane boxes = `stage` / `unstage`, batched in `git/selection.ts`; no app-side selection state); parts of a file = `git('hunks', path, from?)` (blocks composed from HEAD→index and index→worktree `-U0` diffs, `backend/git-hunks.ts`) and `git('stageHunks', path, picks, from?)` (`git apply --cached --unidiff-zero` with patches built from git's own diff bytes; never touches the working tree). **One way into a file's diff:** `openFileDiff(store, path, row?)` (`git/diff-open.tsx` → `openStaging` in the lazy `git/stage.ts`) serves "Diff with last commit" (menus, palette, status bar) **and** a click on a Source control row, so both show the same commit boxes; a new entry point calls it, never `openDiffWithHead` / `showDiff` directly (those are the plain view underneath). The box style is `git/check.css`, imported by the pane and the diff view (separate chunks). **Editing in the diff view** (`git/diff-edit.ts`, lazy diff chunk): git diffs only on the right side, and only when it IS the workspace file (`editableSide`: HEAD / index → working copy; never HEAD, History). **Compare** (`compareTargets`): either side that IS a workspace file (a whole file shown exactly as its document / the file on disk is now) takes typed text and blocks from the other side ("apply to the other side", both directions; `DiffViewProps.apply` + `basePath` for the left file); the clipboard, a selection and a remembered text are sources only — never render a control pointing at them; "Ignore whitespace" switches the controls off (`off` = the tooltip). The left side of a unified compare has no editor: its changes are `updateOriginalDoc` effects forwarded to the file, undone through `SideHistory` in turn with the editor's own history. It is not a second buffer: edits are forwarded to the file's open document (`app.editor.applyChanges`; no tab yet → `app.openFile` on the first edit), document changes flow back (`doc:changed`), so dirty state, `Ctrl+S`, autosave, EOL and disk conflicts are the editor's. Blocks of an edited diff are re-read from git after each `doc:saved`; a block ticked on unsaved edits saves first (`saveThenPick`). `StagingProps.toggleHunk(index, line?)` + `work` (the text the blocks refer to). **Trust gate** (`backend/git-trust.ts`, enforced in `BackendService.git` before a `GitMonitor` / `GitService` exists): a folder runs **no git at all** — no status, marks, diff, actions, WSL included — until the user says Trust in the Source control panel (`git('trust')` / `git('untrust')`; `status` answers `{ ok: false, reason: 'untrusted', repoLikely? }`, reads the UI makes by itself answer empty, everything else `EACCES`). Remembered per folder (real path, the folder's own case rule) in `<app data>/git-trust.json`, shared by desktop and browser-mode servers; recent folders migrate once. Never start git for the open folder outside `BackendService.git`. Read paths switch off **every** configured filter driver (all config scopes; only canonical Git LFS, and only when git-lfs exists). Tests trust their repos with `trustRepo()` (`tests/e2e/git-helpers.ts`) or `svc.git('trust')` | **git** |
 | `src/renderer/variables/`, `src/main/vault*.ts`, `src/shared/vault.ts` ({{variables}}, environments / targets, secrets vault, smart paste; the editor chunk holds only `variables/cm.ts`, the rest is the lazy `variables` chunk; `variables/slot.ts` is the status-bar slot) | **variables** |
 | `src/main/web-server*.ts`, `src/shared/web-server.ts`, `src/renderer/webserver/` ("Start web server": browser mode for the open folder as a child process, desktop only; `webserver/slot.ts` is the status-bar corner slot, the rest is the lazy `web-server-ui` chunk, which also carries the corner's MCP icon (`mcp/indicator.tsx`, re-exported: no extra chunk); Settings → Browser mode) | **shell** |
 | `src/main/update-check*.ts`, `src/shared/update-check.ts`, `src/renderer/updates/`, `scripts/shipped-deps.mjs` ("Security updates": opt-in check for a newer Electron patch / end of support / known vulnerabilities in what the build ships, desktop only. Pure rules in `shared/update-check.ts`; requests, cache `<app data>/update-check.json` (findings + summary of what was checked) and the weekly rule in `main/update-check.ts`; `updates/slot.ts` is the status-bar corner slot, the rest (incl. `updates/summary.tsx`, the Settings summary) is the lazy `updates-ui` chunk loaded after the idle Popups chunk; Settings → Security updates. `build-node.mjs` writes `dist/main/shipped-deps.json` from the lockfile: names + versions of every non-dev package) | **shell** |
@@ -182,20 +182,34 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   `src/renderer/terminal/run.ts` (dependency-free) says which fences get a "Run in terminal" button.
   Keys a focused widget must keep from the global keymap: `setGlobalKeyFilter()` in `commands.ts` (the terminal uses it).
   Terminals use their own `term:*` IPC channels (`src/shared/terminal.ts`), not `RPC_METHODS`: they need the sender's identity.
-- **Follow Claude's edits** (terminal, preview; setting `claude.follow`): a Claude preset terminal gets
+- **Follow Claude's edits** (terminal, preview; setting `claude.follow`, **off by default**; Opencode has its own,
+  `opencode.follow`, see "AI changes" below — each setting gates only its own agent: `followsAgent()` in
+  `terminal/settings.ts`, read by the manager at spawn and by `entry.ts` per event; off = the agent starts as in any
+  terminal): a Claude preset terminal gets
   `<app data>/claude-follow/<128-bit hex>/` (0700, removed on exit / quit, stale ones after a day) holding `settings.json`
   (passed with `claude --settings`: user / project Claude settings are never touched) and the inbox `in/`. The hook
   (`FOLLOW_HOOK`, `main/terminal-follow.ts`) is a **fixed** sh string; the folder reaches it only as env `ONE_FOLLOW_DIR`
   (WSL: `WSLENV` `/p`), never by string building. Main reads `in/ev.*.json` (lstat + `O_NOFOLLOW`, regular, ≤ 1 MB,
-  ≤ 40 per second, deleted after reading; contents never logged), allow-lists event + tool, maps the path into the
-  open folder (`mapFollowPath` + `Workspace.real`; anything else is dropped) and sends `term:follow`
-  `{ id, kind, path?, hint?, lines?, probe? }` to the owning window (`lines` = the changed new-file lines from the
+  ≤ 40 per scan and ≤ 80 per second — an edit is two files, before + after —, then a 1 s pause; deleted after reading;
+  contents never logged), allow-lists event + tool, maps the path into the
+  open folder (`mapFollowPath` — the folder as One names it or, for a folder opened through a link / `/tmp` on macOS,
+  as it really is: `FollowCtx.realRoot` — + `Workspace.real`; anything else is dropped) and sends `term:follow`
+  `{ id, agent, kind, path?, hint?, lines?, probe? }` to the owning window (`agent` = `'claude'` | `'opencode'`: the UI
+  names it in its toasts — "Opencode edited x" — and reads that agent's setting; `lines` = the changed new-file lines from the
   response's `structuredPatch`, `patchLines`: undocumented, so validated and optional; `probe` = one added line's text.
   The UI flashes only once the document shows the edit — the probe matches, or the hint is unique after the reload). **Contract:** an inbox event can only make One show a file inside
   the open folder — never write, run or open anything else. UI = the lazy chunk `terminal/follow.ts` (no focus change).
   - **Events:** `kind` = `edit` / `write` / `stop` / `prompt`. `prompt` = `UserPromptSubmit`; its hook
     (`FOLLOW_PROMPT_HOOK`, also fixed) drains stdin and drops a **constant**: the user's prompt is never written to
-    disk. It must print nothing (that event's stdout goes into Claude's context).
+    disk. It must print nothing (that event's stdout goes into Claude's context). `PreToolUse` (same four tools, the
+    same fixed `FOLLOW_HOOK`: prints nothing, exits 0, so it never decides a call) is read as `pre` = "this file is
+    about to change": it only feeds the change list, it is never a follow event.
+  - **When the inbox is read** (`FOLLOW_TIMING`): `fs.watch` is the normal path, a scan 10 ms after a change event
+    (measured ≈ 20 ms from the hook's rename to the window; it was 60 ms + the read). The poll is only the safety net
+    for a file system without change events: every 250 ms while a session is hot — a turn is running (at most 10 min
+    without any event: an interrupted turn sends no Stop) or an event came in the last 5 s — and every 2 s when idle
+    (one directory read). One timer for all sessions; `tests/unit/terminal/follow.test.ts` measures both paths and
+    counts the reads of a working and an idle session.
   - **Queue, not "latest":** `follow.ts` shows every edit in order, one at a time (`pump` / `show`); nothing cancels an
     older edit. A clean open document is re-read at once through the watcher's own entry
     (`disk-sync.handleFsEvents([{ type: 'change', path }])`: same conflict rules by construction; `reloadFromDisk` is
@@ -228,6 +242,65 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   refuses `openWorkspace` / `resolvePath` outside its folder, lists no recents, no process list, no `terminal.*` /
   `webserver.*` settings writes. The renderer chunk loads after the idle Popups chunk (zero startup bytes but the slot);
   browser mode has no bridge, so neither commands nor the Settings section (`SectionDef.desktopOnly`) exist there.
+- **AI changes** (terminal, preview; panel `aichanges`, key `Mod-Alt-a`, desktop only): what an agent terminal started
+  from One changed, per file with + / −, grouped by turn. One contract for every agent: `term:changes`
+  `{ id, agent, busy, turns, files }` = a terminal's **whole** list (≤ 500 rows, at most every 50 ms, only when it
+  moved); a row = `AgentChangeFile { path, status, additions, deletions, turn, exact }` — one row per file, counts for
+  the session so far, `turn` = the turn (1-based count of the user's prompts) that last changed it, `exact: false` = a
+  live estimate. Shared main code is `main/terminal-changes.ts` (path rules `cleanRel` / `toRel`, `mergeRanges`,
+  `touchRow` / `snapshotRows`, the throttled `ChangesSender`): a new agent adds a tracker that fills a row map and
+  calls the sender, nothing in the renderer. Same contract as follow: a row can only name a file inside the open
+  folder (lexical rule in the model, `Workspace.real` before any follow event; opening a row goes through the normal
+  file RPC).
+  - **Claude Code** (`claude.follow`): the hook path above feeds `main/terminal-claude-changes.ts` (pure). `pre` → the
+    row appears before the write; `PostToolUse` → + / − of that call (`patchCounts` next to `patchLines`, else from
+    the call's input), summed per file, `exact: false`; `Stop` → **git's numstat** replaces the estimates and adds
+    files only git saw change (a shell command), `exact: true`. Rows Claude's tools named stay when git lists them
+    no more (committed, git-ignored); rows only git saw go when git drops them; what was already uncommitted when the
+    session started (the baseline numstat, asked once) is never listed; a row a refused / failed call announced goes
+    at Stop. **Git only through the backend**: `git('numstat')` (`GitService.numstat`: `git diff --raw --numstat -z
+    --relative HEAD`, the service's safety switches, bounded, every repository in the folder; parser
+    `backend/git-numstat.ts`) — so the trust gate applies: an untrusted or non-git folder answers null and the
+    estimates stay. `main.ts` hands it in as `follow.numstat`; terminal code never starts git. Asked at session
+    start (baseline) and once per Stop, never polled. Known limits: untracked new files keep their estimate (numstat
+    lists tracked files); numbers are the file's difference from the last commit, so earlier uncommitted edits of a
+    file Claude also edits count in; an interrupted turn (Esc) sends no Stop — "working" stays until the next turn ends.
+  - **Opencode** (`opencode.follow`; off = plain `opencode`, no server): opencode's
+    built-in edit / write / shell tools do not go through MCP, so MCP cannot see them; its own server does. An `opencode`
+    preset terminal gets a private `opencode serve --hostname 127.0.0.1 --port 0` started by main (`main/terminal-opencode.ts`;
+    its own process group, killed as a group with the terminal — Windows: tree kill, an npm shim goes through cmd.exe,
+    `planOpencodeServe`); the address + generated password are read from its stdout, kept in memory only, and given
+    to the TUI (`opencode --server <url>`) as env `OPENCODE_PASSWORD` — never argv, never the server's own env (the agent's
+    shell commands would inherit it), never the renderer / a file / the log. Main only GETs, literal `127.0.0.1`, redirects
+    are errors, every body is size-capped, every request has its own abort scope (nothing is left on the tracker's
+    signal). It subscribes to `GET /api/event` (`types` filter), asks `GET /api/session/{id}/diff`
+    (`context=0`, first..last turn, single flight, debounced) for the exact +/− numbers, and resyncs from the session list on every
+    (re)connect (nothing is replayed after a gap; a stream that opens and ends at once backs off like a refused one).
+    Pure part = `terminal-opencode-model.ts`. Rules worth keeping (each has a regression test): the events name no
+    tool, so only a call whose **input is a write** (`content` / `oldString` / `newString` / a patch) announces a row —
+    a read / search / list under a path never does; an announced row goes when its call fails or the turn ends
+    without it; a subagent's session (`parentID`) counts no turn and sends no `prompt` / `stop`; session ids are id
+    characters only (they go into request paths); the sessions a folder already had at the first look are its
+    history — remembered (`dormant`), listed only once one shows activity (the user resumed it); relative paths are
+    relative to opencode's project root, which is above the open folder when the session's `subpath` says so
+    (`worktreeOf`) — the rest of that project is dropped, not mis-placed.
+    Known limits: native only (no WSL lookup), a `!cmd` the user
+    types in the TUI shows at the next turn, binary files read +0 −0, git-ignored files have no exact stats,
+    non-git folders only get the edit tool's own counts. Recorded fixture: `tests/fixtures/opencode/` (opencode 2.3.2);
+    re-record when opencode changes its event shapes (the `subpath` / project-root rule and the write-input rule are
+    read off that recording and opencode's behaviour, not a documented contract). Attaching to an opencode the user
+    started themselves is a TODO (needs a credential decision).
+  - **UI** = lazy `terminal/changes/` (`store.ts` + `Panel.tsx`, order 14). The store keeps **one list per agent
+    terminal** (≤ 8; the panel shows the one prompted last, a switcher appears with a second terminal; an ended
+    terminal's list stays until cleared) and is pure reducers (`reduceChanges`, `reduceFold`, `reduceReviewed`,
+    `reduceClear`, `groupByTurn`) behind signals. The panel draws one foldable group per turn, newest first
+    ("Turn N · k files · +a −d"): the newest is open, a new turn folds the older ones, a fold made by hand holds until
+    the next turn starts. UI-only state, never sent anywhere: folds, "reviewed" (dims a row until the agent changes it
+    again — same numbers and turn = same row) and "Clear" (the rows shown go and stay away until they change; main
+    keeps sending the whole list). Right-click (the app's `ui.openContextMenu`): a row → Open / Show diff vs last
+    commit (`openFileDiff`) / Reveal in Files / Copy path / Copy relative path / Mark as reviewed; a turn → Collapse /
+    Expand, Collapse others, Expand all, Mark all as reviewed, Copy file list. Keys in the list: ↑ ↓ walk headers and
+    rows, ← folds (from a row: to its header), → unfolds / steps in, Enter / Space are the buttons' own.
 - **Status bar layout** (shell, `app/StatusBar.tsx`): `← → │ folder · crumbs · save · git · vars ··· activity ·
   [Ln/Col · words · EOL · encoding · language · mode] │ MCP · :port · ⛨ n`. The far-right **corner** (`StatusCorner`,
   `.se-status-corner`, its `│` = `::before`) holds what is *on*: MCP server (`mcp/slot.ts`), web server
@@ -387,12 +460,33 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
 | overview | `Mod-Alt-b` toggle file overview (right sidebar) |
 | nav | `Alt-ArrowLeft` / `Alt-ArrowRight` go back / forward (macOS: `Mod-[` / `Mod-]`); mouse side buttons (`button` 3 / 4, window capture, not a key). **Precedence:** global, so they beat CodeMirror's default `Alt-ArrowLeft/Right` (`cursorSyntaxLeft/Right`; on macOS `Mod-[` / `Mod-]` = indent less / more) as in VS Code — those stay in the palette ("Editor: Move cursor to syntax node start / end") and on `Tab` / `Shift-Tab`; `Shift-Alt-ArrowLeft/Right` (select syntax) is untouched. Not in `APP_KEYS_IN_TERMINAL`: in a focused terminal `Alt-←/→` stays readline's word move (the side buttons work there). On a focused ← → button (local, the browser's own context-menu keys): `Shift-F10` / `ContextMenu` open its recent-places list |
 | pdf (viewer-local, focus inside `.se-pdf` only; beats shell's UI zoom via `addGlobalKeyFilter`) | `Mod-f` find, `Mod-=`/`Mod--`/`Mod-0` + `Ctrl`-wheel zoom, `Mod-g` page box |
-| terminal | ``Mod-` `` toggle / focus / hide panel, ``Mod-Shift-` `` (+ `Mod-Shift-~`) new terminal. **macOS also ``Ctrl-` `` / ``Ctrl-Shift-` ``** (shown in hints): ``Cmd-` `` is the OS's "cycle windows" and may never reach the page. macOS menu (`main/app-menu.ts`) has **no Reload accelerators** (Cmd/Ctrl+R would kill the shells; Ctrl+R is readline's reverse-search); dev builds keep Reload as a key-less menu item |
-| terminal (xterm-local, focused terminal only) | `Mod-Shift-c`/`Mod-Shift-v` copy/paste, `Mod-f` find, `Shift-Insert`/`Ctrl-Insert`; Windows also `Ctrl-c` (with a selection) / `Ctrl-v`; macOS `Cmd-c/v/f/a/k` |
+| terminal | ``Mod-` `` toggle / focus / hide panel, ``Mod-Shift-` `` (+ `Mod-Shift-~`) new terminal. **macOS also ``Ctrl-` `` / ``Ctrl-Shift-` ``** (shown in hints): ``Cmd-` `` is the OS's "cycle windows" and may never reach the page. macOS menu (`main/app-menu.ts`) has **no Reload accelerators** (Cmd/Ctrl+R would kill the shells; Ctrl+R is readline's reverse-search); dev builds keep Reload as a key-less menu item | Also `Mod-Alt-a` AI changes panel (in `APP_KEYS_IN_TERMINAL`; command in `terminal/install.ts`, key in `ui.PANEL_KEYS`).
+| terminal (xterm-local, focused terminal only) | `Mod-Shift-c`/`Mod-Shift-v` copy/paste, `Mod-f` find, `Shift-Insert`/`Ctrl-Insert`; Windows also `Ctrl-c` (with a selection) / `Ctrl-v`; macOS `Cmd-c/v/f/a/k` (a real Cmd chord; a Ctrl chord that arrives as Cmd follows the Windows rules, below) |
 
 While a terminal has focus **only** `APP_KEYS_IN_TERMINAL` (`src/renderer/terminal/keys.ts`) reach global commands on
 Windows/Linux — everything else goes to the shell (readline's `Ctrl-w/e/n/t/k/b/r`, F-keys for htop/mc). Add a key
 there only if it must beat the shell.
+
+**macOS terminal keys are decided by the modifiers the event carries, never by the keyboard's labels** (`keys.ts`;
+`tests/unit/terminal/keys.test.ts` covers both keyboards):
+- **Control key (no Cmd) = the shell's**, always: `Ctrl-r/c/d/z/l/a/e/w/u/k`… reach xterm.js untouched. Only
+  ``Ctrl-` ``, ``Ctrl-Shift-` `` and `Ctrl-Tab` / `Ctrl-Shift-Tab` are the app's (`MAC_CTRL_KEYS`); a global command
+  bound to another `Ctrl-…` key does not run in a terminal. The macOS menu (`main/app-menu.ts`) must hold **no
+  accelerator without Cmd** (Electron resolves every role there to a Cmd chord; a Cmd-less key equivalent would run
+  before the page), and main has no `before-input-event` / `globalShortcut`.
+- **A real Cmd chord** keeps the Mac conventions: `Cmd-c/v/f/a/k` are the terminal's, every other app key wins,
+  nothing is sent to the shell.
+- **A Ctrl chord that arrives as a Cmd chord** — a Windows-style remap (Karabiner-Elements "Windows shortcuts":
+  `Ctrl+<key>` → `Cmd+<key>` in every app that is not on its list of terminal emulators; One is not) — **is read as
+  that Ctrl chord**: `APP_KEYS_IN_TERMINAL` decides what the app keeps (so `Cmd-w/e/n/k/a` go to the shell), `Cmd-c`
+  copies only with a selection (else `^C`), `Cmd-v` pastes, `Cmd-f` finds, and every other letter and `[ \ ]` is sent
+  as its control byte by the view (`term.input`: xterm.js encodes nothing for Cmd+letter) with `preventDefault` (else
+  the menu's `Cmd-w` Close Window / `Cmd-z` / `Cmd-a` would run too). `createCmdTracker` recognises it from the event
+  stream: the remapper lets go of Control and presses Cmd for the user ≤ `REMAP_GAP_MS` (30 ms) apart (Karabiner: a
+  fixed 5 ms; left Control: keyup first, right Control: Cmd first), fingers are slower; it holds for as long as that
+  Cmd stays down. Setting **`terminal.cmdSendsCtrl`**: `auto` (detect; default) | `on` (every Cmd chord in the
+  terminal: for swaps that leave no trace, e.g. System Settings → Modifier Keys) | `off`. The tracker is fed by
+  `watchModifiers(window)` in `entry.ts` (macOS only); the global key filter and the view ask the same instance.
 
 ## Rules
 1. **Paths**: everything crossing the backend boundary is workspace-relative POSIX (`notes/a.md`). Never build paths with `\`.
@@ -467,27 +561,6 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
   "Add folders…" step — one folder or several — gets exactly **one** native confirm (`foldersConfirm`) listing each
   alias + real path and, apart, every refused one with its reason — `folderProblem`, already shared, picked twice,
   over the limit; nothing to add = reasons + "OK" only; aliases in sorted path order. Its buttons **[Add read-only]
-**macOS terminal keys are decided by the modifiers the event carries, never by the keyboard's labels** (`keys.ts`;
-`tests/unit/terminal/keys.test.ts` covers both keyboards):
-- **Control key (no Cmd) = the shell's**, always: `Ctrl-r/c/d/z/l/a/e/w/u/k`… reach xterm.js untouched. Only
-  ``Ctrl-` ``, ``Ctrl-Shift-` `` and `Ctrl-Tab` / `Ctrl-Shift-Tab` are the app's (`MAC_CTRL_KEYS`); a global command
-  bound to another `Ctrl-…` key does not run in a terminal. The macOS menu (`main/app-menu.ts`) must hold **no
-  accelerator without Cmd** (Electron resolves every role there to a Cmd chord; a Cmd-less key equivalent would run
-  before the page), and main has no `before-input-event` / `globalShortcut`.
-- **A real Cmd chord** keeps the Mac conventions: `Cmd-c/v/f/a/k` are the terminal's, every other app key wins,
-  nothing is sent to the shell.
-- **A Ctrl chord that arrives as a Cmd chord** — a Windows-style remap (Karabiner-Elements "Windows shortcuts":
-  `Ctrl+<key>` → `Cmd+<key>` in every app that is not on its list of terminal emulators; One is not) — **is read as
-  that Ctrl chord**: `APP_KEYS_IN_TERMINAL` decides what the app keeps (so `Cmd-w/e/n/k/a` go to the shell), `Cmd-c`
-  copies only with a selection (else `^C`), `Cmd-v` pastes, `Cmd-f` finds, and every other letter and `[ \ ]` is sent
-  as its control byte by the view (`term.input`: xterm.js encodes nothing for Cmd+letter) with `preventDefault` (else
-  the menu's `Cmd-w` Close Window / `Cmd-z` / `Cmd-a` would run too). `createCmdTracker` recognises it from the event
-  stream: the remapper lets go of Control and presses Cmd for the user ≤ `REMAP_GAP_MS` (30 ms) apart (Karabiner: a
-  fixed 5 ms; left Control: keyup first, right Control: Cmd first), fingers are slower; it holds for as long as that
-  Cmd stays down. Setting **`terminal.cmdSendsCtrl`**: `auto` (detect; default) | `on` (every Cmd chord in the
-  terminal: for swaps that leave no trace, e.g. System Settings → Modifier Keys) | `off`. The tracker is fed by
-  `watchModifiers(window)` in `entry.ts` (macOS only); the global key filter and the view ask the same instance.
-
   [Add and allow changes] [Cancel]** (Cancel the default) and checkbox **"Also code and config files"** (counted only
   with allow changes; `folderChoice`) set mode and `allowCode` for every folder of that step, from the dialog's own
   response; nothing else asks for them), later per-folder widening — allowing writes, code files in a
@@ -615,6 +688,16 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
   all or nothing, only onto files still as MCP left them; it is restorative, so it also works once the folder is
   read-only again. MCP-written notes get no special trust: they render through the normal sanitizer like any outside edit. Tests
   never use the real trash: injected trash or `XDG_DATA_HOME` / `HOME` under `.tmp/` (`tests/unit/mcp/writes.test.ts`).
+- **File type associations are not a grant** (`files.associations`, a page-writable setting: a page taken over can
+  add rows). For MCP writes they can therefore only refuse **more** (`writeTypeProblem(key, allowCode, mapped)`,
+  `Folder.mappedLanguage()`): the name's own rule (`NEVER_EXTS`, notes, the code grant, text names) is decided
+  first and stays; a name that passes is then held to the rule of the language the user opens it as — `notes.txt`
+  mapped to PHP needs `allowCode` like a `.php` file, anything mapped to a never-written language (JavaScript,
+  Python, PowerShell, Batch) is never written. A mapping makes **no** name writable (`*.ctp` → PHP stays "no text
+  file extension" even with the code grant), changes nothing the server lists, reads or indexes, and is not in
+  `VISIBILITY_KEYS`. `tests/unit/mcp/file-types.test.ts` holds the property (for every language, with and without
+  the grant: what the name alone refuses stays refused). Elsewhere a mapping only changes how a file inside the open
+  folder is highlighted, formatted and indexed as text; a settings file inside the opened folder is never read.
 - **One's own data folder is never served** (settings, mcp.json, the vault, git trust, the text cache, bookmarks): `BackendService`
   opens every workspace with `deny: [configDir, cacheDir]`, and `Workspace.real()` refuses (`EACCES`) any path inside a
   denied folder — as written or where it really is — and the walk leaves it out. It matters when the open folder
@@ -631,13 +714,3 @@ Also pass a private results dir, or parallel runs clobber `test-results/`:
 - Commits: short subject titles (e.g. "Add multi-core search indexing"), no long bodies, **no co-author / tool trailers or links**. Author = the repo-local identity.
 - Before each release: `npm run security` (npm audit, outdated packages, newest Electron patch + end of support, fuses of a built package; exit 1 = fix first). Electron patches carry Chromium security fixes: take them every release.
 - Each iteration ends with `npm run iteration -- "summary"` (bumps the minor version, commits `Release vX.Y.0`, adds an annotated tag).
-- **File type associations are not a grant** (`files.associations`, a page-writable setting: a page taken over can
-  add rows). For MCP writes they can therefore only refuse **more** (`writeTypeProblem(key, allowCode, mapped)`,
-  `Folder.mappedLanguage()`): the name's own rule (`NEVER_EXTS`, notes, the code grant, text names) is decided
-  first and stays; a name that passes is then held to the rule of the language the user opens it as — `notes.txt`
-  mapped to PHP needs `allowCode` like a `.php` file, anything mapped to a never-written language (JavaScript,
-  Python, PowerShell, Batch) is never written. A mapping makes **no** name writable (`*.ctp` → PHP stays "no text
-  file extension" even with the code grant), changes nothing the server lists, reads or indexes, and is not in
-  `VISIBILITY_KEYS`. `tests/unit/mcp/file-types.test.ts` holds the property (for every language, with and without
-  the grant: what the name alone refuses stays refused). Elsewhere a mapping only changes how a file inside the open
-  folder is highlighted, formatted and indexed as text; a settings file inside the opened folder is never read.

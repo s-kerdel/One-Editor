@@ -278,6 +278,14 @@ export type GitWholeFileReason = 'untracked' | 'added' | 'deleted' | 'conflicted
 /** Texts are decoded + LF-normalised (what the diff view shows); the blocks' lines refer to them. */
 export type GitFileHunks = { mode: 'hunks'; head: string; work: string; hunks: GitHunk[] } | { mode: 'file'; reason: GitWholeFileReason };
 
+/** One tracked file that differs from the last commit (`numstat`): workspace-relative path + line counts (binary: 0 / 0). */
+export interface GitNumstatRow {
+  path: string;
+  additions: number;
+  deletions: number;
+  status: 'added' | 'deleted' | 'modified';
+}
+
 /** Every operation behind the single `git(op, ...args)` RPC. Mutating ones validate every path. */
 export interface GitOps {
   /** `since`: the version the caller has (→ same / delta / full); `fresh`: run now (after an action). */
@@ -288,6 +296,9 @@ export interface GitOps {
   visibility(client: string, visible: boolean): void;
   headFile(path: string, rev?: string): GitHeadFile;
   diff(path: string, rev?: string): string | null;
+  /** Line counts of every tracked file that differs from HEAD (work tree, staged or not; untracked files are not
+   *  listed), over every repository in the folder. null: no repository / no commit yet / not trusted. Read only. */
+  numstat(): GitNumstatRow[] | null;
   // Path operations go to the repository that holds each path. Repository operations take `repo`: the
   // repository folder from `status().repos` ('' / omitted = the only or first repository).
   /** null = everything in `repo`. */
@@ -325,4 +336,4 @@ export interface GitOps {
   untrust(): boolean;
 }
 export type GitOp = keyof GitOps;
-export const GIT_OPS: readonly GitOp[] = ['status', 'headFile', 'diff', 'stage', 'unstage', 'discard', 'commit', 'lastMessage', 'fetch', 'pull', 'push', 'branches', 'createBranch', 'switchBranch', 'log', 'commitFiles', 'cancel', 'diffTexts', 'remoteBranches', 'branchDetails', 'nudge', 'visibility', 'hunks', 'stageHunks', 'trust', 'untrust'];
+export const GIT_OPS: readonly GitOp[] = ['status', 'headFile', 'diff', 'stage', 'unstage', 'discard', 'commit', 'lastMessage', 'fetch', 'pull', 'push', 'branches', 'createBranch', 'switchBranch', 'log', 'commitFiles', 'cancel', 'diffTexts', 'remoteBranches', 'branchDetails', 'nudge', 'visibility', 'hunks', 'stageHunks', 'trust', 'untrust', 'numstat'];

@@ -1,4 +1,4 @@
-// "Follow Claude's edits": the editor state behind the green flash and the "changed this turn" marks.
+// "Follow Claude's / Opencode's edits": the editor state behind the green flash and the "changed this turn" marks.
 // CodeMirror state only (no app, no DOM), so the rules are unit-tested on a plain EditorState.
 // Both sets are line decorations: they move with the text (`map(tr.changes)`) and go when their line does.
 import { StateEffect, StateField, type EditorState, type Range, type Text } from '@codemirror/state';
@@ -14,13 +14,13 @@ export const MAX_MARKS_PER_FILE = 2000;
 
 export interface FollowAdd {
   lines: Lines;
-  /** Claude's turn the marks belong to: marks of another turn go at the next sync. */
+  /** The agent's turn the marks belong to: marks of another turn go at the next sync. */
   turn: number;
   /** Also flash, until this time (ms). 0: marks only. */
   until: number;
 }
 
-/** Lines Claude changed: mark them, and flash them when `until` is set. Flashes already running stay. */
+/** Lines the agent changed: mark them, and flash them when `until` is set. Flashes already running stay. */
 export const followAdd = StateEffect.define<FollowAdd>();
 /** Housekeeping: drop flashes that ran out at `now` and marks that are not of turn `turn`. */
 export const followSync = StateEffect.define<{ now: number; turn: number }>();

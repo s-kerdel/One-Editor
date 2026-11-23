@@ -177,6 +177,9 @@ function main() {
       dir: path.join(app.getPath('userData'), 'claude-follow'),
       foldCase: () => !!service.workspace?.foldsCase,
       inside: (rel) => (service.workspace ? service.workspace.real(rel).then(() => true, () => false) : Promise.resolve(false)),
+      // Exact + / − for Claude's change list at the end of a turn: git's own numstat, only through the backend
+      // (its trust gate and safety switches) — null for a folder that is not trusted or not a repository.
+      numstat: () => service.git('numstat').catch(() => null),
     },
   });
   // Process explorer rows (read only while it is open): Chromium processes + which children are shells.

@@ -14,7 +14,8 @@ import { APP_KEYS_TAKING_FOCUS, appKeyWinsInTerminal, cmdTracker, watchModifiers
 import { createTerminalImpl } from './impl';
 import { launcherOpen } from './Panel';
 import { panelMax } from './height';
-import { readTerminalSettings, TERMINAL_SETTING_KEYS } from './settings';
+import { AGENT_NAMES, type AgentKind } from '@shared/terminal';
+import { followsAgent, readCmdSendsCtrl, readTerminalSettings, TERMINAL_SETTING_KEYS } from './settings';
 import { panelOpen } from './state';
 import { TerminalPanelSlot } from './install';
 
@@ -69,7 +70,7 @@ export async function toggleTerminal(): Promise<void> {
   else hideTerminal();
 }
 
-export async function newTerminal(o: { shellId?: string; preset?: 'claude' } = {}) {
+export async function newTerminal(o: { shellId?: string; preset?: 'claude' | 'opencode' } = {}) {
   const t0 = performance.now();
   const m = await showTerminal({ focus: false, autoStart: false });
   return m.create({ ...o, t0, panel: performance.now() });
@@ -121,7 +122,6 @@ export function installTerminalCommands() {
       picker.value = { title, items: (list?.shells ?? []).map((s) => ({ label: s.name, detail: s.path, checked: s.id === def, run: () => run(s.id) })) };
     });
   const os = app.backend?.os ?? 'linux';
-  // A focused terminal keeps readline's Ctrl+W/E/N/T/K/B, F-keys for htop/mc…: only a few app keys win.
   // macOS: a Ctrl chord that a keyboard remapper turned into a Cmd chord stays the shell's (./keys, createCmdTracker).
   if (os === 'darwin') {
     const mode = () => void (cmdTracker.mode = readCmdSendsCtrl(app.settings.value));
@@ -129,6 +129,7 @@ export function installTerminalCommands() {
     app.events.on('settings:changed', mode);
     watchModifiers(window);
   }
+  // A focused terminal keeps readline's Ctrl+W/E/N/T/K/B, F-keys for htop/mc…: only a few app keys win.
   setGlobalKeyFilter((e, key) => {
     const t = e.target as HTMLElement | null;
     if (!t?.closest?.('.se-term-view')) return true;
@@ -184,24 +185,16 @@ export function installTerminalCommands() {
       run: () => void runInTerminal(editorAsk()?.text ?? ''),
     },
     { id: 'claude.open', title: 'Open Claude Code', category: 'Claude', keywords: ['ai', 'assistant', 'claude code', 'agent'], when: desktop, run: () => void newTerminal({ preset: 'claude' }) },
+    { id: 'opencode.open', title: 'Open Opencode', category: 'Opencode', keywords: ['ai', 'assistant', 'agent', 'changes'], when: desktop, run: () => void newTerminal({ preset: 'opencode' }) },
     { id: 'claude.askFile', title: 'Ask about this file', category: 'Claude', keywords: ['ai', 'assistant', 'explain', 'review'], when: () => desktop() && !!app.activePath.value, run: () => void askClaude('file') },
+    toggleFollow('claude', 'Claude', TERMINAL_SETTING_KEYS.followClaude),
+    toggleFollow('opencode', 'Opencode', TERMINAL_SETTING_KEYS.followOpencode),
     {
-      id: 'claude.toggleFollow',
-      title: 'Toggle follow edits',
-      category: 'Claude',
-      keywords: ['ai', 'follow', 'edits', 'highlight', 'hooks', 'changes'],
-      when: desktop,
-      run: () => {
-        const on = !readTerminalSettings(app.settings.value).followClaude;
-        updateSettings({ [TERMINAL_SETTING_KEYS.followClaude]: on });
-        app.toast(on ? 'Following Claude’s edits (new Claude terminals)' : 'No longer following Claude’s edits', 'info');
-      },
-    },
-    {
+      // Marks are the same for every agent: one command clears them all (the id is kept from when only Claude had them).
       id: 'claude.clearMarks',
       title: 'Clear change marks',
-      category: 'Claude',
-      keywords: ['ai', 'follow', 'edits', 'changed', 'turn', 'marks', 'highlight'],
+      category: 'AI changes',
+      keywords: ['ai', 'claude', 'opencode', 'follow', 'edits', 'changed', 'turn', 'marks', 'highlight'],
       when: desktop,
       run: () =>
         void import('./follow')
@@ -228,12 +221,44 @@ export function warmUp() {
   }, 3000);
 }
 
-// "Follow Claude's edits": main reports edits of Claude terminals it started (term:follow). The UI part
-// (./follow: CodeMirror highlight, toast) is its own chunk, fetched with the first event.
+/** "Toggle follow edits" of one agent: its own setting, nothing else (the other agent keeps its own). */
+function toggleFollow(agent: AgentKind, category: string, key: string) {
+  return {
+    id: `${agent}.toggleFollow`,
+    title: 'Toggle follow edits',
+    category,
+    keywords: ['ai', 'follow', 'edits', 'highlight', 'hooks', 'changes'],
+    when: () => backend.available,
+    run: () => {
+      const on = !followsAgent(readTerminalSettings(app.settings.value), agent);
+      updateSettings({ [key]: on });
+      const who = AGENT_NAMES[agent];
+      app.toast(on ? `Following ${who}’s edits (new ${who} terminals)` : `No longer following ${who}’s edits`, 'info');
+    },
+  };
+}
+
+/** Is this agent's "follow edits" setting on right now? (Turned off while its terminal runs: its events stop showing.) */
+const follows = (agent: unknown): agent is AgentKind => (agent === 'claude' || agent === 'opencode') && followsAgent(readTerminalSettings(app.settings.value), agent);
+
+// "Follow edits": main reports edits of the Claude Code / Opencode terminals it started (term:follow, each event
+// names its agent). The UI part (./follow: CodeMirror highlight, toast) is its own chunk, fetched with the first event.
 backend.onFollow?.((e) => {
-  if (readTerminalSettings(app.settings.value).followClaude) void import('./follow').then((m) => m.onFollowEvent(e)).catch(() => {});
+  if (follows(e?.agent)) void import('./follow').then((m) => m.onFollowEvent(e)).catch(() => {});
 });
 
 // Loading this chunk = the commands exist (idle preload or the first Ctrl+`).
 installTerminalCommands();
 warmUp();
+
+// "AI changes": main reports the change list of the agent terminals it started (term:changes). The panel itself is
+// its own chunk (./changes/Panel); the lists live in ./changes/store (small, shared by both).
+const listed = new Set<number>(); // terminals that reported a list: only their exit concerns the store
+backend.onChanges?.((e) => {
+  if (!follows(e?.agent)) return;
+  listed.add(e.id);
+  void import('./changes/store').then((m) => m.applyChanges(e)).catch(() => {});
+});
+backend.onExit((e) => {
+  if (listed.delete(e.id)) void import('./changes/store').then((m) => m.markEnded(e.id)).catch(() => {});
+});

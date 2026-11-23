@@ -7,7 +7,7 @@ import type { TerminalBackend } from './backend';
 import { resolveLinkPath } from './links';
 import { prepareRunText } from './run';
 import { oneLine } from './claude';
-import type { TerminalSettings } from './settings';
+import { followsAgent, type TerminalSettings } from './settings';
 import type { TermTheme } from './theme';
 import type { CreateView, LinkTarget, Off, TerminalView } from './types';
 
@@ -15,7 +15,7 @@ export interface CreateOptions {
   shellId?: string;
   cwd?: string;
   focus?: boolean;
-  preset?: 'claude';
+  preset?: 'claude' | 'opencode';
   /** Timing marks (command time, panel painted). */
   t0?: number;
   panel?: number;
@@ -183,8 +183,8 @@ export class TerminalManager {
     if (refresh || !this.shellsP || prefer !== this.shellsFor) {
       this.shellsFor = prefer;
       this.shellsP = this.d.backend.listShells(refresh, prefer || undefined).then(
-        // Keep the Claude info a deeper lookup added (ensureClaude), unless this is a refresh.
-        (l) => (this.shells.value = { ...l, claude: l.claude ?? (refresh ? undefined : this.shells.value?.claude) }),
+        // Keep the Claude / Opencode info a deeper lookup added (ensureClaude), unless this is a refresh.
+        (l) => (this.shells.value = { ...l, claude: l.claude ?? (refresh ? undefined : this.shells.value?.claude), opencode: l.opencode ?? (refresh ? undefined : this.shells.value?.opencode) }),
         (err) => {
           this.shellsP = null;
           this.error.value = String((err as Error)?.message ?? err);
@@ -277,7 +277,8 @@ export class TerminalManager {
       let cwd = o.cwd ?? '';
       const size = this.estimateSize(s.fontSize);
       // `prefer` also for the Claude preset: Claude runs where the ★ default shell is (WSL or native).
-      spawnP = b.spawn({ shellId: o.shellId, prefer: o.shellId ? undefined : s.defaultShell || undefined, cwd: o.cwd, cols: size.cols, rows: size.rows, ...(o.preset ? { preset: o.preset, ...(s.followClaude ? { follow: true } : {}) } : {}) });
+      // `follow`: each agent has its own setting; off = the agent starts as in any terminal (no hooks, no server).
+      spawnP = b.spawn({ shellId: o.shellId, prefer: o.shellId ? undefined : s.defaultShell || undefined, cwd: o.cwd, cols: size.cols, rows: size.rows, ...(o.preset ? { preset: o.preset, ...(followsAgent(s, o.preset) ? { follow: true } : {}) } : {}) });
       spawnP.catch(() => {}); // handled below (an unhandled rejection while the view loads would be noise)
       view = await this.d.createView({
         os: this.d.os,
@@ -443,9 +444,9 @@ export class TerminalManager {
     const s = this.byId(id);
     if (!s) return null;
     const at = this.sessions.value.indexOf(s);
-    const claude = s.shell.kind === 'claude';
+    const preset = s.shell.kind === 'claude' || s.shell.kind === 'opencode' ? s.shell.kind : undefined;
     await this.close(id, { quiet: true });
-    const n = await this.create({ shellId: claude ? undefined : s.shell.id, preset: claude ? 'claude' : undefined, cwd: s.cwd || undefined });
+    const n = await this.create({ shellId: preset ? undefined : s.shell.id, preset, cwd: s.cwd || undefined });
     if (n) {
       const rest = this.sessions.value.filter((x) => x !== n);
       this.sessions.value = [...rest.slice(0, at), n, ...rest.slice(at)];

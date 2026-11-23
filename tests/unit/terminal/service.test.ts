@@ -369,6 +369,43 @@ describe('TerminalService (real node-pty)', () => {
     }
   });
 
+  it('opencode preset: private server first, the TUI attaches with the password in ITS env only; refuses when missing', async () => {
+    const bin = fs.mkdtempSync(path.join(tmpRoot, 'bin-'));
+    fs.writeFileSync(path.join(bin, 'opencode'), '#!/bin/sh\necho "OC STUB args=$* pw=${OPENCODE_PASSWORD:-none}"\n', { mode: 0o755 });
+    try {
+      const { EventEmitter } = await import('node:events');
+      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), killed: false, kill: () => ((child as any).killed = true) });
+      let started = 0;
+      const follow = { dir: path.join(bin, 'f'), foldCase: () => false, inside: async () => true };
+      const r = rig({
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: bin },
+        follow,
+        opencodeSpawn: () => {
+          started++;
+          queueMicrotask(() => child.stdout.emit('data', Buffer.from('server listening on http://127.0.0.1:9\nserver password secret-pass-12345\n')));
+          return child as never;
+        },
+      });
+      expect((await r.svc.listShells()).opencode).toBeUndefined(); // not looked up unless asked
+      expect((await r.svc.listShells(false, undefined, true)).opencode).toEqual({ available: true, path: path.join(bin, 'opencode') });
+      const t = await r.svc.spawn(1, { preset: 'opencode', follow: true });
+      expect(t.shell).toMatchObject({ id: 'opencode', kind: 'opencode' });
+      await r.waitFor(t.id, /OC STUB args=--server http:\/\/127\.0\.0\.1:9 pw=secret-pass-12345/);
+      expect(started).toBe(1);
+      await r.waitExit(t.id);
+      expect(child.killed).toBe(true); // the terminal ended: its server goes with it
+      // Follow off (the setting): plain opencode, no server, no password.
+      const t2 = await r.svc.spawn(1, { preset: 'opencode' });
+      await r.waitFor(t2.id, /OC STUB args= pw=none/);
+      expect(started).toBe(1);
+
+      const none = rig({ detectOpencode: async () => ({ available: false, hint: 'get opencode' }) });
+      await expect(none.svc.spawn(1, { preset: 'opencode' })).rejects.toMatchObject({ code: 'ENOENT', message: 'get opencode' });
+    } finally {
+      fs.rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
   it('Claude lookup follows the preferred shell (WSL distro → inside it) and is cached per distro', async () => {
     const calls: Array<string | null> = [];
     const wsl: ShellInfo = { id: 'wsl:Ubuntu', name: 'Ubuntu (WSL)', kind: 'wsl', path: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu'] };

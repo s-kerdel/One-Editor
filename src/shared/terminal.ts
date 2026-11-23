@@ -3,7 +3,7 @@
 // fire-and-forget keystrokes, so they use their own `term:*` IPC channels (src/main/terminal.ts).
 // The browser build never gets a shell: the HTTP server refuses these names with ENOTSUP.
 
-export type ShellKind = 'pwsh' | 'powershell' | 'cmd' | 'gitbash' | 'wsl' | 'bash' | 'zsh' | 'fish' | 'sh' | 'other' | 'claude';
+export type ShellKind = 'pwsh' | 'powershell' | 'cmd' | 'gitbash' | 'wsl' | 'bash' | 'zsh' | 'fish' | 'sh' | 'other' | 'claude' | 'opencode';
 
 export interface ShellInfo {
   /** Stable id the renderer sends back ('pwsh', 'cmd', 'wsl:Ubuntu', 'bash', …). Never a path. */
@@ -32,10 +32,20 @@ export interface ClaudeInfo {
   install?: string;
 }
 
+/** Opencode CLI (`opencode`) — started like Claude Code; with "Follow Opencode's edits" against a server One owns (main/terminal-opencode.ts). Native only. */
+export interface OpencodeInfo {
+  available: boolean;
+  path?: string;
+  hint?: string;
+  install?: string;
+}
+
 export interface ShellList {
   shells: ShellInfo[];
   /** Only when asked for (the lookup can start a WSL distro): see listShells(…, withClaude). */
   claude?: ClaudeInfo;
+  /** Same lookup, same rule: only when asked for. */
+  opencode?: OpencodeInfo;
   /** Automatic default for this machine + workspace (the renderer's `terminal.defaultShell` wins if valid). */
   defaultId: string | null;
   /** Backend process.platform. */
@@ -48,15 +58,17 @@ export interface TerminalSpawnRequest {
   /** Shell id from listShells(); omitted → the automatic default. With preset 'claude': the shell
    *  whose environment Claude runs in (a WSL distro → Claude inside that distro). */
   shellId?: string;
-  /** Start Claude Code instead of a shell. */
-  preset?: 'claude';
+  /** Start an agent (Claude Code, Opencode) instead of a shell. */
+  preset?: AgentKind;
   /** No shellId: use this one (the default-shell setting) when the machine has it, else the automatic default. */
   prefer?: string;
   /** Workspace-relative folder to start in ('' / omitted = the workspace root). */
   cwd?: string;
   cols?: number;
   rows?: number;
-  /** With preset 'claude': report Claude's file edits back (`term:follow`, setting `claude.follow`). */
+  /** With preset 'claude' / 'opencode': report the agent's file edits (`term:follow`) and its change list
+   *  (`term:changes`) back. Settings `claude.follow` / `opencode.follow`, one per agent; off = the agent starts as it
+   *  would in any terminal (no hooks, no private server). */
   follow?: boolean;
 }
 
@@ -84,21 +96,60 @@ export interface TerminalExitEvent {
 /** Longest `probe.text` (a longer line is compared by this prefix). */
 export const FOLLOW_PROBE_CHARS = 200;
 
-/** Claude Code changed a file in the open folder (main/terminal-follow.ts), or finished its turn. */
+/** An agent terminal started by One: Claude Code (hooks, main/terminal-follow.ts) or Opencode (its server, main/terminal-opencode.ts). */
+export type AgentKind = 'claude' | 'opencode';
+export const AGENT_KINDS: readonly AgentKind[] = ['claude', 'opencode'];
+/** The names the UI shows (launcher tile, tab, panel, toasts). */
+export const AGENT_NAMES: Record<AgentKind, string> = { claude: 'Claude Code', opencode: 'Opencode' };
+
+/** An agent changed a file in the open folder (Claude Code: main/terminal-follow.ts, Opencode: main/terminal-opencode.ts), or finished its turn. */
 export interface TerminalFollowEvent {
   /** Terminal id. */
   id: number;
-  /** 'stop' = Claude finished its turn; 'prompt' = the user's next prompt was submitted (both without a path). */
+  /** Which agent the terminal runs (set by main; the UI names it in its toasts and reads that agent's setting). */
+  agent: AgentKind;
+  /** 'stop' = the agent finished its turn; 'prompt' = the user's next prompt was submitted (both without a path). */
   kind: 'edit' | 'write' | 'stop' | 'prompt';
   /** Workspace-relative POSIX path (edit / write). Never a path outside the open folder. */
   path?: string;
   /** Start of the new text: only to find the edited lines (fallback when there are no `lines`). */
   hint?: string;
-  /** Changed lines of the file as it is after the edit (1-based, inclusive, merged), from Claude's own patch. */
+  /** Changed lines of the file as it is after the edit (1-based, inclusive, merged), from the agent's own patch. */
   lines?: Array<[number, number]>;
   /** Text of one added line: the document shows the edit once that line reads like this. */
   probe?: { line: number; text: string };
 }
+
+/** One file an agent changed (main/terminal-changes.ts). Never a path outside the open folder. */
+export interface AgentChangeFile {
+  /** Workspace-relative POSIX path. */
+  path: string;
+  status: 'added' | 'deleted' | 'modified';
+  /** Counts for the whole session so far (not per turn): one row per file. */
+  additions: number;
+  deletions: number;
+  /** The turn (1-based count of the user's prompts in this terminal) the file was last changed in; 0 = before the first. */
+  turn: number;
+  /** false = a live estimate (the agent is still working: its own patch counts), true = counted by a diff
+   *  (Opencode: its session diff; Claude Code: git's numstat against the last commit, at the end of a turn). */
+  exact: boolean;
+}
+
+/** The change list of an agent terminal, replaced as a whole whenever it moves (small: capped, throttled in main). */
+export interface TerminalChangesEvent {
+  /** Terminal id. */
+  id: number;
+  agent: AgentKind;
+  /** The agent is working on a turn right now. */
+  busy: boolean;
+  /** Turns since this terminal started (the list is what all of them changed together). */
+  turns: number;
+  files: AgentChangeFile[];
+}
+
+export const CHANGES_MAX_FILES = 500;
+/** Main sends a terminal's list at most this often (trailing: the newest state always arrives). */
+export const CHANGES_EMIT_MS = 50;
 
 export interface TerminalLimits {
   /** Live terminals per window. */
@@ -141,6 +192,7 @@ export const TERMINAL_CHANNELS = {
   data: 'term:data',
   exit: 'term:exit',
   follow: 'term:follow',
+  changes: 'term:changes',
 } as const;
 
 /** Names the HTTP server must refuse with ENOTSUP (browser mode never exposes a shell). */

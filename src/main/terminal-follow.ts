@@ -1,14 +1,18 @@
 // "Follow Claude's edits" (preview), main side. A Claude Code terminal started by One gets a private
 // inbox folder + a settings file (passed with `claude --settings`, so the user's and the project's
 // Claude settings are never touched). Claude Code hooks drop one small JSON file per edit there; this
-// module reads them and tells the owning window which workspace file changed. Nothing here writes to
-// the workspace, listens on a socket or runs a program.
+// module reads them and tells the owning window which workspace file changed (`term:follow`) and what the
+// session changed so far (`term:changes`, the list Opencode terminals report too: terminal-claude-changes.ts).
+// Nothing here writes to the workspace, listens on a socket or runs a program (git's numstat for the exact
+// numbers is asked of the backend, behind its trust gate).
 // Trust: any process of the same user can drop a file in the inbox. So an event can only ever mean
 // "show a file inside the open folder" — the path must map into the workspace, everything else is ignored.
 import path from 'node:path';
 import fs from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { FOLLOW_PROBE_CHARS, type TerminalFollowEvent } from '../shared/terminal';
+import { FOLLOW_PROBE_CHARS, type TerminalChangesEvent, type TerminalFollowEvent } from '../shared/terminal';
+import { ChangesSender, countLines, isObj, mergeRanges, PATCH_LIMITS } from './terminal-changes';
+import { emptyClaudeChanges, onClaudeStep, reconcile, setBaseline, type ClaudeChanges, type ClaudeStep } from './terminal-claude-changes';
 import { pathFor, wslPathFor } from './terminal-shells';
 
 /** Env var the hook reads its session folder from (WSL: translated by WSLENV's /p flag). */
@@ -35,11 +39,15 @@ export const FOLLOW_PROMPT_HOOK = `cat >/dev/null; [ -d "$${FOLLOW_ENV}/${INBOX}
 
 const FOLLOW_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'] as const;
 
-/** Contents of the per-session settings file. */
+/**
+ * Contents of the per-session settings file. `PreToolUse` (same tools, same fixed hook: it prints nothing and
+ * exits 0, so it never decides anything about the call) is the early "this file is about to change" signal.
+ */
 export function followSettings() {
   const hooks = [{ type: 'command', command: FOLLOW_HOOK, timeout: 5 }];
   const prompt = [{ type: 'command', command: FOLLOW_PROMPT_HOOK, timeout: 5 }];
-  return { hooks: { PostToolUse: [{ matcher: FOLLOW_TOOLS.join('|'), hooks }], Stop: [{ hooks }], UserPromptSubmit: [{ hooks: prompt }] } };
+  const matcher = FOLLOW_TOOLS.join('|');
+  return { hooks: { PreToolUse: [{ matcher, hooks }], PostToolUse: [{ matcher, hooks }], Stop: [{ hooks }], UserPromptSubmit: [{ hooks: prompt }] } };
 }
 
 // ---------------------------------------------------------------- pure: payload + path rules
@@ -49,62 +57,87 @@ export const FOLLOW_MAX_BYTES = 1024 * 1024;
 export const FOLLOW_HINT_CHARS = 4096;
 
 export interface FollowRaw {
-  kind: TerminalFollowEvent['kind'];
+  /** 'pre' = PreToolUse: the file is about to change (the change list only; never sent as a follow event). */
+  kind: TerminalFollowEvent['kind'] | 'pre';
   /** Absolute path as Claude reported it (untrusted). */
   filePath?: string;
   hint?: string;
   lines?: Array<[number, number]>;
   probe?: { line: number; text: string };
+  /** Lines this one call added / removed: from its patch, else from its input (the list's live estimate). */
+  counts?: { additions: number; deletions: number };
+  /** `Write` made a new file. */
+  created?: true;
 }
 
-export const FOLLOW_MAX_RANGES = 20;
-const MAX_HUNKS = 200;
-const MAX_PATCH_LINES = 50_000;
-const MAX_LINE_NO = 10_000_000;
+export const FOLLOW_MAX_RANGES = PATCH_LIMITS.ranges;
 
 /**
- * Changed lines of the new file from the `structuredPatch` in an Edit / Write / MultiEdit `tool_response`
+ * One walk over the `structuredPatch` in an Edit / Write / MultiEdit `tool_response`
  * (`[{ newStart, lines: [' ctx', '-old', '+new'] }]`; not in the hooks docs, so: used when well-formed,
  * else null and the caller falls back). The counter starts at `newStart`: context moves it, an added line
  * is marked and moves it, a removed line marks where it was without moving. Context lines are not marked.
  */
-export function patchLines(response: unknown): Pick<FollowRaw, 'lines' | 'probe'> | null {
+function walkPatch(response: unknown): { marks: number[]; probe?: FollowRaw['probe']; additions: number; deletions: number } | null {
   const patch = isObj(response) ? response.structuredPatch : null;
-  if (!Array.isArray(patch) || !patch.length || patch.length > MAX_HUNKS) return null;
+  if (!Array.isArray(patch) || !patch.length || patch.length > PATCH_LIMITS.hunks) return null;
   const marks: number[] = [];
   let probe: FollowRaw['probe'];
   let walked = 0;
+  let additions = 0;
+  let deletions = 0;
   for (const h of patch as unknown[]) {
     if (!isObj(h) || !Array.isArray(h.lines)) return null;
     const start = h.newStart;
-    if (typeof start !== 'number' || !Number.isInteger(start) || start < 0 || start > MAX_LINE_NO) return null;
+    if (typeof start !== 'number' || !Number.isInteger(start) || start < 0 || start > PATCH_LIMITS.lineNo) return null;
     let n = Math.max(1, start); // an emptied file reports newStart 0
     for (const l of h.lines as unknown[]) {
-      if (typeof l !== 'string' || ++walked > MAX_PATCH_LINES) return null;
+      if (typeof l !== 'string' || ++walked > PATCH_LIMITS.lines) return null;
       const c = l[0];
       if (c === '\\') continue; // "\ No newline at end of file"
       if (c === '+') {
         const text = l.slice(1).replace(/\r$/, '');
         if (!probe && text.trim()) probe = { line: n, text: text.slice(0, FOLLOW_PROBE_CHARS) };
         marks.push(n++);
-      } else if (c === '-') marks.push(n);
-      else if (c === ' ' || l === '') n++; // some diff writers leave an empty context line bare
+        additions++;
+      } else if (c === '-') {
+        marks.push(n);
+        deletions++;
+      } else if (c === ' ' || l === '') n++; // some diff writers leave an empty context line bare
       else return null;
     }
   }
-  if (!marks.length) return null;
-  marks.sort((a, b) => a - b);
-  const lines: Array<[number, number]> = [];
-  for (const m of marks) {
-    const last = lines[lines.length - 1];
-    if (last && m <= last[1] + 1) last[1] = Math.max(last[1], m);
-    else if (lines.length < FOLLOW_MAX_RANGES) lines.push([m, m]);
-    else break;
-  }
-  return { lines, ...(probe && probe.line <= lines[lines.length - 1][1] ? { probe } : {}) };
+  return marks.length ? { marks, probe, additions, deletions } : null;
 }
 
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+/** Changed lines of the new file (merged ranges, capped) + one added line's text to recognise the reloaded document by. */
+export function patchLines(response: unknown): Pick<FollowRaw, 'lines' | 'probe'> | null {
+  const w = walkPatch(response);
+  if (!w) return null;
+  const lines = mergeRanges(w.marks, FOLLOW_MAX_RANGES);
+  return { lines, ...(w.probe && w.probe.line <= lines[lines.length - 1][1] ? { probe: w.probe } : {}) };
+}
+
+/** Added / removed lines of the same patch (the change list's + / − for this one call). */
+export function patchCounts(response: unknown): { additions: number; deletions: number } | null {
+  const w = walkPatch(response);
+  return w ? { additions: w.additions, deletions: w.deletions } : null;
+}
+
+/** Without a patch in the response: what the call's own input says (the replaced text against the new one). */
+function inputCounts(tool: string, input: Record<string, unknown>): { additions: number; deletions: number } | null {
+  const one = (e: Record<string, unknown>) => ({ additions: countLines(e.new_string), deletions: countLines(e.old_string) });
+  if (tool === 'Edit') return one(input);
+  if (tool !== 'MultiEdit' || !Array.isArray(input.edits)) return null;
+  const sum = { additions: 0, deletions: 0 };
+  for (const e of (input.edits as unknown[]).slice(0, PATCH_LIMITS.hunks)) {
+    if (!isObj(e)) continue;
+    const c = one(e);
+    sum.additions += c.additions;
+    sum.deletions += c.deletions;
+  }
+  return sum;
+}
 
 /** Strict read of one hook payload: allow-listed event + tool, a sane path; unknown fields are ignored. */
 export function parseFollowEvent(text: string): FollowRaw | null {
@@ -117,13 +150,15 @@ export function parseFollowEvent(text: string): FollowRaw | null {
   if (!isObj(v)) return null;
   if (v.hook_event_name === 'Stop') return { kind: 'stop' };
   if (v.hook_event_name === 'UserPromptSubmit') return { kind: 'prompt' }; // the prompt itself is never read
-  if (v.hook_event_name !== 'PostToolUse') return null;
+  const pre = v.hook_event_name === 'PreToolUse';
+  if (!pre && v.hook_event_name !== 'PostToolUse') return null;
   const tool = v.tool_name;
   if (typeof tool !== 'string' || !(FOLLOW_TOOLS as readonly string[]).includes(tool) || !isObj(v.tool_input)) return null;
-  if (typeof v.tool_response === 'string') return null; // a failed call: nothing changed
+  if (!pre && typeof v.tool_response === 'string') return null; // a failed call: nothing changed
   const input = v.tool_input;
   const filePath = tool === 'NotebookEdit' ? input.notebook_path : input.file_path;
   if (typeof filePath !== 'string' || !filePath || filePath.length > 4096 || /[\u0000-\u001f\u007f]/.test(filePath)) return null;
+  if (pre) return { kind: 'pre', filePath }; // nothing of the text to come is carried on
   let hint: unknown;
   if (tool === 'Edit') hint = input.new_string;
   else if (tool === 'MultiEdit' && Array.isArray(input.edits)) hint = (input.edits as unknown[]).filter(isObj).pop()?.new_string;
@@ -131,13 +166,23 @@ export function parseFollowEvent(text: string): FollowRaw | null {
   if (typeof hint === 'string' && hint.trim()) out.hint = hint.slice(0, FOLLOW_HINT_CHARS);
   // A new file has no "changed lines": the whole file is new.
   const created = tool === 'Write' && isObj(v.tool_response) && v.tool_response.type === 'create';
-  if (tool !== 'NotebookEdit' && !created) Object.assign(out, patchLines(v.tool_response));
+  if (created) {
+    out.created = true;
+    out.counts = { additions: countLines(input.content), deletions: 0 };
+  } else if (tool !== 'NotebookEdit') {
+    Object.assign(out, patchLines(v.tool_response));
+    const counts = patchCounts(v.tool_response) ?? inputCounts(tool, input);
+    if (counts) out.counts = counts;
+  }
   return out;
 }
 
 export interface FollowCtx {
   /** The open folder (native absolute path). */
   root: string;
+  /** The same folder without links, when that is another path (`/tmp/x` → `/private/tmp/x`, a folder opened through
+   *  a symlink): an agent names files by its working folder, which the OS reports link-free. */
+  realRoot?: string | null;
   platform: string;
   /** The folder's own case rule (`Workspace.foldsCase`), never the OS's. */
   foldCase: boolean;
@@ -146,13 +191,20 @@ export interface FollowCtx {
 }
 
 /**
- * Claude's absolute path → workspace-relative POSIX path, or null when it is not inside the open
- * folder. Lexical only (`..` resolved first); the caller still runs the workspace's real-path rule.
+ * An agent's absolute path → workspace-relative POSIX path, or null when it is not inside the open
+ * folder (as One names it, or as it really is: `realRoot`). Lexical only (`..` resolved first); the caller
+ * still runs the workspace's real-path rule.
  */
 export function mapFollowPath(filePath: string, o: FollowCtx): string | null {
+  const rel = mapInto(filePath, o, o.root);
+  if (rel !== null || !o.realRoot || o.realRoot === o.root || o.wslDistro) return rel;
+  return mapInto(filePath, o, o.realRoot);
+}
+
+function mapInto(filePath: string, o: FollowCtx, folder: string): string | null {
   const win = !o.wslDistro && o.platform === 'win32';
   const P = o.wslDistro ? path.posix : pathFor(o.platform);
-  const base = o.wslDistro ? wslPathFor(o.root, o.wslDistro) : o.root;
+  const base = o.wslDistro ? wslPathFor(folder, o.wslDistro) : folder;
   if (!base || !P.isAbsolute(base)) return null;
   // win32 calls "\x" and "C:x" rooted / drive-relative: only full drive or UNC paths count.
   if (win ? !/^([a-z]:[\\/]|[\\/]{2}[^\\/])/i.test(filePath) : !filePath.startsWith('/')) return null;
@@ -171,13 +223,22 @@ export function mapFollowPath(filePath: string, o: FollowCtx): string | null {
 
 const SESSION_NAME = /^[0-9a-f]{32}$/;
 const EVENT_NAME = /^ev\.[A-Za-z0-9_]{1,32}\.json$/;
-/** Files handled per scan; a scan that hits it waits FLOOD_WAIT_MS (≈ 40 events / second at most). */
+/** Files handled per scan / per second: past either the session waits `floodWaitMs` (an edit is two files: before + after). */
 const MAX_PER_SCAN = 40;
-const FLOOD_WAIT_MS = 1000;
+const MAX_PER_SECOND = 80;
 /** More entries than this is not Claude editing: drop them all unread. */
 const MAX_BACKLOG = 1000;
 const STALE_MS = 24 * 60 * 60 * 1000;
-const POLL_MS = 2000;
+
+/**
+ * When the inbox is read. Change events (`fs.watch`) are the normal path: a scan `debounceMs` after one (the hook
+ * writes under a temporary name and renames, so one event file makes two or three change events; a scan that came
+ * too early is simply followed by another). The poll is only the safety net for a file system without change
+ * events: every `fastPollMs` while a session is "hot" — a turn is running (at most `hotTurnMs` without any event:
+ * an interrupted turn sends no Stop) or an event came in the last `hotTailMs` — and every `idlePollMs` otherwise,
+ * so an idle Claude costs one directory read every two seconds.
+ */
+export const FOLLOW_TIMING = { debounceMs: 10, fastPollMs: 250, idlePollMs: 2000, hotTailMs: 5000, hotTurnMs: 10 * 60_000, floodWaitMs: 1000 };
 
 /**
  * One inbox file's text, or null unless it is a small regular file: lstat, then open without
@@ -211,6 +272,18 @@ interface Session {
   busy: boolean;
   /** A file arrived while a scan ran. */
   again: boolean;
+  /** The change list of this terminal. */
+  ch: ClaudeChanges;
+  sender: ChangesSender;
+  /** Polled every `fastPollMs` until then. */
+  hotUntil: number;
+  polledAt: number;
+  /** Flood window: its start and the files read in it. */
+  winAt: number;
+  winN: number;
+  /** A numstat for this session is running / one more is wanted after it. */
+  settling: boolean;
+  settleAgain: boolean;
 }
 
 export interface ClaudeFollowOptions {
@@ -219,14 +292,34 @@ export interface ClaudeFollowOptions {
   /** The workspace's real-path rule for a relative path (`Workspace.real`): false = outside, ignore. */
   inside: (rel: string) => Promise<boolean>;
   emit: (terminalId: number, e: TerminalFollowEvent) => void;
+  /** The terminal's change list moved (`term:changes`). */
+  emitChanges?: (terminalId: number, e: TerminalChangesEvent) => void;
+  /**
+   * git's numstat for the open folder (`BackendService.git('numstat')`: behind the trust gate, with the git
+   * service's own safety switches — this module never starts git). null / a failure = no exact numbers.
+   */
+  numstat?: () => Promise<unknown>;
+  /** Test hooks: false = no change events (the poll alone), other timings. */
+  watch?: boolean;
+  timing?: Partial<typeof FOLLOW_TIMING>;
 }
 
 export class ClaudeFollow {
   private readonly sessions = new Map<number, Session>();
+  private readonly T: typeof FOLLOW_TIMING;
   private poll: NodeJS.Timeout | null = null;
+  private pollFast = false;
   private swept = false;
+  private scans = 0;
 
-  constructor(private readonly o: ClaudeFollowOptions) {}
+  constructor(private readonly o: ClaudeFollowOptions) {
+    this.T = { ...FOLLOW_TIMING, ...o.timing };
+  }
+
+  /** Inbox reads so far (tests: what an idle / a working session costs). */
+  stats() {
+    return { scans: this.scans, sessions: this.sessions.size, fast: this.pollFast && !!this.poll };
+  }
 
   /** New session folder for terminal `id`; null when it cannot be made (Claude then starts without). */
   async open(id: number, ctx: FollowCtx): Promise<{ dir: string; settings: string } | null> {
@@ -241,14 +334,18 @@ export class ClaudeFollow {
       await fs.promises.mkdir(path.join(dir, INBOX), { mode: 0o700 });
       const settings = path.join(dir, FOLLOW_SETTINGS_FILE);
       await fs.promises.writeFile(settings, JSON.stringify(followSettings()), { mode: 0o600, flag: 'wx' });
-      const s: Session = { id, dir, ctx, watcher: null, timer: null, busy: false, again: false };
+      const ch = emptyClaudeChanges();
+      const sender = new ChangesSender(id, 'claude', () => ch, (e) => this.o.emitChanges?.(id, e));
+      const s: Session = { id, dir, ctx, watcher: null, timer: null, busy: false, again: false, ch, sender, hotUntil: 0, polledAt: Date.now(), winAt: 0, winN: 0, settling: false, settleAgain: false };
       this.sessions.set(id, s);
-      try {
-        s.watcher = fs.watch(path.join(dir, INBOX), { persistent: false }, () => this.schedule(s, 60));
-        s.watcher.on('error', () => this.unwatch(s)); // the poll below still covers it
-      } catch {}
-      this.poll ??= setInterval(() => this.sessions.forEach((x) => this.schedule(x, 0)), POLL_MS);
-      this.poll.unref?.();
+      if (this.o.watch !== false) {
+        try {
+          s.watcher = fs.watch(path.join(dir, INBOX), { persistent: false }, () => this.schedule(s, this.T.debounceMs));
+          s.watcher.on('error', () => this.unwatch(s)); // the poll below still covers it
+        } catch {}
+      }
+      this.heat(s, this.T.hotTailMs);
+      void this.baseline(s);
       return { dir, settings };
     } catch (err) {
       console.warn('[claude-follow] no inbox:', (err as NodeJS.ErrnoException)?.code ?? 'EIO');
@@ -277,9 +374,11 @@ export class ClaudeFollow {
     if (!s) return null;
     this.sessions.delete(id);
     this.unwatch(s);
+    s.sender.close();
     if (s.timer) clearTimeout(s.timer);
+    s.timer = null;
     if (!this.sessions.size && this.poll) {
-      clearInterval(this.poll);
+      clearTimeout(this.poll);
       this.poll = null;
     }
     return s;
@@ -303,6 +402,36 @@ export class ClaudeFollow {
     }
   }
 
+  // ---------------------------------------------------------------- when to read
+
+  /** The session is polled fast for `ms` from now (replaces what was set: a Stop shortens a running turn's window). */
+  private heat(s: Session, ms: number) {
+    s.hotUntil = Date.now() + ms;
+    this.arm();
+  }
+
+  /** The one safety-poll timer: fast while any session is hot, slow otherwise; gone with the last session. */
+  private arm() {
+    if (!this.sessions.size) return;
+    const now = Date.now();
+    let fast = false;
+    for (const s of this.sessions.values()) if (s.hotUntil > now) fast = true;
+    if (this.poll && fast === this.pollFast) return;
+    if (this.poll) clearTimeout(this.poll);
+    this.pollFast = fast;
+    this.poll = setTimeout(() => {
+      this.poll = null;
+      const t = Date.now();
+      for (const s of this.sessions.values()) {
+        if (s.hotUntil <= t && t - s.polledAt < this.T.idlePollMs) continue; // an idle session keeps its slow pace
+        s.polledAt = t;
+        this.schedule(s, 0);
+      }
+      this.arm();
+    }, fast ? this.T.fastPollMs : this.T.idlePollMs);
+    this.poll.unref?.();
+  }
+
   private schedule(s: Session, ms: number) {
     if (s.busy) s.again = true;
     if (s.timer || s.busy || !this.sessions.has(s.id)) return;
@@ -316,6 +445,7 @@ export class ClaudeFollow {
   private async scan(s: Session) {
     s.busy = true;
     s.again = false;
+    this.scans++;
     let more = false;
     try {
       const inbox = path.join(s.dir, INBOX);
@@ -327,28 +457,83 @@ export class ClaudeFollow {
         return;
       }
       const ready = names.filter((n) => EVENT_NAME.test(n));
-      more = ready.length > MAX_PER_SCAN;
+      if (!ready.length) return;
+      const now = Date.now();
+      if (now - s.winAt >= 1000) {
+        s.winAt = now;
+        s.winN = 0;
+      }
+      const take = ready.slice(0, Math.max(0, Math.min(MAX_PER_SCAN, MAX_PER_SECOND - s.winN)));
+      s.winN += take.length;
+      more = ready.length > take.length;
       const read: Array<{ raw: FollowRaw | null; mtime: number }> = [];
-      for (const n of ready.slice(0, MAX_PER_SCAN)) {
+      for (const n of take) {
         const f = await readInboxFile(path.join(inbox, n));
         await drop(n);
         read.push({ raw: f ? parseFollowEvent(f.text) : null, mtime: f?.mtime ?? 0 });
       }
       for (const { raw } of read.sort((a, b) => a.mtime - b.mtime)) {
         if (!this.sessions.has(s.id)) return;
-        if (raw?.kind === 'stop' || raw?.kind === 'prompt') {
-          this.o.emit(s.id, { id: s.id, kind: raw.kind });
+        if (!raw) continue;
+        if (raw.kind === 'stop' || raw.kind === 'prompt') {
+          this.step(s, { kind: raw.kind });
+          this.o.emit(s.id, { id: s.id, agent: 'claude', kind: raw.kind });
+          if (raw.kind === 'stop') void this.settle(s);
+          else if (!s.ch.baseline) void this.baseline(s);
           continue;
         }
-        const rel = raw?.filePath ? mapFollowPath(raw.filePath, s.ctx) : null;
+        const rel = raw.filePath ? mapFollowPath(raw.filePath, s.ctx) : null;
         // Outside the open folder (Claude's own plan / memory files, anything else): never shown, never logged.
-        if (!raw || !rel || !(await this.o.inside(rel).catch(() => false))) continue;
-        this.o.emit(s.id, { id: s.id, kind: raw.kind, path: rel, ...(raw.hint ? { hint: raw.hint } : {}), ...(raw.lines ? { lines: raw.lines } : {}), ...(raw.probe ? { probe: raw.probe } : {}) });
+        if (!rel || !(await this.o.inside(rel).catch(() => false)) || !this.sessions.has(s.id)) continue;
+        if (raw.kind === 'pre') {
+          this.step(s, { kind: 'pre', path: rel });
+          continue;
+        }
+        this.step(s, { kind: raw.kind, path: rel, counts: raw.counts, created: raw.created });
+        this.o.emit(s.id, { id: s.id, agent: 'claude', kind: raw.kind, path: rel, ...(raw.hint ? { hint: raw.hint } : {}), ...(raw.lines ? { lines: raw.lines } : {}), ...(raw.probe ? { probe: raw.probe } : {}) });
       }
+      if (take.length && this.sessions.has(s.id)) this.heat(s, s.ch.busy ? this.T.hotTurnMs : this.T.hotTailMs);
     } finally {
       s.busy = false;
-      if (more) this.schedule(s, FLOOD_WAIT_MS);
-      else if (s.again) this.schedule(s, 60);
+      if (more) this.schedule(s, this.T.floodWaitMs);
+      else if (s.again) this.schedule(s, this.T.debounceMs);
+    }
+  }
+
+  // ---------------------------------------------------------------- the change list
+
+  private step(s: Session, e: ClaudeStep) {
+    if (onClaudeStep(s.ch, e)) s.sender.schedule();
+  }
+
+  /** git names the files of a Windows folder (not one inside WSL): its path rules apply. */
+  private win(s: Session) {
+    return s.ctx.platform === 'win32' && !s.ctx.wslDistro;
+  }
+
+  /** What was already uncommitted before Claude did anything (asked once at the start, again at a prompt while unknown). */
+  private async baseline(s: Session) {
+    if (!this.o.numstat || s.ch.baseline) return;
+    const rows = await this.o.numstat().catch(() => null);
+    if (this.sessions.has(s.id)) setBaseline(s.ch, rows, this.win(s));
+  }
+
+  /** The end of a turn: git's numbers replace the estimates (single flight; a Stop during a run asks for one more). */
+  private async settle(s: Session) {
+    if (s.settling) {
+      s.settleAgain = true;
+      return;
+    }
+    s.settling = true;
+    try {
+      do {
+        s.settleAgain = false;
+        const rows = this.o.numstat ? await this.o.numstat().catch(() => null) : null;
+        if (!this.sessions.has(s.id)) return;
+        if (reconcile(s.ch, rows, this.win(s))) s.sender.schedule();
+      } while (s.settleAgain);
+    } finally {
+      s.settling = false;
     }
   }
 }

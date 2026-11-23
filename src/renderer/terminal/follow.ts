@@ -1,11 +1,12 @@
-// "Follow Claude's edits" (preview), UI side — its own lazy chunk, fetched with the first edit event.
-// Main (main/terminal-follow.ts) only ever sends workspace-relative paths of files inside the open
-// folder. This module shows the file, scrolls to the edited lines, flashes them and leaves a
-// "changed this turn" mark. It never takes the keyboard focus (the user is typing to Claude) and never
-// changes a document: a clean one is re-read from disk by the watcher's own code path, a dirty one is left alone.
+// "Follow Claude's / Opencode's edits" (preview), UI side — its own lazy chunk, fetched with the first edit event.
+// Main (main/terminal-follow.ts for Claude Code, main/terminal-opencode.ts for Opencode) only ever sends
+// workspace-relative paths of files inside the open folder, and says which agent the terminal runs. This module
+// shows the file, scrolls to the edited lines, flashes them and leaves a "changed this turn" mark. It never takes
+// the keyboard focus (the user is typing to the agent) and never changes a document: a clean one is re-read from
+// disk by the watcher's own code path, a dirty one is left alone.
 import { StateEffect } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
-import type { TerminalFollowEvent } from '@shared/terminal';
+import type { AgentKind, TerminalFollowEvent } from '@shared/terminal';
 import { app } from '../app/app';
 import { findHint, probeMatches } from './claude';
 import { followAdd, followField, followLines, followSync, type Lines } from './follow-marks';
@@ -14,7 +15,7 @@ import './follow.css';
 const FLASH_MS = 4200;
 /** Fallback only: how long to wait for the file watcher when the re-read document does not show the edit. */
 const RELOAD_WAIT_MS = 800;
-/** Claude hopping between files faster than this: go to the newest file, the others only get their marks. */
+/** The agent hopping between files faster than this: go to the newest file, the others only get their marks. */
 const SWITCH_MS = 1000;
 const TOAST_MS = 5000;
 
@@ -29,12 +30,18 @@ export const FOLLOW_LIMITS = {
   eventRanges: 20,
 } as const;
 
+/** How a toast names the agent ("Opencode edited x"); an event without one is Claude's (older main). */
+const WHO: Record<AgentKind, string> = { claude: 'Claude', opencode: 'Opencode' };
+export const agentName = (agent: unknown): string => WHO[agent as AgentKind] ?? WHO.claude;
+/** Terminals whose turn is remembered at once (an ended one never says Stop: the oldest goes). */
+const MAX_TURNS = 32;
+
 const editorView = () => app.editor?.getView?.() as EditorView | undefined;
 const now = () => Date.now();
 
 // ---------------------------------------------------------------- marks + flashes
 
-/** Claude's turn: marks of an older turn are dropped when their document is next looked at. */
+/** The agent's turn: marks of an older turn are dropped when their document is next looked at. */
 let turnNo = 1;
 /** Marks for files that are not on screen, applied when the file is shown. */
 const pending = new Map<string, Lines>();
@@ -86,7 +93,7 @@ app.events.on('active:changed', (p) => {
   } catch {}
 });
 
-/** Palette "Claude: Clear change marks", and every new prompt. Returns whether a mark was on screen. */
+/** Palette "AI changes: Clear change marks", and every new prompt. Returns whether a mark was on screen. */
 export function clearChangeMarks(): boolean {
   turnNo++;
   pending.clear();
@@ -123,7 +130,7 @@ async function reload(path: string) {
 
 let toasted = { path: '', at: 0 };
 /** Toast with a "Diff" button when the folder is a git repository (the usual staging diff view). Once per run of edits to a file. */
-async function announce(path: string) {
+async function announce(path: string, who: string) {
   const t = now();
   const again = toasted.path === path && t - toasted.at < TOAST_MS;
   toasted = { path, at: t };
@@ -133,7 +140,7 @@ async function announce(path: string) {
     const store = (await import('../git/index')).getGitStore();
     if (store?.status.peek()?.ok) actions = [{ label: 'Diff', run: () => void import('../git/diff-open').then((m) => m.openFileDiff(store, path)) }];
   } catch {}
-  app.toast(`Claude edited ${path}`, 'info', TOAST_MS, actions);
+  app.toast(`${who} edited ${path}`, 'info', TOAST_MS, actions);
 }
 
 const validLines = (v: unknown): Lines | null => {
@@ -150,7 +157,7 @@ async function show(e: TerminalFollowEvent) {
   const path = e.path!;
   const lines = validLines(e.lines);
   const newer = () => queue.some((q) => q.path === path); // a later edit of this file is waiting
-  void announce(path);
+  void announce(path, agentName(e.agent));
   if (app.activePath.value !== path) {
     // Typing in another file: tell, but leave the editor where it is.
     if (editorView()?.hasFocus) return later(path, lines);
@@ -166,7 +173,7 @@ async function show(e: TerminalFollowEvent) {
   const onScreen = () => app.activePath.value === path;
   const view = editorView();
   if (!onScreen() || !view) return giveUp();
-  // Unsaved edits: the document is the user's, Claude's line numbers do not apply. The usual
+  // Unsaved edits: the document is the user's, the agent's line numbers do not apply. The usual
   // "changed on disk" banner follows from the file watcher.
   if (app.docs.get(path)?.dirty.value) return;
   if (had) await reload(path);
@@ -205,14 +212,14 @@ async function pump() {
   }
 }
 
-const turn = new Map<number, Set<string>>(); // files per Claude terminal since its last Stop
+const turn = new Map<number, Set<string>>(); // files per agent terminal since its last Stop
 
 export function onFollowEvent(e: TerminalFollowEvent) {
   if (typeof e?.id !== 'number') return;
   if (e.kind === 'stop') {
     const n = turn.get(e.id)?.size ?? 0;
     turn.delete(e.id);
-    if (n > 1) app.toast(`Claude changed ${n} files this turn`, 'info', TOAST_MS);
+    if (n > 1) app.toast(`${agentName(e.agent)} changed ${n} files this turn`, 'info', TOAST_MS);
     return;
   }
   if (e.kind === 'prompt') {
@@ -223,7 +230,11 @@ export function onFollowEvent(e: TerminalFollowEvent) {
   }
   if ((e.kind !== 'edit' && e.kind !== 'write') || typeof e.path !== 'string' || !e.path) return;
   let files = turn.get(e.id);
-  if (!files) turn.set(e.id, (files = new Set()));
+  if (!files) {
+    // A terminal that ended mid-turn left its set behind: bounded, the oldest goes.
+    if (turn.size >= MAX_TURNS) turn.delete(turn.keys().next().value!);
+    turn.set(e.id, (files = new Set()));
+  }
   if (files.size < FOLLOW_LIMITS.files) files.add(e.path);
   if (queue.length >= FOLLOW_LIMITS.queue) {
     const old = queue.shift()!;
