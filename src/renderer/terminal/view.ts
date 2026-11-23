@@ -5,7 +5,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { findPathCandidates } from './links';
-import { terminalKeyAction } from './keys';
+import { cmdTracker, terminalKeyAction } from './keys';
 import { writeClipboard } from './clipboard';
 import type { TermTheme } from './theme';
 import type { FindOptions, GpuMode, Off, TerminalView, TerminalViewOptions } from './types';
@@ -274,11 +274,15 @@ export function createXtermView(o: TerminalViewOptions): TerminalView {
   }
 
   term.attachCustomKeyEventHandler((e) => {
-    const action = terminalKeyAction(e, { os: o.os, hasSelection: term.hasSelection() });
+    // macOS: a Cmd chord that a keyboard remapper made out of a Ctrl chord is that Ctrl chord (./keys).
+    const cmdIsCtrl = o.os === 'darwin' && cmdTracker.isCtrl(e);
+    const action = terminalKeyAction(e, { os: o.os, hasSelection: term.hasSelection(), cmdIsCtrl });
     if (action === null) return true;
     if (e.type === 'keydown') {
-      e.preventDefault();
-      if (action === 'copy') void view.copySelection().then((ok) => ok && o.os === 'win32' && !e.shiftKey && term.clearSelection());
+      e.preventDefault(); // also keeps the macOS menu's Cmd+W / Z / A… away from a chord we handle
+      // ^R, ^C, ^W…: xterm.js sends nothing for Cmd+letter, so the byte goes in as typed input.
+      if (typeof action === 'object') term.input(action.send, true);
+      else if (action === 'copy') void view.copySelection().then((ok) => ok && (o.os === 'win32' || cmdIsCtrl) && !e.shiftKey && term.clearSelection());
       else if (action === 'paste') void view.pasteFromClipboard();
       else if (action === 'find') o.onFind();
       else if (action === 'selectAll') term.selectAll();

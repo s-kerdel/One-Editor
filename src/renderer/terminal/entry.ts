@@ -10,7 +10,7 @@ import { picker, promptDialog } from '../app/ui';
 import { updateSettings } from '../app/settings';
 import { connectTerminalBackend, DESKTOP_ONLY_REASON } from './backend';
 import { claudePrompt, type ClaudeAsk } from './claude';
-import { APP_KEYS_TAKING_FOCUS, appKeyWinsInTerminal } from './keys';
+import { APP_KEYS_TAKING_FOCUS, appKeyWinsInTerminal, cmdTracker, watchModifiers } from './keys';
 import { createTerminalImpl } from './impl';
 import { launcherOpen } from './Panel';
 import { panelMax } from './height';
@@ -122,10 +122,17 @@ export function installTerminalCommands() {
     });
   const os = app.backend?.os ?? 'linux';
   // A focused terminal keeps readline's Ctrl+W/E/N/T/K/B, F-keys for htop/mc…: only a few app keys win.
+  // macOS: a Ctrl chord that a keyboard remapper turned into a Cmd chord stays the shell's (./keys, createCmdTracker).
+  if (os === 'darwin') {
+    const mode = () => void (cmdTracker.mode = readCmdSendsCtrl(app.settings.value));
+    mode();
+    app.events.on('settings:changed', mode);
+    watchModifiers(window);
+  }
   setGlobalKeyFilter((e, key) => {
     const t = e.target as HTMLElement | null;
     if (!t?.closest?.('.se-term-view')) return true;
-    if (!appKeyWinsInTerminal(key, os)) return false;
+    if (!appKeyWinsInTerminal(key, os, cmdTracker.isCtrl(e))) return false;
     if (APP_KEYS_TAKING_FOCUS.has(key)) t.blur();
     return true;
   });

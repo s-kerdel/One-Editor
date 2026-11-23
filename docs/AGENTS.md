@@ -467,6 +467,27 @@ Threat model: the user opens a folder made by someone else; a note in it may eve
   "Add folders…" step — one folder or several — gets exactly **one** native confirm (`foldersConfirm`) listing each
   alias + real path and, apart, every refused one with its reason — `folderProblem`, already shared, picked twice,
   over the limit; nothing to add = reasons + "OK" only; aliases in sorted path order. Its buttons **[Add read-only]
+**macOS terminal keys are decided by the modifiers the event carries, never by the keyboard's labels** (`keys.ts`;
+`tests/unit/terminal/keys.test.ts` covers both keyboards):
+- **Control key (no Cmd) = the shell's**, always: `Ctrl-r/c/d/z/l/a/e/w/u/k`… reach xterm.js untouched. Only
+  ``Ctrl-` ``, ``Ctrl-Shift-` `` and `Ctrl-Tab` / `Ctrl-Shift-Tab` are the app's (`MAC_CTRL_KEYS`); a global command
+  bound to another `Ctrl-…` key does not run in a terminal. The macOS menu (`main/app-menu.ts`) must hold **no
+  accelerator without Cmd** (Electron resolves every role there to a Cmd chord; a Cmd-less key equivalent would run
+  before the page), and main has no `before-input-event` / `globalShortcut`.
+- **A real Cmd chord** keeps the Mac conventions: `Cmd-c/v/f/a/k` are the terminal's, every other app key wins,
+  nothing is sent to the shell.
+- **A Ctrl chord that arrives as a Cmd chord** — a Windows-style remap (Karabiner-Elements "Windows shortcuts":
+  `Ctrl+<key>` → `Cmd+<key>` in every app that is not on its list of terminal emulators; One is not) — **is read as
+  that Ctrl chord**: `APP_KEYS_IN_TERMINAL` decides what the app keeps (so `Cmd-w/e/n/k/a` go to the shell), `Cmd-c`
+  copies only with a selection (else `^C`), `Cmd-v` pastes, `Cmd-f` finds, and every other letter and `[ \ ]` is sent
+  as its control byte by the view (`term.input`: xterm.js encodes nothing for Cmd+letter) with `preventDefault` (else
+  the menu's `Cmd-w` Close Window / `Cmd-z` / `Cmd-a` would run too). `createCmdTracker` recognises it from the event
+  stream: the remapper lets go of Control and presses Cmd for the user ≤ `REMAP_GAP_MS` (30 ms) apart (Karabiner: a
+  fixed 5 ms; left Control: keyup first, right Control: Cmd first), fingers are slower; it holds for as long as that
+  Cmd stays down. Setting **`terminal.cmdSendsCtrl`**: `auto` (detect; default) | `on` (every Cmd chord in the
+  terminal: for swaps that leave no trace, e.g. System Settings → Modifier Keys) | `off`. The tracker is fed by
+  `watchModifiers(window)` in `entry.ts` (macOS only); the global key filter and the view ask the same instance.
+
   [Add and allow changes] [Cancel]** (Cancel the default) and checkbox **"Also code and config files"** (counted only
   with allow changes; `folderChoice`) set mode and `allowCode` for every folder of that step, from the dialog's own
   response; nothing else asks for them), later per-folder widening — allowing writes, code files in a

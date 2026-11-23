@@ -766,6 +766,9 @@ No terminal open yet? The panel shows **tiles** for every profile — click one.
 
 > **Keys go to the shell** while it has focus (`Ctrl+W`, `Ctrl+R`…). Only a few stay with the app: `` Ctrl+` ``, `Ctrl+Shift+P`, `Ctrl+P`, `Ctrl+S`, `Ctrl+,`, `Ctrl+Tab`, zoom.
 
+> **Mac:** the **Control** key always belongs to the shell (`Ctrl+C`, `Ctrl+R`, `Ctrl+W`…); `Cmd+C` / `Cmd+V` copy and paste, `Cmd+K` clears.
+> **Windows-style keyboard on a Mac** (Karabiner turns `Ctrl+C` into `Cmd+C`)? One notices and sends `Ctrl+C`, `Ctrl+R`… to the shell anyway; `Ctrl+C` copies only when text is selected. Not picked up? Settings → Terminal → **⌘ chords act as Ctrl** → **Always**.
+
 ### Which shell?
 
 | Windows | Linux / macOS |
@@ -1056,6 +1059,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 
 - **The accent is tuned per theme.** The same pick is lightened in dark and darkened in light, so it stays readable.
 - **Line numbers** never show in live or reading view. Code files always have them.
+| | ⌘ chords act as Ctrl (macOS) | Automatic (only for a Windows-style key remap) |
 
 ### Attachment locations
 

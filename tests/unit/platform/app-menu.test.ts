@@ -14,4 +14,15 @@ describe('macOS app menu', () => {
     expect(labels(true)).toContain('Reload');
     expect(labels(false)).not.toContain('Reload');
   });
+  // A key equivalent without Cmd runs before the page sees the key: it would take Ctrl+R / Ctrl+C from a terminal.
+  // Electron resolves each role below to Cmd chords only (Menu.buildFromTemplate on Electron 45, macOS); a new role
+  // (selectNextTab is Control+Tab…) or an explicit accelerator must be checked before it joins the list.
+  it.each([false, true])('claims no chord without Cmd (dev=%s)', (dev) => {
+    const items = flat(appMenuTemplate({ name: 'One', dev }));
+    const cmdOnlyRoles = new Set(['appMenu', 'fileMenu', 'editMenu', 'windowMenu', 'toggleDevTools', 'togglefullscreen']);
+    for (const i of items) {
+      if (i.accelerator !== undefined) expect(String(i.accelerator), String(i.label ?? i.role)).toMatch(/Cmd|Command/i);
+      if (i.role !== undefined) expect(cmdOnlyRoles.has(String(i.role)), String(i.role)).toBe(true);
+    }
+  });
 });

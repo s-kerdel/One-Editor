@@ -1,6 +1,7 @@
 // Terminal settings: keys, defaults, a validating reader and the Settings-registry entries
 // (spread into settings-registry.ts under a new 'terminal' section in phase 2).
 import type { SettingDef } from '../app/settings-registry';
+import type { CmdSendsCtrl } from './keys';
 
 export const TERMINAL_SETTING_KEYS = {
   defaultShell: 'terminal.defaultShell',
@@ -8,6 +9,7 @@ export const TERMINAL_SETTING_KEYS = {
   scrollback: 'terminal.scrollback',
   runPressesEnter: 'terminal.runPressesEnter',
   gpu: 'terminal.gpuAcceleration',
+  cmdSendsCtrl: 'terminal.cmdSendsCtrl',
   prewarm: 'terminal.prewarm',
   followClaude: 'claude.follow',
 } as const;
@@ -55,6 +57,15 @@ export const TERMINAL_SECTION = { id: 'terminal', title: 'Terminal', icon: 'term
 export const TERMINAL_SETTING_DEFS: TerminalSettingDef[] = [
   {
     key: TERMINAL_SETTING_KEYS.defaultShell,
+/**
+ * macOS key policy (./keys): is a Cmd chord in the terminal read as the Ctrl chord? 'auto' = only when a
+ * keyboard remapper made it out of one. Read on its own: only the key handling uses it, not the manager.
+ */
+export function readCmdSendsCtrl(s: Record<string, unknown>): CmdSendsCtrl {
+  const v = s[TERMINAL_SETTING_KEYS.cmdSendsCtrl];
+  return v === 'on' ? 'on' : v === 'off' ? 'off' : 'auto';
+}
+
     section: 'terminal',
     label: 'Default shell',
     description: 'Shell id for new terminals (pwsh, cmd, wsl:Ubuntu, bash…). Empty = automatic.',
@@ -121,6 +132,16 @@ export const TERMINAL_SETTING_DEFS: TerminalSettingDef[] = [
     keywords: ['claude', 'ai', 'hooks', 'highlight', 'diff', 'agent'],
     default: TERMINAL_DEFAULTS.followClaude,
     control: { type: 'toggle' },
+  {
+    key: TERMINAL_SETTING_KEYS.cmdSendsCtrl,
+    section: 'terminal',
+    label: '⌘ chords act as Ctrl (macOS)',
+    description: 'For Windows-style key remaps: ⌘C / ⌘R send ^C / ^R. Automatic: only when a remapper made them.',
+    keywords: ['karabiner', 'remap', 'windows keyboard', 'control', 'command', 'cmd', 'ctrl+c', 'ctrl+r', 'modifier', 'mac'],
+    default: 'auto',
+    control: { type: 'segmented', options: [{ v: 'auto', label: 'Automatic' }, { v: 'on', label: 'Always' }, { v: 'off', label: 'Never' }] },
+    desktopOnly: true,
+  },
     desktopOnly: true,
   },
 ];
