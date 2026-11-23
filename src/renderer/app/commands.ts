@@ -103,7 +103,7 @@ export function normalizeKey(spec: string): string {
 export function prettyKey(key: string): string {
   return key
     .split('-')
-    .map((p) => (p === 'Mod' ? (isMac ? '⌘' : 'Ctrl') : p === 'Shift' ? (isMac ? '⇧' : 'Shift') : p === 'Alt' ? (isMac ? '⌥' : 'Alt') : p.length === 1 ? p.toUpperCase() : p))
+    .map((p) => (p === 'Mod' ? (isMac ? '⌘' : 'Ctrl') : p === 'Ctrl' ? (isMac ? '⌃' : 'Ctrl') : p === 'Shift' ? (isMac ? '⇧' : 'Shift') : p === 'Alt' ? (isMac ? '⌥' : 'Alt') : p.length === 1 ? p.toUpperCase() : p))
     .join(isMac ? '' : '+');
 }
 

@@ -135,3 +135,18 @@ describe('vault keys are served for the open folder only', () => {
     await fsp.rm(file, { force: true });
   });
 });
+
+describe('OpenGate.vouchedFile: an outside file needs main to have seen that very file', () => {
+  it('only the vouched file: not its neighbours, its folder, a recent folder or the open folder', async () => {
+    const g = gate({ root: '/home/me/notes', recent: ['/data'], files: ['/data/x/a.md'] });
+    g.vouch('/data/x/a.md');
+    expect(await g.vouchedFile('/data/x/a.md')).toBe(true);
+    for (const p of ['/data/x/b.md', '/data/x', '/data', '/home/me/notes/n.md', '/data/x/../x/b.md', '', 'a.md', '/a\0b', 7, null]) expect(await g.vouchedFile(p), String(p)).toBe(false);
+  });
+  it('the real file behind a vouched link', async () => {
+    const g = gate({ links: { '/home/me/l.md': '/data/real.md' } });
+    g.vouch('/home/me/l.md');
+    expect(await g.vouchedFile('/data/real.md')).toBe(true);
+    expect(await g.vouchedFile('/data/other.md')).toBe(false);
+  });
+});

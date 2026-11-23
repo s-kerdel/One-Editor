@@ -4,7 +4,8 @@ import { app } from './app';
 import * as ui from './ui';
 import { registerCommands } from './commands';
 import { closeTabs, openWorkspace, saveAll } from './documents';
-import { absolutePath, copyText, deletePaths, duplicate, revealInOs, revealInTree, revealLabel, startCreate } from './fileops';
+import { isExtPath } from '@shared/external';
+import { absolutePath, openAbsolutePaths, copyText, deletePaths, duplicate, revealInOs, revealInTree, revealLabel, startCreate } from './fileops';
 import { setViewMode, updateSettings, activeIsMarkdown } from './settings';
 import { holdKeys } from './lazy';
 import { primeClassic } from './classic-loader';
@@ -12,6 +13,8 @@ import { collapseAll } from './FileTree';
 import { closeAll } from './Tabs';
 
 const hasActive = () => !!app.activePath.value;
+/** An open file of the folder (not an outside one: no rename / delete / tree there). */
+const hasActiveInFolder = () => !!app.activePath.value && !isExtPath(app.activePath.value);
 
 export async function openFolderInteractive() {
   let p = await app.backend.pickFolder().catch(() => null);
@@ -24,6 +27,11 @@ export async function openFolderInteractive() {
   } catch (err) {
     app.toast(`Cannot open folder: ${(err as Error).message}`, 'error');
   }
+}
+/** Any file of the machine as a tab; the folder (if one is open) stays. */
+export async function openFileInteractive() {
+  const p = await app.backend.pickFile().catch(() => null);
+  if (p) await openAbsolutePaths([p]);
 }
 /** Pickers live in the lazy Popups chunk; keys typed while it loads are replayed into the picker's input. */
 const openPicker = (fn: (m: typeof import('./Popups')) => void) => holdKeys(import('./Popups').then(fn));
@@ -40,13 +48,14 @@ export function registerShellCommands() {
     { id: 'tabs.closeOthers', title: 'Tabs: Close others', when: hasActive, run: () => void closeTabs(app.tabs.value.map((t) => t.path).filter((p) => p !== app.activePath.value)) },
     { id: 'tabs.closeAll', title: 'Tabs: Close all', when: () => app.tabs.value.length > 0, run: () => void closeAll() },
     { id: 'file.newFolder', title: 'File: New folder', when: () => !!app.workspace.value, run: () => startCreate('dir') },
-    { id: 'file.rename', title: 'File: Rename…', when: hasActive, run: () => { revealInTree(app.activePath.value!); ui.renaming.value = app.activePath.value; } },
-    { id: 'file.delete', title: 'File: Delete', when: hasActive, run: () => void deletePaths([app.activePath.value!]) },
-    { id: 'file.duplicate', title: 'File: Duplicate', when: hasActive, run: () => void duplicate(app.activePath.value!) },
-    { id: 'file.revealInSidebar', title: 'File: Reveal in sidebar', when: hasActive, run: () => revealInTree(app.activePath.value!) },
-    { id: 'file.revealInOs', title: `File: ${revealLabel()}`, when: hasActive, run: () => void revealInOs(app.activePath.value!) },
+    { id: 'file.rename', title: 'File: Rename…', when: hasActiveInFolder, run: () => { revealInTree(app.activePath.value!); ui.renaming.value = app.activePath.value; } },
+    { id: 'file.delete', title: 'File: Delete', when: hasActiveInFolder, run: () => void deletePaths([app.activePath.value!]) },
+    { id: 'file.duplicate', title: 'File: Duplicate', when: hasActiveInFolder, run: () => void duplicate(app.activePath.value!) },
+    { id: 'file.revealInSidebar', title: 'File: Reveal in sidebar', when: hasActiveInFolder, run: () => revealInTree(app.activePath.value!) },
+    { id: 'file.revealInOs', title: `File: ${revealLabel()}`, when: hasActiveInFolder, run: () => void revealInOs(app.activePath.value!) },
     { id: 'file.copyPath', title: 'File: Copy path', when: hasActive, run: () => void copyText(absolutePath(app.activePath.value!)) },
     { id: 'file.copyRelativePath', title: 'File: Copy relative path', when: hasActive, run: () => void copyText(app.activePath.value!, 'Relative path') },
+    { id: 'file.openFile', title: 'File: Open file…', keywords: ['open', 'outside'], when: () => app.backend.kind === 'electron', run: () => void openFileInteractive() },
     { id: 'workspace.open', title: 'Open folder…', keywords: ['workspace', 'project'], run: openFolderInteractive },
     { id: 'files.collapseAll', title: 'Files: Collapse all folders', run: collapseAll },
     {

@@ -49,6 +49,7 @@ describe('terminal key policy', () => {
     for (const k of ['Mod-w', 'Mod-e', 'Mod-n', 'Mod-t', 'Mod-k', 'Mod-b', 'Mod-\\', 'Mod-o', 'F1', 'F4']) expect(appKeyWinsInTerminal(k, 'linux'), k).toBe(false);
     expect(appKeyWinsInTerminal('Mod-w', 'darwin')).toBe(true);
     expect(appKeyWinsInTerminal('Mod-c', 'darwin')).toBe(false);
+    expect(appKeyWinsInTerminal('Ctrl-`', 'darwin')).toBe(true); // Mac: Cmd+` is the OS's, Ctrl+` toggles the panel
   });
 });
 
@@ -169,7 +170,7 @@ describe('install stub (startup) + entry (lazy)', () => {
     const { app } = await import('../../../src/renderer/app/app');
     installTerminal();
     const stub = getCommand('terminal.toggle')!;
-    expect(stub.keys).toEqual(['Mod-`']);
+    expect(stub.keys).toEqual(['Mod-`', 'Ctrl-`']);
     expect(getCommand('terminal.new')).toBeUndefined(); // arrives with the idle chunk
     expect(app.runInTerminal).toBeUndefined(); // browser build: no bridge, no "Run in terminal"
     const meta = (c: ReturnType<typeof getCommand>) => ({ id: c!.id, title: c!.title, category: c!.category, keys: c!.keys, hasWhen: !!c!.when });
@@ -179,7 +180,7 @@ describe('install stub (startup) + entry (lazy)', () => {
     const real = getCommand('terminal.toggle')!;
     expect(real).not.toBe(stub);
     expect(meta(real)).toEqual(before);
-    expect(getCommand('terminal.new')!.keys!.map(normalizeKey)).toEqual(['Mod-Shift-`', 'Mod-Shift-~']);
+    expect(getCommand('terminal.new')!.keys!.map(normalizeKey)).toEqual(['Mod-Shift-`', 'Mod-Shift-~', 'Ctrl-Shift-`', 'Ctrl-Shift-~']);
     expect(getCommand('terminal.new')!.when!()).toBe(false); // desktop only
     for (const id of ['terminal.newWithShell', 'terminal.selectDefaultShell', 'terminal.kill', 'terminal.clear', 'terminal.rename', 'terminal.next', 'terminal.prev', 'terminal.runSelection', 'claude.open', 'claude.askFile', 'claude.askSelection']) expect(getCommand(id), id).toBeTruthy();
     // The palette shows "<category>: <title>" → "Claude: Ask about this file".

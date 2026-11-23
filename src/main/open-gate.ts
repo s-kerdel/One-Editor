@@ -50,6 +50,17 @@ export class OpenGate {
     return real ? [...new Set([this.key(abs), this.key(real)])] : [this.key(abs)];
   }
 
+  /** This very file was seen by main (dialog, OS open, argv, drop) — not its folder, not a recent: what an outside file needs. */
+  async vouchedFile(abs: unknown): Promise<boolean> {
+    if (typeof abs !== 'string' || !abs || abs.includes('\0') || !this.d.p.isAbsolute(abs)) return false;
+    const mine = await this.forms(this.d.p.resolve(abs));
+    for (const [k, v] of this.vouched) {
+      if (mine.includes(k)) return true;
+      if ((await this.forms(v)).some((f) => mine.includes(f))) return true;
+    }
+    return false;
+  }
+
   async allows(abs: unknown): Promise<boolean> {
     if (typeof abs !== 'string' || !abs || abs.includes('\0')) return false;
     const { p } = this.d;

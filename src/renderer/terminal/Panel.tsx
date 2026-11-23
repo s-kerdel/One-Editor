@@ -6,7 +6,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { app } from '../app/app';
 import { addIcons, Icon } from '../app/icons';
 import { openContextMenu, type MenuItem } from '../app/ui';
-import { prettyKey } from '../app/commands';
+import { isMac, prettyKey } from '../app/commands';
+/** macOS: Cmd+` is the OS's "cycle windows"; Ctrl+` (as in VS Code) is what reliably reaches the app. */
+const TOGGLE_KEY = isMac ? 'Ctrl-`' : 'Mod-`';
+const NEW_KEY = isMac ? 'Ctrl-Shift-`' : 'Mod-Shift-`';
 import { updateSettings } from '../app/settings';
 import type { ShellKind } from '@shared/terminal';
 import type { TerminalBackend } from './backend';
@@ -305,7 +308,7 @@ export function LauncherCard({ anchor, rows, onClose, onRefresh }: { anchor: HTM
         <button type="button" class="se-term-link" onClick={onRefresh}>
           <Icon name="refresh" size={12} /> Refresh list
         </button>
-        <span class="se-term-card-hint">{prettyKey('Mod-Shift-`')} opens the default</span>
+        <span class="se-term-card-hint">{prettyKey(NEW_KEY)} opens the default</span>
       </div>
     </div>
   );
@@ -427,7 +430,7 @@ function EmptyState({ m, folderName }: { m: TerminalManager; folderName?: string
         <span class="se-term-empty-title">Start a terminal</span>
         <span class="se-term-empty-sub">
           {folderName ? <>in <b>{folderName}</b> · </> : null}
-          {prettyKey('Mod-Shift-`')} opens the default
+          {prettyKey(NEW_KEY)} opens the default
         </span>
       </div>
       {m.error.value && <span class="se-term-error">{m.error.value}</span>}
@@ -500,7 +503,7 @@ export function TerminalPanel({ manager: m, backend, hasWorkspace, folderName, o
         <div class="se-term-actions">
           {ready && (
             <div ref={launcher} class="se-term-group se-term-launch">
-              <button type="button" class="se-term-gbtn se-term-launch-main" data-testid="terminal-new" title={`New ${def?.name ?? 'terminal'} (${prettyKey('Mod-Shift-`')})`} onClick={() => void m.create()}>
+              <button type="button" class="se-term-gbtn se-term-launch-main" data-testid="terminal-new" title={`New ${def?.name ?? 'terminal'} (${prettyKey(NEW_KEY)})`} onClick={() => void m.create()}>
                 <span class="se-term-plus" aria-hidden="true">
                   <Icon name="plus" size={11} />
                 </span>
@@ -541,7 +544,7 @@ export function TerminalPanel({ manager: m, backend, hasWorkspace, folderName, o
               }}>
               <Icon name={max ? 'termRestore' : 'termMax'} size={14} />
             </button>
-            <button type="button" class="se-term-gbtn" data-testid="terminal-hide" aria-label="Hide terminal panel" title={`Hide panel — terminals keep running (${prettyKey('Mod-`')})`} onClick={onHide}>
+            <button type="button" class="se-term-gbtn" data-testid="terminal-hide" aria-label="Hide terminal panel" title={`Hide panel — terminals keep running (${prettyKey(TOGGLE_KEY)})`} onClick={onHide}>
               <Icon name="chevronDown" size={15} />
             </button>
           </div>

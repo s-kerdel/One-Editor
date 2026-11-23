@@ -212,6 +212,10 @@ export interface BackendApi {
   openWorkspace(absPath: string): Promise<WorkspaceInfo>;
   /** Native folder picker (Electron). Web backend may return null. */
   pickFolder(): Promise<string | null>;
+  /** Native file picker (Electron); null = cancelled / web. The chosen file may be opened with openExternalFile. */
+  pickFile(): Promise<string | null>;
+  /** Desktop only: open a file that is outside the open folder. Returns its id (shared/external.ts), which every file call accepts like a path. Main refuses a path it did not see itself (dialog, OS open, argv, drop). */
+  openExternalFile(absPath: string): Promise<string>;
   recentWorkspaces(): Promise<string[]>;
   forgetRecent(absPath: string): Promise<string[]>;
   resolvePath(absPath: string): Promise<ResolvedPath | null>;
@@ -309,6 +313,8 @@ export const RPC_METHODS = [
   'getWorkspace',
   'openWorkspace',
   'pickFolder',
+  'pickFile',
+  'openExternalFile',
   'recentWorkspaces',
   'forgetRecent',
   'resolvePath',

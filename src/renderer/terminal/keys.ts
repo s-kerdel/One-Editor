@@ -56,6 +56,8 @@ export const APP_KEYS_IN_TERMINAL = new Set([
   'Mod-`', // toggle the terminal panel
   'Mod-Shift-`',
   'Mod-Shift-~', // new terminal (US layouts report "~" with Shift)
+  // Ctrl+` / Ctrl+Shift+` exist only on macOS (eventToKey: Ctrl stays 'Ctrl' there; Cmd+` is the OS's "cycle windows").
+  // On Win/Linux Ctrl is Mod, so they are the Mod entries above. There are no other Ctrl-chords that win.
   'Mod-Shift-p', // command palette
   'Mod-p', // quick open (VS Code does the same; readline's ^P = ↑)
   'Mod-Shift-f', // find in files

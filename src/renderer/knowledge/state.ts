@@ -1,5 +1,6 @@
 // Renderer-side knowledge state: the live index, its build/update lifecycle, and the write
 // actions (follow link, rename refactor, link a mention, daily notes, templates).
+import { isExtPath } from '@shared/external';
 import { computed, signal } from '@preact/signals';
 import { parseWikiLink } from '@shared/wikilinks';
 import { dirname, isMarkdown, normalize, stem } from '@shared/paths';
@@ -111,6 +112,7 @@ function updateNow(path: string, text: string) {
 
 /** Debounced/background update: big notes are extracted by the worker, small ones right here. */
 function updateSoon(path: string, text: string) {
+  if (isExtPath(path)) return; // outside the folder: never in the index
   // On demand, not built yet: nothing to update (and no extraction worker) — the first build reads all.
   if (indexDeferred.value) return;
   if (!isMarkdown(path) || text.length <= INLINE_MAX_CHARS || index.sameText(path, text)) return updateNow(path, text);

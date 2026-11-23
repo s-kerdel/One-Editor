@@ -244,6 +244,15 @@ export async function openAbsolutePathsNow(paths: string[]) {
       continue;
     }
     if (r.rel === null) {
+      // A folder is open: it stays, and the file opens as a tab on its own (an "external file", shared/external.ts).
+      if (app.workspace.value) {
+        try {
+          await app.openFile(await app.backend.openExternalFile(r.abs));
+        } catch (err) {
+          app.toast(`Cannot open ${r.abs}: ${(err as Error).message}`, 'error');
+        }
+        continue;
+      }
       await openWorkspace(parentOfAbs(r.abs));
       r = await app.backend.resolvePath(abs).catch(() => null);
       if (!r?.rel) continue;

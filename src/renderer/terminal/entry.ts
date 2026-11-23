@@ -131,8 +131,8 @@ export function installTerminalCommands() {
   });
 
   registerCommands([
-    { id: 'terminal.toggle', title: 'Toggle panel', category: 'Terminal', keys: ['Mod-`'], keywords: ['console', 'shell', 'command line', 'panel'], run: () => toggleTerminal() },
-    { id: 'terminal.new', title: 'New terminal', category: 'Terminal', keys: ['Mod-Shift-`', 'Mod-Shift-~'], keywords: ['console', 'shell', 'powershell', 'bash'], when: desktop, run: () => void newTerminal() },
+    { id: 'terminal.toggle', title: 'Toggle panel', category: 'Terminal', keys: ['Mod-`', 'Ctrl-`'], keywords: ['console', 'shell', 'command line', 'panel'], run: () => toggleTerminal() },
+    { id: 'terminal.new', title: 'New terminal', category: 'Terminal', keys: ['Mod-Shift-`', 'Mod-Shift-~', 'Ctrl-Shift-`', 'Ctrl-Shift-~'], keywords: ['console', 'shell', 'powershell', 'bash'], when: desktop, run: () => void newTerminal() },
     {
       id: 'terminal.newWithShell',
       title: 'New terminal with…',

@@ -18,6 +18,6 @@ export function installTerminal() {
   if ((globalThis as { secEditBridge?: { terminal?: unknown } }).secEditBridge?.terminal) app.runInTerminal = (code, o) => entry.load().then((m) => m.runInTerminal(code, o));
   // Same id / title / key as ./entry, which replaces it when it loads on idle together with every other
   // terminal command (tests/unit/terminal guards this). Only Ctrl+` is live before that: startup budget.
-  registerCommand({ id: 'terminal.toggle', title: 'Toggle panel', category: 'Terminal', keys: ['Mod-`'], run: go((m) => m.toggleTerminal()) });
+  registerCommand({ id: 'terminal.toggle', title: 'Toggle panel', category: 'Terminal', keys: ['Mod-`', 'Ctrl-`'], run: go((m) => m.toggleTerminal()) });
   afterBootIdle(go(() => {}), 3000);
 }

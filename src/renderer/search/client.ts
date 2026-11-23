@@ -16,6 +16,7 @@ import type { FromWorker, HeadingQuery, NoteItem, ToWorker } from '../../search/
 import type { Mention } from '../../knowledge/index';
 import type { HeadingHit, SearchDoc, SearchOptions, SearchResponse } from '../../search/types';
 import type { DefHit, DefQuery } from '../../search/defs';
+import { isExtPath } from '@shared/external';
 
 const WATCHDOG_MS = 8000;
 const EDIT_DEBOUNCE_MS = 120;
@@ -155,7 +156,7 @@ class SearchClient {
       if (this.shards) void this.reindex();
     });
     app.events.on('doc:changed', (path, content) => {
-      if (!this.shards) return;
+      if (!this.shards || isExtPath(path)) return;
       this.edits.set(path, content);
       if (!this.editTimer) this.editTimer = setTimeout(() => this.flushEdits(), EDIT_DEBOUNCE_MS);
     });
@@ -384,7 +385,7 @@ class SearchClient {
   private finishFeed() {
     this.reindexing = false;
     const ups = new Map<string, SearchDoc>();
-    for (const d of app.docs.values()) if (!d.binary) ups.set(d.path, { path: d.path, content: app.editor?.getContent(d.path) ?? d.content, mtime: d.mtime });
+    for (const d of app.docs.values()) if (!d.binary && !isExtPath(d.path)) ups.set(d.path, { path: d.path, content: app.editor?.getContent(d.path) ?? d.content, mtime: d.mtime });
     const gone: string[] = [];
     for (const [p, d] of this.queued) {
       if (d) ups.set(p, d);
@@ -561,7 +562,7 @@ class SearchClient {
   }
 
   upsert(path: string, content: string, mtime?: number) {
-    if (!this.shards) return;
+    if (!this.shards || isExtPath(path)) return; // files outside the folder are never indexed
     if (this.reindexing) this.queued.set(path, { path, content, mtime });
     else this.shards.upsert([{ path, content, mtime }]);
     this.bump();

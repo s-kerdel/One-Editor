@@ -5,7 +5,8 @@
 import { useEffect, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import type { Settings } from '@shared/api';
-import { extname, isMarkdown } from '@shared/paths';
+import { basename, extname, isMarkdown } from '@shared/paths';
+import { extDisplay, isExtPath } from '@shared/external';
 import { app } from './app';
 import * as ui from './ui';
 import { Icon } from './icons';
@@ -35,6 +36,15 @@ const cycleContentWidth = () => updateSettings({ contentWidth: WIDTHS[(WIDTHS.in
 
 /** Path of the open file as clickable crumbs: folder → reveal + expand it in the tree; file → reveal it. */
 function Breadcrumb({ path }: { path: string }) {
+  if (isExtPath(path)) {
+    // Outside the open folder: no tree to reveal it in; the folder is the tooltip.
+    return (
+      <span class="se-status-crumbs" aria-label="File path">
+        <span class="se-crumb-sep">›</span>
+        <span class="se-crumb file" title={extDisplay(path)}>{basename(path)}</span>
+      </span>
+    );
+  }
   const segs = path.split('/');
   const name = segs.pop()!;
   const shown = segs.length > 3 ? segs.slice(-3) : segs; // keep the bar short on deep paths

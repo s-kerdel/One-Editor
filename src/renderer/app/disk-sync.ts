@@ -4,6 +4,7 @@ import type { FileData, FsEvent, TreeNode } from '@shared/api';
 import { app } from './app';
 import * as ui from './ui';
 import { basename } from '@shared/paths';
+import { isExtPath } from '@shared/external';
 import { filesUnder, findNode, insertNode, removeNode } from './tree-model';
 import { isImagePath } from './icons';
 import { clearConflict, setConflict } from './documents';
@@ -45,7 +46,10 @@ export function reloadFromDisk(path: string) {
   doc.dirty.value = false;
 }
 
-export async function handleFsEvents(events: FsEvent[]) {
+export async function handleFsEvents(all: FsEvent[]) {
+  // Outside files are watched by the backend for as long as they are allowed; only open ones matter here (never indexed).
+  const events = all.filter((e) => !isExtPath(e.path) || app.docs.has(e.path));
+  if (!events.length) return;
   const oldTree = app.tree.value;
   if (oldTree) {
     const next = applyFsEvents(oldTree, events);

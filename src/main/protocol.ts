@@ -101,3 +101,14 @@ export function pathsFromArgs(argv: string[], o: ArgvOptions): string[] {
   };
   return rest.map((a) => o.p.resolve(o.cwd, clean(a))).filter((x) => o.exists(x));
 }
+
+/**
+ * A file handed to the app (argv, Finder "Open With", second instance, drop) never moves an open folder: it opens as a
+ * tab in it (the renderer decides what to do with one outside the folder). Only with NO folder open does the old rule
+ * apply: the most recent existing folder that contains it, else its own folder. Returns the folder to open, or null
+ * to keep the current one.
+ */
+export function folderForOpenedFile(o: { current: string | null; file: string; recents: string[]; isInside: (child: string, parent: string) => boolean; exists: (dir: string) => boolean; dirname: (p: string) => string }): string | null {
+  if (o.current) return null;
+  return o.recents.find((r) => o.isInside(o.file, r) && o.exists(r)) ?? o.dirname(o.file);
+}

@@ -1,5 +1,6 @@
 // File operations driven by the UI (tree, commands, drag & drop). Each op updates the tree signal
 // optimistically-but-after-success, then emits the matching app events (our own ops don't echo).
+import { extDisplay, isExtPath } from '@shared/external';
 import { basename, dirname, join } from '@shared/paths';
 import { app } from './app';
 import { RpcError } from '../platform';
@@ -111,6 +112,10 @@ export async function revealInOs(path: string) {
 }
 
 export function absolutePath(rel: string) {
+  if (isExtPath(rel)) {
+    const p = extDisplay(rel);
+    return app.backend.os === 'win32' ? p.replace(/\//g, '\\') : p;
+  }
   const root = app.workspace.value?.root ?? '';
   const sep = app.backend.os === 'win32' || /^[a-z]:\\/i.test(root) ? '\\' : '/';
   return rel ? `${root.replace(/[\\/]+$/, '')}${sep}${rel.split('/').join(sep)}` : root;

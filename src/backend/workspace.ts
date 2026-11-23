@@ -1504,7 +1504,7 @@ async function renameNoClobber(a: string, b: string, pin: fs.BigIntStats, before
 
 /** Write temp sibling → fsync → rename over the target, so a crash never truncates a note. Returns the
  *  written file's inode. `noFallback`: never rewrite the target in place when the rename fails. */
-async function atomicWrite(target: string, data: Buffer, mode?: number, o: { noFallback?: boolean; pin?: fs.BigIntStats | null } = {}): Promise<{ ino: bigint; bak: string | null }> {
+export async function atomicWrite(target: string, data: Buffer, mode?: number, o: { noFallback?: boolean; pin?: fs.BigIntStats | null } = {}): Promise<{ ino: bigint; bak: string | null }> {
   // At most 32 code points of the original name: long names (≥ ~230 bytes) would otherwise push the temp
   // name past NAME_MAX (255) and every save of that file would fail with ENAMETOOLONG.
   const short = Array.from(path.basename(target)).slice(0, 32).join('');

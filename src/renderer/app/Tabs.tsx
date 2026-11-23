@@ -3,6 +3,7 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { basename, dirname } from '@shared/paths';
+import { extDisplay, isExtPath } from '@shared/external';
 import { app } from './app';
 import * as ui from './ui';
 import { FileIcon, Icon } from './icons';
@@ -13,6 +14,9 @@ import { popups } from './fileops';
 
 const TAB_MIME = 'application/x-sec-edit-tab';
 const TREE_MIME = 'application/x-sec-edit-paths';
+
+/** Tooltip text: an outside file shows its full folder path (the id itself is only a name). */
+const shownPath = (p: string) => (isExtPath(p) ? extDisplay(p) : p);
 
 export function closeAll() {
   return closeTabs(app.tabs.value.map((t) => t.path));
@@ -126,7 +130,7 @@ export function TabBar({ end }: { end?: ComponentChildren }) {
               class={`se-tab${isActive ? ' active' : ''}${dirty ? ' dirty' : ''}${gone ? ' deleted' : ''}${conflict ? ' conflict' : ''}${drop?.index === i ? ' drop-before' : ''}${drop?.index === tabs.length && i === tabs.length - 1 ? ' drop-after' : ''}`}
               role="tab"
               aria-selected={isActive}
-              title={gone ? `${t.path} (deleted on disk)` : t.path}
+              title={gone ? `${shownPath(t.path)} (deleted on disk)` : shownPath(t.path)}
               data-path={t.path}
               draggable
               onDragStart={(e) => {

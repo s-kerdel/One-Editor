@@ -3,6 +3,7 @@
 //  - the renderer is served from a privileged app:// scheme so V8 code cache works (file:// gets none);
 //  - no default application menu (saves startup time and stray accelerators like Ctrl+R / Ctrl+W).
 import './env-boot'; // first: drops SEC_EDIT_* hooks in a packaged build before any module reads them
+import { appMenuTemplate } from './app-menu';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, session, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -16,7 +17,7 @@ import { isInsideDir } from '../backend/pathsafe';
 import { isBridgeRoot } from '../backend/readpool';
 import { registerProcessSource } from '../backend/processes';
 import { electronProcessSource } from './process-rows';
-import { APP_ORIGIN, SCHEME, isAppNavigation, isExternalUrl, pathsFromArgs, routeAppUrl } from './protocol';
+import { APP_ORIGIN, SCHEME, isAppNavigation, isExternalUrl, folderForOpenedFile, pathsFromArgs, routeAppUrl } from './protocol';
 import { renderPdf } from './pdf-window';
 import { PDF_WORKER_CSP, isPdfWorkerAsset } from '../shared/pdf';
 import { TerminalService, loadNodePty, registerTerminalIpc } from './terminal';
@@ -105,6 +106,7 @@ function main() {
     { scheme: SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, codeCache: true, corsEnabled: true, stream: true } },
   ]);
   if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
+  else app.whenReady().then(() => Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate({ name: app.name, dev: !app.isPackaged }))));
 
   let win: BrowserWindow | null = null;
   let frame: WindowFrame = 'native'; // what the window was created with (settings may change until a restart)
@@ -127,6 +129,13 @@ function main() {
       if (picked) gate.vouch(picked);
       return picked;
     },
+    pickFile: async () => {
+      const r = await dialog.showOpenDialog(win!, { properties: ['openFile'] });
+      const picked = r.canceled ? null : (r.filePaths[0] ?? null);
+      if (picked) gate.vouch(picked);
+      return picked;
+    },
+    externalFiles: true,
     // SEC_EDIT_TRASH_DIR (tests) → the service's platform trash moves files there instead.
     trash: process.env.SEC_EDIT_TRASH_DIR ? undefined : (abs) => shell.trashItem(abs),
     trashIsAuthoritative: process.platform === 'win32',
@@ -337,13 +346,10 @@ function main() {
         await service.openWorkspace(p);
         continue;
       }
-      // A lone file: reuse the most recent folder that contains it (keeps your notes context), else its folder.
-      const current = service.workspace?.root;
-      if (!current || !isInside(p, current)) {
-        const recent = await service.recentWorkspaces();
-        const home = recent.find((r) => isInside(p, r) && fs.existsSync(r));
-        await service.openWorkspace(home ?? path.dirname(p));
-      }
+      // A file never changes an open folder (it becomes a tab; one outside the folder is the renderer's call).
+      // With no folder open: the most recent folder that contains it, else its own folder.
+      const folder = folderForOpenedFile({ current: service.workspace?.root ?? null, file: p, recents: await service.recentWorkspaces(), isInside, exists: (r) => fs.existsSync(r), dirname: (x) => path.dirname(x) });
+      if (folder) await service.openWorkspace(folder);
       service.openRequests.push(p);
     }
   }
@@ -355,6 +361,8 @@ function main() {
       try {
         // The page asks, main decides: a folder it has not seen itself is not opened (open-gate.ts).
         if (method === 'openWorkspace' && !(await gate.allows(args[0]))) throw new BackendFailure('EACCES', 'This folder was not chosen in the app: use “Open folder”, drop it on the window, or pick a recent one');
+        // An outside file is opened only if main saw that very file itself (dialog, OS open, argv, drop).
+        if (method === 'openExternalFile' && !(await gate.vouchedFile(args[0]))) throw new BackendFailure('EACCES', 'This file was not chosen in the app: use “Open file”, drop it on the window or open it from the OS');
         const result = (await (service as any)[method](...args)) ?? null;
         // Shells started in the previous folder go with it.
         if (method === 'openWorkspace') terminals.setWorkspace(service.workspace?.root ?? null);

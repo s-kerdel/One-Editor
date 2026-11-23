@@ -20,6 +20,8 @@ import {
 } from '../shared/api';
 import type { PdfExportResult, PdfLayout } from '../shared/pdf';
 import { stem } from '../shared/paths';
+import { isExtPath } from '../shared/external';
+import { ExternalFiles } from './external-files';
 import { BackendFailure, MAX_INDEX_BYTES, Workspace, retryWin, type IndexOptions, type WorkspaceOptions } from './workspace';
 import { platformTrash } from './trash';
 import { withFileLock } from './filelock';
@@ -83,6 +85,8 @@ const samePath = (a: string, b: string) => (process.platform === 'linux' ? a ===
 export interface ServiceHooks {
   /** Native folder picker; absent in server mode. */
   pickFolder?: () => Promise<string | null>;
+  /** Native file picker; absent in server mode. */
+  pickFile?: () => Promise<string | null>;
   /** Move to OS trash (Electron shell.trashItem). Falls back to the platform trash, then fails with ETRASH. */
   trash?: (absPath: string) => Promise<void>;
   /**
@@ -106,6 +110,8 @@ export interface ServiceHooks {
    * the same folder never overwrite each other. Settings stay shared. Default 'desktop'.
    */
   sessionKind?: 'desktop' | 'web';
+  /** Desktop main only: files the user opened outside the open folder may be served (backend/external-files.ts). Server mode never sets it. */
+  externalFiles?: boolean;
 }
 
 export class BackendService {
@@ -145,7 +151,21 @@ export class BackendService {
     private hooks: ServiceHooks = {},
     private workspaceOptions: Pick<WorkspaceOptions, 'watchMode' | 'debounceMs' | 'pollMs' | 'readThreads' | 'cacheDir'> = {},
     private gitOptions: GitServiceOptions = {},
-  ) {}
+  ) {
+    this.ext.onEvents((e) => this.fsListeners.forEach((l) => l(e)));
+  }
+
+  /** Files outside the open folder that the user opened: the allow-list (empty, and unreachable, in server mode). */
+  private readonly ext = new ExternalFiles();
+
+  /**
+   * Puts a file the user chose on the allow-list and returns its id (shared/external.ts). Callers vouch for the path
+   * (main: open-gate); a page cannot reach this with a path of its own. Desktop only.
+   */
+  async openExternalFile(absPath: string): Promise<string> {
+    if (!this.hooks.externalFiles) throw new BackendFailure('ENOTSUP', 'Opening files outside the folder works in the desktop app');
+    return this.ext.allow(absPath);
+  }
 
   private get settingsFile() {
     return path.join(this.configDir, 'settings.json');
@@ -231,6 +251,9 @@ export class BackendService {
     return ws.info();
   }
 
+  async pickFile() {
+    return this.hooks.pickFile ? this.hooks.pickFile() : null;
+  }
   async pickFolder() {
     return this.hooks.pickFolder ? this.hooks.pickFolder() : null;
   }
@@ -268,30 +291,36 @@ export class BackendService {
   /** `opts` comes from the page: only a finite, non-negative `maxBytes` is passed on. */
   readFile(p: string, opts?: unknown) {
     const max = opts && typeof opts === 'object' ? (opts as { maxBytes?: unknown }).maxBytes : undefined;
+    if (isExtPath(p)) return this.ext.read(p, typeof max === 'number' && Number.isFinite(max) && max >= 0 ? { maxBytes: Math.floor(max) } : {});
     return this.ws().readFile(p, typeof max === 'number' && Number.isFinite(max) && max >= 0 ? { maxBytes: Math.floor(max) } : {});
   }
   writeFile(p: string, content: string, opts?: WriteOptions) {
+    if (isExtPath(p)) return this.ext.write(p, content, opts);
     return this.ws()
       .writeFile(p, content, opts)
       .then((r) => (this.gitTouched('save', [p]), r));
   }
   createFile(p: string, content?: string) {
+    if ([p].some(isExtPath)) throw new BackendFailure('EINVAL', 'Not available for a file outside the folder');
     return this.ws()
       .createFile(p, content)
       .then((r) => (this.gitTouched('fs', [p]), r));
   }
   createDir(p: string) {
+    if ([p].some(isExtPath)) throw new BackendFailure('EINVAL', 'Not available for a file outside the folder');
     return this.ws()
       .createDir(p)
       .then((r) => (this.gitTouched('fs', [p]), r));
   }
   rename(a: string, b: string) {
+    if ([a, b].some(isExtPath)) throw new BackendFailure('EINVAL', 'Not available for a file outside the folder');
     return this.ws()
       .rename(a, b)
       .then((r) => (this.gitTouched('fs', [a, b]), r));
   }
 
   async remove(p: string, opts: RemoveOptions = {}) {
+    if ([p].some(isExtPath)) throw new BackendFailure('EINVAL', 'Not available for a file outside the folder');
     try {
       await this.removeNow(p, opts);
     } finally {
@@ -341,6 +370,7 @@ export class BackendService {
 
   /** `base64`: standard alphabet, padding optional. Decoded size is capped (MAX_BINARY_BYTES). */
   async writeBinary(p: string, base64: string) {
+    if (isExtPath(p)) throw new BackendFailure('EINVAL', 'Not available for a file outside the folder');
     const ws = this.ws();
     if (typeof base64 !== 'string') throw new BackendFailure('EINVAL', 'Content must be a base64 string');
     // Checked before decoding, so an oversized payload never allocates its buffer.
@@ -356,6 +386,7 @@ export class BackendService {
   }
 
   async revealInFolder(p: string) {
+    if ([p].some(isExtPath)) throw new BackendFailure('EINVAL', 'Not available for a file outside the folder');
     const abs = await this.ws().real(p, 'entry');
     if (this.hooks.revealInFolder) return void (await this.hooks.revealInFolder(abs));
     // Server mode: best effort with the platform's file manager.
@@ -794,6 +825,7 @@ export class BackendService {
     this.settingsWatch = null;
     this.unwatch?.();
     this.workspace?.dispose();
+    this.ext.dispose();
     this.disposeGit();
   }
 }
