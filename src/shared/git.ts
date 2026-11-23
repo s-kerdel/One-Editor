@@ -98,9 +98,17 @@ export type GitUnavailableReason =
   | 'timeout'
   | 'error';
 
+/**
+ * THE sentence for "git was stopped after its time limit", on every surface (pane, status bar, toasts,
+ * lists). The timeout itself travels as a code (`reason` / `error` / `timeout`), without a text of its
+ * own: a surface shows this sentence once and never puts a prefix in front of a second wording.
+ */
+export const GIT_TIMEOUT_TEXT = "Git didn't answer in time.";
+
 export interface GitUnavailable {
   ok: false;
   reason: GitUnavailableReason;
+  /** git's own first line, for 'unsafe' / 'error' (a detail to show after the reason's sentence). Not set for 'timeout'. */
   message?: string;
   /** 'no-git': a `.git` exists here or above, so a hint "install git" is worth showing.
    *  'untrusted': a `.git` exists here, above or in a folder below (seen on disk, git was not asked). */
@@ -137,6 +145,9 @@ export interface GitActionResult {
   terminal?: string;
   /** Network auth was the problem (credentials, SSH key, host key). */
   auth?: boolean;
+  /** git was stopped after its time limit (`message` is GIT_TIMEOUT_TEXT): the UI offers Retry, which reads
+   *  the repository again and never runs the action again. */
+  timeout?: boolean;
 }
 
 export interface GitBranchInfo {

@@ -1,7 +1,7 @@
 // Opens "Diff with last commit" in the app's overlay slot. Light: the merge view is a lazy chunk.
 import { useEffect, useState } from 'preact/hooks';
 import type { ComponentType } from 'preact';
-import type { GitEntry } from '@shared/git';
+import { GIT_TIMEOUT_TEXT, type GitEntry } from '@shared/git';
 import { basename } from '@shared/paths';
 import { app } from '../app/app';
 import type { GitStore } from './store';
@@ -55,13 +55,26 @@ function DiffOverlay(p: OverlayProps) {
   );
 }
 
+/** No status: the one sentence for "no answer in time", else the general one. */
+function noStatus(store: GitStore): string | null {
+  const s = store.status.peek();
+  return s?.ok ? null : s?.reason === 'timeout' ? GIT_TIMEOUT_TEXT : 'Git is not available for this folder';
+}
+
 /** Why there is nothing to diff, or null when there is. */
 export function diffUnavailable(store: GitStore, path: string): string | null {
   const s = store.status.peek();
-  if (!s?.ok) return 'Git is not available for this folder';
+  if (!s?.ok) return noStatus(store);
   if (!s.branch.oid) return 'There is no commit yet';
   if (!store.headKey(path)) return `“${basename(path)}” is not in the last commit yet`;
   return null;
+}
+
+/** Says why no diff opens. git gave no answer in time: with Retry, which reads git's state again
+ *  (store.retry, one at a time) and nothing more — the diff is not opened by it; the user asks again. */
+function sayWhy(store: GitStore, why: string) {
+  if (why !== GIT_TIMEOUT_TEXT) return void app.toast(why, 'info');
+  app.toast(why, 'error', 8000, [{ label: 'Retry', run: () => void store.retry() }]);
 }
 
 /**
@@ -71,9 +84,9 @@ export function diffUnavailable(store: GitStore, path: string): string | null {
  * No git at all without a status (not a repository, not trusted, switched off).
  */
 export async function openFileDiff(store: GitStore, path: string, row?: GitEntry): Promise<boolean> {
-  const why = row ? (store.status.peek()?.ok ? null : 'Git is not available for this folder') : diffUnavailable(store, path);
+  const why = row ? noStatus(store) : diffUnavailable(store, path);
   if (why) {
-    app.toast(why, 'info');
+    sayWhy(store, why);
     return false;
   }
   const { openStaging } = await import('./stage');
@@ -85,7 +98,7 @@ export async function openFileDiff(store: GitStore, path: string, row?: GitEntry
 export async function openDiffWithHead(store: GitStore, path: string, extra?: Partial<OverlayProps>): Promise<boolean> {
   const why = diffUnavailable(store, path);
   if (why) {
-    app.toast(why, 'info');
+    sayWhy(store, why);
     return false;
   }
   const head = await store.headFile(path);

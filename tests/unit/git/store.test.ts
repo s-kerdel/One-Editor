@@ -129,6 +129,30 @@ describe('GitStore', () => {
     expect(cb).not.toHaveBeenCalled();
   });
 
+  it('the same failure again after a good status is shown again ("no answer in time" twice); Retry is one at a time', async () => {
+    const timeout: GitStatusResult = { ok: false, reason: 'timeout' };
+    const f = fakeBackend([timeout, status({ version: 1 }), timeout, status({ version: 2 })]);
+    const s = new GitStore(f.backend);
+    await s.refreshNow();
+    expect(s.status.value).toEqual(timeout);
+    await s.retry();
+    expect(s.status.value?.ok).toBe(true);
+    await s.refreshNow();
+    expect(s.status.value).toEqual(timeout); // was skipped as "identical to the last failure": the pane kept the old status
+    // Retry: clicks during one (pane, status bar, toast) join it — one fresh status, `retrying` while it runs.
+    const before = f.calls.status;
+    const release = f.hold();
+    const a = s.retry();
+    const b = s.retry();
+    expect(b).toBe(a);
+    expect(s.retrying.value).toBe(true);
+    release();
+    await a;
+    expect(s.retrying.value).toBe(false);
+    expect(f.calls.status - before).toBe(1);
+    expect(s.status.value).toMatchObject({ ok: true, version: 2 });
+  });
+
   it('drops results that arrive after a workspace switch', async () => {
     const f = fakeBackend([status({ entries: [{ path: 'old.md', state: 'modified' }] }), status()]);
     const s = new GitStore(f.backend, { debounceMs: 5 });

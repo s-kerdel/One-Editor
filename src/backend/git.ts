@@ -20,6 +20,7 @@ import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import {
   GIT_REV_RE,
+  GIT_TIMEOUT_TEXT,
   type GitActionResult,
   type GitBranch,
   type GitBranchDetails,
@@ -71,6 +72,14 @@ const MIN_VERSION: [number, number] = [2, 18]; // porcelain v2, --absolute-git-d
 const T_QUICK = 5_000;
 const T_STATUS = 20_000;
 const T_READ = 10_000;
+/**
+ * The first git processes for a folder (`--version`, `rev-parse`, the filter config): they pay what a
+ * first launch can cost (macOS: the `/usr/bin/git` shim, a folder-permission prompt that holds file
+ * access until it is answered, a security scan of the binary; Windows: Defender), and their outcome is
+ * remembered for the folder. Only the git UI waits on them, so they get more time than the small
+ * commands that follow; a miss is not final (GitMonitor looks again on Retry / window focus).
+ */
+const T_DISCOVER = 15_000;
 /** Status output is parsed in slices this big when it arrives all at once. */
 const FEED_SLICE = 256 * 1024;
 /** Background lists (branches / history / commit files): generous, but visible when exceeded. */
@@ -147,7 +156,7 @@ export function locateGit(opts: { gitPath?: string; platform?: NodeJS.Platform; 
     const list = opts.gitPath ? [opts.gitPath] : gitCandidates(platform, env);
     for (const cand of list) {
       if (!opts.gitPath && !isFile(cand)) continue;
-      const r = await run(cand, ['--version'], { cwd: undefined, env: gitEnv(env), timeoutMs: T_QUICK, maxBytes: 4096 });
+      const r = await run(cand, ['--version'], { cwd: undefined, env: gitEnv(env), timeoutMs: T_DISCOVER, maxBytes: 4096 });
       const v = r.code === 0 ? parseGitVersion(r.stdout.toString('utf8')) : null;
       if (v && atLeast(v, ...MIN_VERSION)) return { path: cand, version: v };
     }
@@ -494,6 +503,8 @@ export interface GitServiceOptions {
   lowTimeoutMs?: number;
   /** Repositories under \\wsl.localhost\<distro>\…: run git inside the distro ('auto', default) or not. */
   wsl?: {
+  /** Tests: shorter time limits for the first look at a folder (`discover`) and for actions (`action`). */
+  timeouts?: { discover?: number; action?: number };
     mode?: 'auto' | 'off';
     /** wsl.exe (tests: a fake). */
     exe?: string;
@@ -631,7 +642,7 @@ export class GitService {
     );
     if (!(await this.wsl.available())) return null;
     this.viaWsl = true;
-    const v = await this.wsl.run(['--version'], { cwd: t.linux, timeoutMs: T_QUICK, maxBytes: 4096 });
+    const v = await this.wsl.run(['--version'], { cwd: t.linux, timeoutMs: T_DISCOVER, maxBytes: 4096 });
     const version = v.code === 0 ? parseGitVersion(v.stdout.toString('utf8')) : null;
     if (!version || !atLeast(version, ...MIN_VERSION)) {
       this.viaWsl = false;
@@ -667,8 +678,23 @@ export class GitService {
 
   private async discover(): Promise<Repo | GitUnavailable> {
     const git = (await this.wslGit()) ?? (await locateGit({ gitPath: this.opts.gitPath, platform: this.platform, env: this.opts.env ?? process.env }));
+  /**
+   * Look again after a failed discovery (the user's Retry, see GitMonitor). A discovery still running is
+   * waited for and shared, and only a failed one is dropped: two discoveries never run side by side.
+   */
+  async reprobe(): Promise<{ ok: true } | GitUnavailable> {
+    const cur = this.repoP;
+    if (cur) {
+      const r = await cur;
+      if (r.ok) return { ok: true };
+      if (this.repoP === cur) this.repoP = null;
+    }
+    return this.probe();
+  }
+
     if (!git) return { ok: false, reason: 'no-git', ...(hasDotGitAbove(this.root) ? { repoLikely: true } : {}) };
-    const r = await this.exec(git, ['rev-parse', '--show-toplevel', '--show-prefix', '--absolute-git-dir', '--git-common-dir'], { timeoutMs: T_QUICK, maxBytes: 64 * 1024, trigger: 'discover' });
+    const limit = this.opts.timeouts?.discover ?? T_DISCOVER;
+    const r = await this.exec(git, ['rev-parse', '--show-toplevel', '--show-prefix', '--absolute-git-dir', '--git-common-dir'], { timeoutMs: limit, maxBytes: 64 * 1024, trigger: 'discover' });
     const fail = failure(r);
     if (fail) return fail;
     const [toplevel, prefix, gitDir, common] = r.stdout.toString('utf8').replace(/\r/g, '').split('\n');
@@ -680,7 +706,7 @@ export class GitService {
     const base = ['-c', 'core.quotepath=off', '-c', 'core.fsmonitor=', '-c', 'status.relativePaths=false', '-c', 'color.ui=false', '-c', 'log.showSignature=false'];
     // Every scope git reads for this folder (no --local: `.git/config.worktree` and includes count too).
     // Exit 1 = no filter configured; anything else means we cannot tell what would run → no git here.
-    const cfg = await this.exec(git, ['config', '--includes', '-z', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$'], { timeoutMs: T_QUICK, maxBytes: 1024 * 1024, trigger: 'discover' });
+    const cfg = await this.exec(git, ['config', '--includes', '-z', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$'], { timeoutMs: limit, maxBytes: 1024 * 1024, trigger: 'discover' });
     if (cfg.code === 0 && !cfg.overflow) {
       const z = cfg.stdout.toString('utf8');
       // LFS configured but not installed: git would die on every status ("git-lfs: not found") → no filter at all.
@@ -880,7 +906,8 @@ export class GitService {
   private async needRepo(): Promise<Repo | GitActionResult> {
     const repo = await this.repo();
     if (repo.ok) return repo;
-    const why: Record<string, string> = { 'no-git': 'git was not found', 'no-repo': 'This folder is not a git repository', unsafe: 'git refuses this repository (safe.directory)', timeout: 'git took too long' };
+    if (repo.reason === 'timeout') return { ok: false, timeout: true, message: GIT_TIMEOUT_TEXT };
+    const why: Record<string, string> = { 'no-git': 'git was not found', 'no-repo': 'This folder is not a git repository', unsafe: 'git refuses this repository (safe.directory)' };
     return { ok: false, message: repo.message || why[repo.reason] || 'git is not available' };
   }
 
@@ -890,7 +917,7 @@ export class GitService {
     if (o.net) delete env.GCM_INTERACTIVE; // the credential manager's own window is fine; terminal prompts are not
     const r = await this.exec(repo.git, ['-c', 'core.quotepath=off', '-c', 'color.ui=false', ...args], {
       env,
-      timeoutMs: o.timeoutMs ?? 60_000,
+      timeoutMs: this.opts.timeouts?.action ?? o.timeoutMs ?? 60_000,
       maxBytes: 4 * 1024 * 1024,
       input: o.input,
       detached: o.net,
@@ -900,7 +927,7 @@ export class GitService {
     });
     if (r.error) return { ok: false, message: r.error.message };
     const text = r.stderr + (r.stderr && r.stdout.length ? '\n' : '') + r.stdout.toString('utf8');
-    if (r.timedOut) return { ok: false, message: 'git took too long and was stopped', ...(o.net ? { terminal: terminalCommand(args), auth: true } : {}) };
+    if (r.timedOut) return { ok: false, timeout: true, message: GIT_TIMEOUT_TEXT, ...(o.net ? { terminal: terminalCommand(args), auth: true } : {}) };
     if (r.code === 0) return { ok: true, message: o.ok ?? gitMessage(text, 2) };
     const plain = o.explain?.(text);
     if (plain) return { ok: false, message: plain };
@@ -1210,7 +1237,7 @@ export class GitService {
 
   private static jobError(r: RunResult): { error: GitJobError; message?: string } | null {
     if (r.aborted) return { error: 'cancelled' };
-    if (r.timedOut) return { error: 'timeout', message: 'git took too long' };
+    if (r.timedOut) return { error: 'timeout' };
     if (r.code !== 0 || r.overflow || r.error) return { error: 'failed', message: firstLine(r.stderr) || r.error?.message || 'git failed' };
     return null;
   }
@@ -1547,7 +1574,7 @@ function validPicks(v: unknown): GitHunkPick[] {
 /** Classifies a failed git call; null when it succeeded. */
 function failure(r: RunResult): GitUnavailable | null {
   if (r.error) return { ok: false, reason: r.error.code === 'ENOENT' ? 'no-git' : 'error', message: r.error.message };
-  if (r.timedOut) return { ok: false, reason: 'timeout', message: 'git took too long' };
+  if (r.timedOut) return { ok: false, reason: 'timeout' }; // no text of its own: the UI has one sentence for it (GIT_TIMEOUT_TEXT)
   if (r.overflow) return { ok: false, reason: 'error', message: 'git output too large' };
   if (r.code === 0) return null;
   const err = r.stderr;

@@ -58,7 +58,8 @@
 /* ---- status bar ---- */
 .se-git-branch { display: inline-flex; align-items: center; gap: 4px; max-width: 260px; }
 .se-git-branch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.se-git-untrusted { color: var(--text-muted); }
+.se-git-untrusted,
+.se-git-noanswer { color: var(--text-muted); }
 .se-git-branch-dirty {
   width: 6px;
   height: 6px;

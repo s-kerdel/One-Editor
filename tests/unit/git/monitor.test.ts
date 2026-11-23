@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CADENCE, GitMonitor, REFRESH, findNestedRepos, type Clock, type GitMonitorEvent } from '../../../src/backend/git-monitor';
 import type { IndexHint, IndexRefreshResult } from '../../../src/backend/git';
-import type { GitEntry, GitStatus, GitStatusResult } from '../../../src/shared/git';
+import type { GitEntry, GitStatus, GitStatusResult, GitUnavailable } from '../../../src/shared/git';
 import { tmpDir } from './helpers';
 
 class FakeClock implements Clock {
@@ -53,7 +53,19 @@ class FakeRepo {
     private clock: FakeClock,
     readonly isRepo = true,
   ) {}
-  probe = async () => (this.isRepo ? { ok: true as const } : { ok: false as const, reason: 'no-repo' as const });
+  /** Looking at the folder fails with this (null: it answers); how often it was looked at; fake time per look. */
+  fail: GitUnavailable | null = null;
+  probes = 0;
+  probeMs = 0;
+  probe = async () => {
+    this.probes++;
+    const r = this.fail ?? (this.isRepo ? { ok: true as const } : { ok: false as const, reason: 'no-repo' as const });
+    if (this.probeMs) await new Promise<void>((resolve) => this.clock.set(resolve, this.probeMs));
+    return r;
+  };
+  reprobe = () => this.probe();
+  /** `git status` itself fails with this (the repository was found). */
+  statusFail: GitUnavailable | null = null;
   status = (trigger?: string): Promise<GitStatusResult> => {
     this.runs.push({ at: this.clock.t, trigger });
     const ms = this.stale ? this.staleMs : this.ms;
@@ -61,7 +73,7 @@ class FakeRepo {
       this.clock.set(() => {
         const r: GitStatus = { ok: true, branch: { head: 'main', oid: 'a'.repeat(40), detached: false, upstream: null, ahead: 0, behind: 0 }, entries: this.entries.map((e) => ({ ...e })), prefix: '', ms };
         this.hint = { wasted: !this.counter ? null : this.stale ? this.staleFiles : 0, ms };
-        resolve(r);
+        resolve(this.statusFail ?? r);
       }, ms);
     });
   };
@@ -101,13 +113,14 @@ class FakeRepo {
   }
 }
 
-function setup(opts: { nested?: string[]; refreshIndex?: boolean; stale?: boolean } = {}) {
+function setup(opts: { nested?: string[]; refreshIndex?: boolean; stale?: boolean; fail?: GitUnavailable } = {}) {
   const clock = new FakeClock();
   const repos = new Map<string, FakeRepo>();
   const root = '/ws';
   const make = (r: string) => {
     const f = new FakeRepo(r, clock, !opts.nested || r !== root);
     f.stale = !!opts.stale;
+    f.fail = opts.fail ?? null;
     repos.set(r, f);
     return f as unknown as import('../../../src/backend/git').GitService;
   };
@@ -363,6 +376,99 @@ describe('GitMonitor fresh status during a run', () => {
     const r = (await fresh) as GitStatus;
     expect(r.entries.map((e) => e.path)).toEqual(['staged.md']);
     expect(s.repo().runs).toHaveLength(2);
+  });
+});
+
+describe('GitMonitor: a first look that failed is not final', () => {
+  const timeout: GitUnavailable = { ok: false, reason: 'timeout' };
+
+  it('Retry (a fresh status) looks again, an ordinary status does not; clicks at once share ONE look', async () => {
+    const s = setup({ fail: timeout });
+    await s.m.ready;
+    expect(await s.m.status()).toEqual(timeout);
+    expect(await s.m.status()).toEqual(timeout); // the pane opening, a push event: the answer it has, no git
+    expect(s.repo().probes).toBe(1);
+    // git still hangs: three Retry clicks at once (pane, status bar, toast) → one look, the same answer.
+    s.repo().probeMs = 200;
+    const three = Promise.all([s.m.status({ fresh: true }), s.m.status({ fresh: true }), s.m.status({ fresh: true })]);
+    await s.clock.advance(250);
+    expect(await three).toEqual([timeout, timeout, timeout]);
+    expect(s.repo().probes).toBe(2);
+    // git answers: the repository is there and ONE status runs (the opening run and the retry's coalesce).
+    s.repo().fail = null;
+    const again = s.m.status({ fresh: true });
+    await s.clock.advance(500);
+    expect(await again).toMatchObject({ ok: true, branch: { head: 'main' } });
+    expect(s.repo().probes).toBe(3);
+    expect(s.repo().runs).toHaveLength(1);
+    // From here on it is an ordinary repository: a fresh status runs git status, never another look.
+    const later = s.m.status({ fresh: true });
+    await s.clock.advance(500);
+    expect((await later).ok).toBe(true);
+    expect(s.repo().probes).toBe(3);
+  });
+
+  it('a status that got no answer: Retry runs it again at once (not after the adaptive interval), clicks at once share ONE run', async () => {
+    const s = setup();
+    await started(s);
+    s.repo().statusFail = timeout;
+    s.repo().ms = 20_000; // git status was stopped at its time limit
+    s.m.trigger('action');
+    await s.clock.advance(20_100);
+    expect(await s.m.status()).toEqual(timeout);
+    s.repo().runs.length = 0;
+    // By itself the next look would wait 5 × 20 s; the user's Retry does not.
+    s.repo().statusFail = null;
+    s.repo().ms = 50;
+    const three = Promise.all([s.m.status({ fresh: true }), s.m.status({ fresh: true }), s.m.status({ fresh: true })]);
+    await s.clock.advance(200);
+    expect((await three).map((r) => r.ok)).toEqual([true, true, true]);
+    expect(s.repo().runs).toHaveLength(1);
+    expect(s.repo().probes).toBe(1); // the repository was known: no second look at the folder
+  });
+
+  it('"not a repository" is not retried (its watcher sees a git init)', async () => {
+    const s = setup({ fail: { ok: false, reason: 'no-repo' } });
+    await s.m.ready;
+    expect(await s.m.status({ fresh: true })).toEqual({ ok: false, reason: 'no-repo' });
+    expect(s.repo().probes).toBe(1);
+  });
+
+  it('no answer in time: window focus looks again by itself (at most every 10 s) and tells the windows', async () => {
+    const s = setup({ fail: timeout });
+    await s.m.ready;
+    const events: GitMonitorEvent[] = [];
+    s.m.onEvent((e) => events.push(e));
+    s.m.trigger('focus'); // right after the look that failed: not yet
+    await s.clock.advance(100);
+    expect(s.repo().probes).toBe(1);
+    await s.clock.advance(CADENCE.focusQuiet);
+    // Still no repository, but for another reason: the windows read it.
+    s.repo().fail = { ok: false, reason: 'error', message: 'boom' };
+    s.m.trigger('focus');
+    await s.clock.advance(100);
+    expect(s.repo().probes).toBe(2);
+    expect(events).toEqual([{ version: 0 }]);
+    expect(await s.m.status()).toEqual({ ok: false, reason: 'error', message: 'boom' });
+    // Any other failure waits for the user's Retry.
+    await s.clock.advance(CADENCE.focusQuiet * 2);
+    s.m.trigger('focus');
+    await s.clock.advance(100);
+    expect(s.repo().probes).toBe(2);
+  });
+
+  it('focus after "no answer in time", git answers now: the repository shows up without a click', async () => {
+    const s = setup({ fail: timeout });
+    await s.m.ready;
+    await s.clock.advance(CADENCE.focusQuiet);
+    s.repo().fail = null;
+    s.repo().probeMs = 100;
+    s.m.trigger('focus');
+    s.m.trigger('focus'); // a second window: the same look
+    await s.clock.advance(400);
+    expect(s.repo().probes).toBe(2);
+    expect(s.repo().runs).toHaveLength(1);
+    expect(await s.m.status()).toMatchObject({ ok: true, version: 1 });
   });
 });
 

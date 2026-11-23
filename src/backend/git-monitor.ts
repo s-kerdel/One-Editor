@@ -189,20 +189,49 @@ export class GitMonitor {
     this.ready = this.discover();
   }
 
-  /** Which repositories live here (the folder itself, or several below a plain parent folder). */
-  private async discover() {
-    const probe = await this.rootSvc.probe();
+  /** Which repositories live here (the folder itself, or several below a plain parent folder).
+   *  `again`: a second look after a failed one (retryDiscovery). */
+  private async discover(again = false) {
+    const probe = again ? await this.rootSvc.reprobe() : await this.rootSvc.probe();
     if (this.disposed) return;
+    this.discoveredAt = this.clock.now();
+    this.unavailable = null;
     if (probe.ok) this.repos = [this.state('', this.rootSvc)];
     else if (probe.reason === 'no-repo') {
       const rels = await findNestedRepos(this.root, this.opts);
+      if (this.disposed) return;
       this.repos = rels.map((rel) => this.state(rel, this.make(path.join(this.root, ...rel.split('/')))));
       if (!this.repos.length) this.unavailable = probe;
       // `git init` here (or a new clone below) → look again.
-      this.rootUnsub = this.rootSvc.onChange(() => void this.rediscover());
+      this.rootUnsub ??= this.rootSvc.onChange(() => void this.rediscover());
     } else this.unavailable = probe;
     for (const r of this.repos) this.mark(r, 'open');
   }
+
+  /**
+   * The first look failed for a reason that can pass (git gave no answer in time: a permission prompt,
+   * a cold disk; git was installed / the folder was marked safe since): look again. Without this the
+   * failure stayed for as long as the folder was open. Single-flight: everyone asking during a look
+   * shares it, and GitService.reprobe never starts a discovery beside one still running.
+   */
+  private retryDiscovery(): Promise<void> {
+    if (this.repos.length || this.disposed) return Promise.resolve();
+    return (this.retrying ??= (async () => {
+      const before = this.unavailable?.reason;
+      try {
+        await this.discover(true);
+      } catch {
+        // keeps the failure it had
+      } finally {
+        this.retrying = null;
+      }
+      // Still nothing, for another reason: every window reads it (a found repository reports itself after its first status).
+      if (!this.disposed && !this.repos.length && this.unavailable?.reason !== before) this.emit({ version: this.version });
+    })());
+  }
+  private retrying: Promise<void> | null = null;
+  /** When the folder was last looked at (the focus retry waits `focusQuiet` after it). */
+  private discoveredAt = 0;
 
   private async rediscover() {
     const rels = new Set(this.repos.map((r) => r.rel));
@@ -241,6 +270,12 @@ export class GitMonitor {
   /** Something happened. `paths` (workspace-relative) narrows it to the repositories they belong to. */
   trigger(kind: GitTrigger, paths?: readonly string[]) {
     if (this.disposed) return;
+    if (!this.repos.length) {
+      // git gave no answer in time at the first look (often a prompt the user was still reading): coming
+      // back to the window looks again by itself, at most every `focusQuiet`. Other failures wait for Retry.
+      if (kind === 'focus' && this.unavailable?.reason === 'timeout' && this.clock.now() - this.discoveredAt >= CADENCE.focusQuiet) void this.retryDiscovery();
+      return;
+    }
     if (!paths) {
       for (const r of this.repos) this.mark(r, kind);
       return;
@@ -573,6 +608,9 @@ export class GitMonitor {
    */
   async status(o: { since?: unknown; fresh?: unknown } = {}): Promise<GitStatusReply> {
     await this.ready;
+    // Retry (pane / status bar: a `fresh` status): a failed first look is taken again. "Not a repository"
+    // is not a failure: its watcher sees a `git init`.
+    if (!this.repos.length && o.fresh === true && this.unavailable && this.unavailable.reason !== 'no-repo') await this.retryDiscovery();
     if (!this.repos.length) return this.unavailable ?? { ok: false, reason: 'no-repo' };
     if (o.fresh === true) await this.runNow();
     else await this.firstResults();

@@ -88,6 +88,28 @@ export class GitStore {
   }
   private followUp: Promise<void> | null = null;
 
+  /** A Retry the user asked for is running: every Retry button shows it and is off meanwhile. */
+  readonly retrying = signal(false);
+  private retryRun: Promise<void> | null = null;
+  /**
+   * Retry after "git didn't answer" — THE Retry of every surface: it only reads git's state again, a
+   * fresh status (the backend then also repeats a failed first look at the folder). It never runs a
+   * failed action again. One at a time: a click during a retry (pane, status bar, toast) joins the one running,
+   * and the backend's monitor is single-flight per repository, so no second git starts beside it.
+   * A status that comes back ok replaces the failure, which takes the message away everywhere.
+   */
+  retry(): Promise<void> {
+    return (this.retryRun ??= (async () => {
+      this.retrying.value = true;
+      try {
+        await this.refreshNow();
+      } finally {
+        this.retrying.value = false;
+        this.retryRun = null;
+      }
+    })());
+  }
+
   /** Fetch what changed since our version (or after the pull in flight). */
   pull(): Promise<void> {
     if (!this.enabled) return Promise.resolve();
@@ -137,6 +159,7 @@ export class GitStore {
       for (const e of reply.set) this.entries.set(e.path, e);
       const { delta: _d, base: _b, set: _s, removed: _r, ...rest } = reply;
       r = { ...rest, entries: [...this.entries.values()] } as GitStatus;
+      this.lastPrint = '';
     } else {
       r = reply as GitStatusResult;
       // Backends without versions (tests, older servers): skip identical results by content.
@@ -144,7 +167,7 @@ export class GitStore {
         const print = fingerprint(r);
         if (print === this.lastPrint) return;
         this.lastPrint = print;
-      }
+      } else this.lastPrint = ''; // a versioned status in between: the same failure as before is news again ("no answer" a second time)
       this.entries = new Map(r.ok ? r.entries.map((e) => [e.path, e]) : []);
     }
     this.status.value = r;

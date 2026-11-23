@@ -1,6 +1,7 @@
 // Git UI pieces for the shell: status-bar branch item (+ its menu) and file-tree row marks.
-// Rendered by StatusBar / FileTree (phase 2 wiring); both render nothing while git is unavailable.
-import type { GitBranch } from '@shared/git';
+// Rendered by StatusBar / FileTree (phase 2 wiring); both render nothing while git is unavailable (the
+// branch item only speaks up for a repository that is not trusted yet or gave no answer in time).
+import { GIT_TIMEOUT_TEXT, type GitBranch, type GitUnavailable } from '@shared/git';
 import { app } from '../app/app';
 import * as ui from '../app/ui';
 import { Icon, addIcons } from '../app/icons';
@@ -33,6 +34,30 @@ const openPane = () => {
   app.sidebarVisible.value = true;
   app.sidebarPanel.value = 'git';
 };
+
+const REASON: Record<string, string> = {
+  'no-repo': 'This folder is not a git repository.',
+  'no-git': 'git was not found. Install git to use source control.',
+  unsafe: 'git refuses this repository: it belongs to another user (safe.directory).',
+  timeout: GIT_TIMEOUT_TEXT,
+  error: 'git reported an error.',
+};
+
+/**
+ * Why there is no status, as ONE text. git's own line follows only where it adds something ('unsafe',
+ * 'error') and never when it says the same again: the pane used to show the reason's sentence plus the
+ * backend's wording of it ("git took too long to answer. git took too long").
+ */
+export function unavailableText(st: GitUnavailable): string {
+  const text = REASON[st.reason] ?? REASON.error;
+  const detail = st.reason === 'unsafe' || st.reason === 'error' ? (st.message ?? '').trim() : '';
+  const said = (s: string) => s.toLowerCase().replace(/[.\s]+$/, '');
+  return detail && !said(text).includes(said(detail)) ? `${text} ${detail}` : text;
+}
+
+/** Failures that can pass (too slow, an error, git installed or the folder marked safe since): the pane offers Retry.
+ *  Not "no repository" (its watcher sees a `git init`) and not "untrusted" (that is the Trust question). */
+export const canRetry = (st: GitUnavailable) => st.reason === 'timeout' || st.reason === 'error' || st.reason === 'no-git' || st.reason === 'unsafe';
 
 /** Branch name, short commit id when detached, or a hint before the first commit. */
 export function branchLabel(b: GitBranch): string {
@@ -82,7 +107,8 @@ export function openBranchMenu(store: GitStore, anchor: HTMLElement) {
   ui.openContextMenu({ clientX: r.left, clientY: r.top - 4, preventDefault() {}, stopPropagation() {} }, branchMenuItems(store, app.activePath.value));
 }
 
-/** Status-bar item: branch, ahead/behind, dirty dot. Hidden when git is unavailable. */
+/** Status-bar item: branch, ahead/behind, dirty dot. Hidden when git is unavailable, except for the two
+ *  states the user can do something about here: not trusted yet, no answer in time (Retry). */
 export function GitBranchItem({ store }: { store: GitStore }) {
   const s = store.status.value;
   // A repository the user has not trusted yet: git is off, say so quietly; the panel asks.
@@ -93,6 +119,24 @@ export function GitBranchItem({ store }: { store: GitStore }) {
         <span class="se-git-branch-name">Git: not trusted</span>
       </button>
     );
+  // No answer in time: say so where the branch would be (it used to vanish without a word); a click looks again.
+  if (s && !s.ok && s.reason === 'timeout') {
+    const trying = store.retrying.value;
+    return (
+      <button
+        class={`se-status-item se-status-btn se-git-branch se-git-noanswer${trying ? ' se-git-busy' : ''}`}
+        data-testid="git-retry"
+        disabled={trying}
+        title={`${GIT_TIMEOUT_TEXT} Click to try again.`}
+        aria-label={trying ? 'Git: trying again' : 'Git: no answer in time. Retry'}
+        onClick={() => void store.retry()}
+      >
+        <Icon name="gitBranch" size={12} />
+        <span class="se-git-branch-name">{trying ? 'Git: trying again…' : 'Git: no answer · Retry'}</span>
+        <span class="se-git-spin" aria-hidden="true" />
+      </button>
+    );
+  }
   if (!s?.ok) return null;
   // Several repositories below the folder: the one holding the open file.
   const repo = store.repoOf(app.activePath.value ?? '') ?? s.repos?.find((r) => r.branch) ?? null;

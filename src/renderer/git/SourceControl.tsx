@@ -6,7 +6,7 @@ import './scm.css';
 import './check.css';
 import { signal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { GitBranchInfo, GitCommit, GitCommitFile, GitCommitFiles, GitCommitInfo, GitEntry, GitJobError, GitStatus } from '@shared/git';
+import { GIT_TIMEOUT_TEXT, type GitBranchInfo, type GitCommit, type GitCommitFile, type GitCommitFiles, type GitCommitInfo, type GitEntry, type GitJobError, type GitStatus, type GitUnavailable } from '@shared/git';
 import { basename, dirname } from '@shared/paths';
 import { app } from '../app/app';
 import * as ui from '../app/ui';
@@ -17,10 +17,10 @@ import { installGit } from './index';
 import type { GitStore } from './store';
 import { markOf } from './marks';
 import { openCommitDiff, openFileDiff } from './diff-open';
-import { busy, discard, handOff, handOffLabel, lastError, markResolved, runGit, stage } from './actions';
+import { busy, discard, handOff, handOffLabel, lastError, markResolved, retryRead, runGit, stage } from './actions';
 import { allOf, ariaChecked, selectedCount, type Check } from './selection';
 import { shownCheck, stager, toggleAll, toggleEntry } from './stage';
-import { branchLabel, stopTrusting } from './ui';
+import { branchLabel, canRetry, stopTrusting, unavailableText } from './ui';
 import { git, gitCall } from './rpc';
 
 /** Stop a background list (fire and forget: the backend kills the running git). */
@@ -389,7 +389,9 @@ function SyncBar({ s, st }: { s: GitStore; st: GitStatus }) {
   );
 }
 
-function ErrorBox() {
+/** The last failed action. After "no answer in time": Retry reads git's state again (./actions retryRead) —
+ *  it never runs the action again; the user does that by hand once git answers. */
+export function ErrorBox({ s }: { s: GitStore }) {
   const e = lastError.value;
   if (!e) return null;
   return (
@@ -397,6 +399,11 @@ function ErrorBox() {
       <pre class="se-scm-error-msg">{e.message}</pre>
       <div class="se-scm-error-row">
         {e.auth && <span class="se-scm-error-hint">Sign in or unlock your key in a terminal — git there can ask you.</span>}
+        {e.timeout && (
+          <button class="se-btn small" data-testid="git-retry" disabled={s.retrying.value} aria-busy={s.retrying.value} title="Read the repository again (the action itself is not run again)" onClick={() => void retryRead(s, e)}>
+            {s.retrying.value ? 'Trying again…' : 'Retry'}
+          </button>
+        )}
         {e.terminal && (
           <button class="se-btn small" onClick={() => handOff(e.terminal!)} title={e.terminal}>
             <Icon name="terminal" size={13} /> {handOffLabel()}
@@ -430,7 +437,7 @@ const SKELETON = (
 function JobError({ error, message, retry }: { error: GitJobError; message?: string; retry: () => void }) {
   return (
     <div class="se-scm-joberr" role="status">
-      <span>{error === 'timeout' ? 'Took too long.' : `Could not load${message ? `: ${message}` : '.'}`}</span>
+      <span>{error === 'timeout' ? GIT_TIMEOUT_TEXT : `Could not load${message ? `: ${message}` : '.'}`}</span>
       <button class="se-btn small" onClick={retry}>
         Retry
       </button>
@@ -896,13 +903,27 @@ function TrustPrompt({ s }: { s: GitStore }) {
   );
 }
 
-const REASON: Record<string, string> = {
-  'no-repo': 'This folder is not a git repository.',
-  'no-git': 'git was not found. Install git to use source control.',
-  unsafe: 'git refuses this repository: it belongs to another user (safe.directory).',
-  timeout: 'git took too long to answer.',
-  error: 'git reported an error.',
-};
+/**
+ * No status for the folder: the reason as one sentence (./ui unavailableText) and, for everything that
+ * can pass, Retry — a fresh status through the store (one at a time; the backend repeats a failed first
+ * look at the folder). A status that comes back ok replaces this view with the pane.
+ */
+export function Unavailable({ s, st }: { s: GitStore; st: GitUnavailable }) {
+  const trying = s.retrying.value;
+  return (
+    <div class="se-scm se-scm-empty" data-testid="scm-unavailable" role="status">
+      <Icon name="gitBranch" size={22} />
+      <p>{unavailableText(st)}</p>
+      {canRetry(st) && (
+        <button class="se-btn small" data-testid="git-retry" disabled={trying} aria-busy={trying} onClick={() => void s.retry()}>
+          <Icon name="refresh" size={13} /> {trying ? 'Trying again…' : 'Retry'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+const NO_REPO = unavailableText({ ok: false, reason: 'no-repo' });
 
 export function SourceControl() {
   const s = installGit(); // idempotent: the pane may open before the idle load
@@ -913,8 +934,8 @@ export function SourceControl() {
   if (!s) return <Empty text={app.workspace.value ? 'Source control is not available here.' : 'Open a folder to use source control.'} />;
   const st = s.status.value;
   if (!st) return <div class="se-scm se-scm-loading" aria-busy="true" />;
-  if (!st.ok && st.reason === 'untrusted') return st.repoLikely ? <TrustPrompt s={s} /> : <Empty text={REASON['no-repo']} terminal="git init" />;
-  if (!st.ok) return <Empty text={`${REASON[st.reason] ?? REASON.error}${st.message ? ` ${st.message}` : ''}`} terminal={st.reason === 'no-repo' ? 'git init' : undefined} />;
+  if (!st.ok && st.reason === 'untrusted') return st.repoLikely ? <TrustPrompt s={s} /> : <Empty text={NO_REPO} terminal="git init" />;
+  if (!st.ok) return st.reason === 'no-repo' ? <Empty text={NO_REPO} terminal="git init" /> : <Unavailable s={s} st={st} />;
   // Several repositories below this folder: the pane works on one at a time.
   const repos = st.repos ?? [];
   const multi = repos.length > 1;
@@ -944,7 +965,7 @@ export function SourceControl() {
       <SyncBar s={s} st={view} />
       {view.state && <div class="se-scm-state">{STATE_TEXT[view.state]}</div>}
       <CommitBox s={s} st={view} selected={selected} />
-      <ErrorBox />
+      <ErrorBox s={s} />
       <div class="se-scm-scroll">
         <Conflicts s={s} list={g.conflicts} />
         <Changes s={s} list={g.changes} />

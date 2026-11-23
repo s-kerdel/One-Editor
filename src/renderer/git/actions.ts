@@ -16,6 +16,18 @@ export const busy = signal<string | null>(null);
 /** The last failure, shown inline in the pane until the next action. */
 export const lastError = signal<GitActionResult | null>(null);
 
+/**
+ * Retry after "git didn't answer in time" (`failed.timeout`): reads git's state again — a fresh status,
+ * one at a time (GitStore.retry) — and nothing else. The action that failed is NEVER run again by a
+ * button: the user starts it again by hand once git answers. A status that comes back ok takes that
+ * failure's message away.
+ */
+export function retryRead(store: GitStore, failed?: GitActionResult | null): Promise<void> {
+  return store.retry().then(() => {
+    if (failed && store.status.peek()?.ok && lastError.peek() === failed) lastError.value = null;
+  });
+}
+
 /** Opens the integrated terminal with `command` typed in (not run); copies it where there is none. */
 export function handOff(command: string) {
   if (app.runInTerminal) void app.runInTerminal(command, { pressEnter: false });
@@ -38,7 +50,9 @@ export async function runGit(store: GitStore, label: string, fn: () => Promise<G
   await store.refreshNow();
   if (!r.ok) {
     lastError.value = r;
-    app.toast(r.message || `${label} failed`, 'error', 8000, r.terminal ? [{ label: handOffLabel(), run: () => handOff(r.terminal!) }] : undefined);
+    // No answer in time: Retry reads git's state again (retryRead) — it does not run the action again.
+    const actions = [...(r.timeout ? [{ label: 'Retry', run: () => void retryRead(store, r) }] : []), ...(r.terminal ? [{ label: handOffLabel(), run: () => handOff(r.terminal!) }] : [])];
+    app.toast(r.message || `${label} failed`, 'error', 8000, actions.length ? actions : undefined);
   } else if (!opts.quiet && r.message) app.toast(r.message, 'success', 2500);
   return r;
 }
