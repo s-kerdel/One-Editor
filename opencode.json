@@ -1,0 +1,4 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["LLM-INSTRUCTIONS.md", "docs/llm/00-START-HERE.md"]
+}

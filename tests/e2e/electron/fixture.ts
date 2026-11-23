@@ -50,6 +50,20 @@ export const test = base.extend<{ el: ElectronFixture }>({
         });
         apps.push(app);
         app.process().stdout?.on('data', (d) => stdout.push(String(d)));
+        if (process.env.E2E_CONSOLE) {
+          // Debug aid, off by default: main process output + every window's console in the test output.
+          app.process().stdout?.on('data', (d) => process.stdout.write(`[main] ${d}`));
+          app.process().stderr?.on('data', (d) => process.stdout.write(`[main:err] ${d}`));
+          const seen = new WeakSet<Page>();
+          const logPage = (w: Page) => {
+            if (seen.has(w)) return;
+            seen.add(w);
+            w.on('console', (m) => console.log(`[renderer:${m.type()}] ${m.text()}`));
+            w.on('pageerror', (e) => console.log(`[renderer:pageerror] ${e.stack || e.message}`));
+          };
+          for (const w of app.windows()) logPage(w);
+          app.on('window', logPage);
+        }
         const page = await app.firstWindow();
         await page.waitForSelector('html[data-ready="true"]', { timeout: 20000 });
         const readyMs = Date.now() - t0;

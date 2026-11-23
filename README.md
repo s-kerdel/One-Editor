@@ -57,7 +57,7 @@ One.exe C:\notes\todo.md         :: open a file (inside its folder)
 
 ## Run on macOS
 
-Needs **Node.js 20+** (see `.tool-versions`: 22). Build on the Mac you will run it on:
+Needs **Node.js 20+**. Build on the Mac you will run it on:
 
 ```bash
 npm install
@@ -112,11 +112,13 @@ npm run serve -- ~/notes --open
 | **File overview** | **`Ctrl+Alt+B`** or the panel button at the end of the tab strip: a **right sidebar** for the open file — **outline** (code: classes / functions / methods), **code blocks** (copy a command in one click), **tasks** (tick them off), **links + backlinks**, **info** (words, reading time, size, tags). Follows the cursor. Remembered across restarts |
 | **Status bar** | Click the **language** (bottom right) to change a file's highlighting — searchable list, remembered per file |
 | **Terminal** (desktop) | **`` Ctrl+` ``** opens a terminal **in your folder**, at the bottom of the editor. Tabs with **coloured profile badges**, a **launcher** (`⊕ PowerShell 7 ▾`: every profile — PowerShell 7, Windows PowerShell, Command Prompt, Git Bash, **WSL distros**; Bash / Zsh / Fish elsewhere — ★ picks the default), **maximize** and **hide** (shells keep running), find, copy/paste, colours follow the theme. **Ctrl+click** a link or a path like `src/a.ts:12:3` to open it. Shell code blocks get a **▶ Run in terminal** button: it **types the command, you press Enter** |
-| **Git** | If the folder is a git repository: **tree marks** (M / A / U / D / R / ! for conflicts, ignored files dimmed, a dot on folders with changes) · **branch in the status bar** (↑ ahead / ↓ behind, dirty dot; click → copy name, "Show changes" filters the tree) · **change bars** next to the text (added / changed / deleted, live while you type; click a bar → old lines + **Revert this change**) · **Diff with last commit** (unified or side by side). **`Ctrl+Shift+G` Git panel:** stage / unstage, discard (always asks; new files go to the Recycle Bin), **commit** (`Ctrl+Enter`, amend), **fetch / pull / push** with your own git login, branches, history, merge conflicts (**Accept current / incoming / both** in the editor). Uses **your installed git**. No force-push, no reset |
+| **Git** | If the folder is a git repository **and you [trust it](docs/USER-GUIDE.md#trust-a-folder-first)**: **tree marks** (M / A / U / D / R / ! for conflicts, ignored files dimmed, a dot on folders with changes) · **branch in the status bar** (↑ ahead / ↓ behind, dirty dot; click → copy name, "Show changes" filters the tree) · **change bars** next to the text (added / changed / deleted, live while you type; click a bar → old lines + **Revert this change**) · **Diff with last commit** (unified or side by side). **`Ctrl+Shift+G` Git panel:** stage / unstage, discard (always asks; new files go to the Recycle Bin), **commit** (`Ctrl+Enter`, amend), **fetch / pull / push** with your own git login, branches, history, merge conflicts (**Accept current / incoming / both** in the editor). Uses **your installed git**. No force-push, no reset |
 | **Compare text** | Right-click in the editor: **Compare Text with Clipboard** · **Select Text for Compare** → **Compare Text with Previous Selection** (any two files, code or notes). Uses **git's own diff** (`--histogram`; built-in diff when git is missing). Unified or side by side, word-level highlights, **Swap sides**, **Ignore whitespace**, **Copy as patch**. Tree / tab right-click: **Compare with Clipboard**. Off switch: Settings → Editor → **Compare text** |
 | **Variables & targets** | Write **`{{host}}`, `{{user}}`, `{{WS01.ip}}`** in commands; values come from the **nearest `variables.md`** (a YAML block: vars, **environments**, **targets**). Live mode shows **chips** with the value (hover = source, click = edit, file stays raw). **`env: lab ▾`** / **`⌖ DC01 ▾`** in the status bar (prod tinted red). Copy / ▶ Run use the values; missing ones are asked for. **Copy / Run for several targets**. **Secrets** in an encrypted vault (desktop), `••••` in preview and exports |
 | **Smart paste** (opt-in) | After a paste: **"Paste as…"** JSON block · formatted **curl** or curl **as template** (`{{host}}`, `{{token}}`) · stack trace → log block with clickable `file:line` · CSV / Excel → table · SQL formatted · VS Code code fenced in its language · **secret → `{{variable}}`**. Settings → Editor → Smart paste |
 | **Claude Code** (desktop) | If `claude` is installed: **"Claude Code"** in the launcher, plus **Claude: Ask about this file / selection** (palette or editor right-click). It **types** a prompt like `@notes/a.md lines 12-30`; **you review and press Enter**. No API keys, no network calls from the app |
+
+**Also:** [PDF viewer](docs/USER-GUIDE.md#pdf-files) · [bookmarks](docs/USER-GUIDE.md#bookmarks) (`Ctrl+Alt+K`) · [zen mode](docs/USER-GUIDE.md#zen-mode) (`Ctrl+Alt+Z`) · [MCP server for AI apps](docs/USER-GUIDE.md#mcp-server-ai-apps) · [Opencode and the AI changes list](docs/USER-GUIDE.md#opencode-and-the-ai-changes-list-preview) · [security updates check](docs/USER-GUIDE.md#security-updates).
 
 **Every setting has a control:** press `Ctrl+,`. The search box there also finds shortcuts.
 
@@ -205,47 +207,14 @@ npm run serve -- ~/notes --open
 | `Ctrl+Alt+[` / `Ctrl+Alt+]` | Fold all / unfold all |
 | `F12` / `Ctrl+click` | **Go to definition** (code files) |
 | `Shift+F12` | **Find usages** (Find in files, whole word) |
-| `Alt+←` (macOS `Cmd+[`) | Back to where you were (e.g. after a jump) |
+| `Alt+←` / `Alt+→` (macOS `Cmd+[` / `Cmd+]`) | Back / forward to where you were (e.g. after a jump) |
 
 ---
 
 ## Search query syntax
 
-**Plain text is searched literally**, so pasted commands just work. Operators are opt-in:
-
-| Type this | Finds |
-|---|---|
-| `kubectl get pods -o wide` | Lines with all of these words (`-o` is a flag, not an exclusion) |
-| `"exact phrase"` | The exact phrase |
-| `deploy -staging` | "deploy", but not in files with "staging" |
-| `\-staging` | The literal text `-staging` |
-| `nginx OR apache` | Either word |
-| `/user_\d+/` | Regular expression (add `i` for ignore case: `/foo/i`) |
-
-**Filters** (prefix with `-` to negate, e.g. `-path:archive`):
-
-| Filter | Limits results to |
-|---|---|
-| `path:notes/work` | Files whose path matches |
-| `file:todo` | Files whose **name** matches |
-| `ext:php,sql` | File extensions |
-| `lang:sql` | Files or code blocks in that language |
-| `in:code` | Code only. Also `in:text`, `in:heading`, `in:frontmatter`, `in:link` |
-| `tag:project` | Notes with that tag (also nested: `project/x`) |
-| `case:yes` | Force case-sensitive (`case:no` = insensitive) |
-
-- **Case:** smart by default. Lowercase query = ignore case; any capital = match case.
-- **Toggles in the panel:** match case `Alt+C`, whole word `Alt+W`, regex `Alt+R`.
-
-**Quick open prefixes** (`Ctrl+P`):
-
-| Prefix | Mode |
-|---|---|
-| *(none)* | Files. Also `file#heading` and `file:42` |
-| `>` | Commands |
-| `#` | Headings in the workspace |
-| `@` | Headings / symbols in this file |
-| `:` | Go to line |
+**Plain text is searched literally**, so pasted commands just work. Operators, filters and quick open prefixes:
+see [Find in files](docs/USER-GUIDE.md#find-in-files) and [Quick open prefixes](docs/USER-GUIDE.md#quick-open-prefixes) in the guide.
 
 ---
 
@@ -292,7 +261,7 @@ On WSL start Xvfb first: `~/.local/xvfb/start-xvfb.sh :99`.
 
 - **Paths** crossing the boundary are workspace-relative POSIX (`notes/a.md`).
 - **Heavy parts load lazily** (highlighter, formatter, math, diagrams), so startup stays fast.
-- **Contributor rules and extension points:** [`docs/AGENTS.md`](docs/AGENTS.md).
+- **Contributor rules and extension points:** [`LLM-INSTRUCTIONS.md`](LLM-INSTRUCTIONS.md) (entry point) → [`docs/llm/00-START-HERE.md`](docs/llm/00-START-HERE.md); full reference: [`docs/llm/09-reference.md`](docs/llm/09-reference.md).
 
 ---
 

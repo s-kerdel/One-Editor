@@ -1,7 +1,7 @@
 // DOMPurify configuration. Two instances: `user` for markdown (incl. raw HTML typed by the user or
 // coming from cloned repos) and `lib` for output of Shiki / KaTeX / Mermaid.
 //
-// Contract (docs/AGENTS.md): the app's classes and data-* attributes drive behaviour — Copy / Run, embeds,
+// Contract (docs/llm/09-reference-browser-preview.md): the app's classes and data-* attributes drive behaviour — Copy / Run, embeds,
 // task toggles, media paths — and some app classes are position: fixed overlays. They come from the
 // markdown renderer only, never from raw HTML in a note: markdown.ts marks every element raw HTML creates
 // (USER_MARK), and such an element keeps no data-* attribute and no class outside USER_CLASSES.

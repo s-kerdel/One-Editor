@@ -24,6 +24,15 @@ export interface WsFixture {
   write(rel: string, content: string): Promise<void>;
 }
 
+/** Debug aid, off by default: E2E_CONSOLE=1 prints the page's console and uncaught errors in the test output. */
+const logged = new WeakSet<Page>();
+export function logPage(page: Page): void {
+  if (!process.env.E2E_CONSOLE || logged.has(page)) return;
+  logged.add(page);
+  page.on('console', (m) => console.log(`[renderer:${m.type()}] ${m.text()}`));
+  page.on('pageerror', (e) => console.log(`[renderer:pageerror] ${e.stack || e.message}`));
+}
+
 export const test = base.extend<{ ws: WsFixture }>({
   ws: async ({}, use) => {
     // Temp files stay inside the project (.tmp/, gitignored) rather than the system temp dir.
@@ -39,6 +48,7 @@ export const test = base.extend<{ ws: WsFixture }>({
       root,
       server,
       async open(page) {
+        logPage(page);
         await page.goto(server.url);
         await page.waitForSelector('html[data-ready="true"]', { timeout: 15000 });
       },

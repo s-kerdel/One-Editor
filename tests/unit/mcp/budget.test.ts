@@ -1,6 +1,6 @@
 // Token budget of what the model carries on EVERY turn: the tool definitions (tools/list) and the server
 // instructions. Local models in LM Studio have small context windows, so these must not grow back
-// silently. Raise a budget only with a reason (and re-measure: docs/AGENTS.md, mcp notes).
+// silently. Raise a budget only with a reason (and re-measure: docs/llm/09-reference-mcp.md).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';

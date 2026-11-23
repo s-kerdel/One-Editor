@@ -838,6 +838,7 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 - **Follow it:** Settings → Terminal → **Follow Opencode's edits (preview)**, or palette → **"Opencode: Toggle follow edits"**. Off by default; new Opencode terminals only.
 - **Off:** Opencode starts exactly as in any terminal. **On:** One starts a private Opencode server on this computer for that terminal and stops it with the terminal.
 - **Each switch is for its own assistant.** Claude on and Opencode off (or the other way round) is fine.
+- **Windows + WSL:** when your ★ default shell is a WSL distro, One looks for Opencode inside that distro and starts it there. Following is not available inside WSL yet: Opencode starts plain and One says so once.
 
 **AI changes** (sidebar, `Ctrl+Alt+A`) lists what the assistant changed, **turn by turn**.
 
@@ -1129,7 +1130,7 @@ Settings are **global**, not per folder.
 - **Settings are shared:** a change in the browser shows up in the desktop app at once, and the other way round.
 - **Same folder, same port:** the browser remembers things per address (environment pick, recent files). So a folder gets its last port again. If that port is taken, the info box says so: browser state for this folder then starts empty.
 - **In the browser:** no terminal · secrets of `{{variables}}` stay in that tab's memory only · PDF export = the browser's print dialog · one server at a time.
-- **Without the desktop app:** `Start web server.cmd` (Windows) or `start-web.sh` (Linux) next to the program. Started that way on this computer, the browser can switch folders; with `--host` (another address) it serves that one folder only.
+- **Without the desktop app:** `Start web server.cmd` (Windows) or `start-web.sh` (Linux, macOS) next to the program. Started that way on this computer, the browser can switch folders; with `--host` (another address) it serves that one folder only.
 
 ### MCP server (AI apps)
 
@@ -1187,7 +1188,7 @@ env = { ELECTRON_RUN_AS_NODE = '1', ONE_MCP_TOKEN = 'one_…' }
 ```
 
 - **No Node.js needed:** One's own program runs the server (`ELECTRON_RUN_AS_NODE=1` = "run as a script runner, no window").
-- **Launchers** next to the program do the same: `One MCP.cmd` (Windows), `one-mcp.sh` (Linux).
+- **Launchers** next to the program do the same: `One MCP.cmd` (Windows), `one-mcp.sh` (Linux, macOS).
 - **Claude Code inside WSL** (One on Windows): `claude mcp add --scope user one -- cmd.exe /c "C:\Apps\One\One MCP.cmd"`
 - **Options** (add after `--stdio`): `--folder <name>` = only that folder · `--read-only` = never writes, whatever Settings say.
 

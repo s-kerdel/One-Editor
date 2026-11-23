@@ -13,7 +13,7 @@ import { startupAssets, startupTotals } from '../perf/bundle-report.mjs';
 
 /** Budgets for the code parsed before first paint (minified bytes on disk / gzip -9). */
 // Target is < 100 kB (99.0 kB when this guard was written; 102.8 kB in v0.5.1, back to 98.7 kB after the
-// 2026-11-21 trim pass, see AGENTS.md rule 2); the hard limit leaves ~5% for small shell changes.
+// 2026-11-21 trim pass, see docs/llm/09-reference-rules.md rule 2); the hard limit leaves ~5% for small shell changes.
 const STARTUP_JS_TARGET = 100_000;
 // Hard guard against accidental heavy imports at startup (a stray Shiki/Prettier import is MBs).
 // Raised 104 → 110 kB (2026-11-19) to fit both sidebar styles, the appearance system and the status
