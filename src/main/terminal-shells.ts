@@ -334,12 +334,38 @@ export function planClaude(info: ClaudeInfo, cwd: string, o: { platform: string;
 
 // ---------------------------------------------------------------- opencode
 
-export const opencodeInstall = (platform: string) => (platform === 'win32' ? 'npm i -g opencode-ai' : 'curl -fsSL https://opencode.ai/install | bash');
-export const opencodeHint = (platform: string) => `Opencode is not installed. In ${platform === 'win32' ? 'PowerShell' : 'a terminal'}: ${opencodeInstall(platform)} — then refresh.`;
+/** The install command for this platform (inside WSL: the Linux one). */
+export const opencodeInstall = (platform: string, wsl = false) => (platform === 'win32' && !wsl ? 'npm i -g opencode-ai' : 'curl -fsSL https://opencode.ai/install | bash');
+/** One-line install hint; `distro` = the WSL distro it was looked up in (the command must be run there, not in PowerShell). */
+export function opencodeHint(platform: string, distro?: string): string {
+  const where = platform !== 'win32' ? 'a terminal' : distro ? `a terminal (WSL · ${distro})` : 'PowerShell';
+  return `Opencode is not installed. In ${where}: ${opencodeInstall(platform, !!distro)} — then refresh.`;
+}
 
-/** Finds the `opencode` CLI natively (PATH + the installers' usual folders). Inside WSL is not looked up (yet). */
-export async function detectOpencode(d: DetectEnv): Promise<OpencodeInfo> {
+/** Shown once (toast) when "Follow Opencode's edits" is on but opencode runs inside WSL. */
+export const OPENCODE_WSL_NO_FOLLOW = 'Opencode runs inside WSL here: its edits are not followed and not listed under AI changes (native installs only).';
+
+/** Fixed script (nothing is built into it): PATH of the user's login shell, then the installers' usual folders. */
+export const OPENCODE_WSL_LOOKUP = 'command -v opencode || for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode" "$HOME/.npm-global/bin/opencode"; do [ -x "$p" ] && { echo "$p"; break; }; done';
+
+/**
+ * Finds the `opencode` CLI. When the default shell is a WSL distro it is looked up INSIDE that distro first
+ * (interactive login shell like detectClaude, plus the installers' folders: ~/.opencode/bin is often not on
+ * PATH), else — and as the fallback — natively: PATH plus the installers' usual folders.
+ */
+export async function detectOpencode(d: DetectEnv, o: { wsl?: { exe: string; distro: string } | null } = {}): Promise<OpencodeInfo> {
   const win = d.platform === 'win32';
+  if (o.wsl) {
+    const r = await d.run(o.wsl.exe, ['-d', o.wsl.distro, '-e', 'bash', '-lic', OPENCODE_WSL_LOOKUP], 8000).catch(() => null);
+    const out = r && r.code === 0 ? new TextDecoder().decode(r.stdout) : '';
+    // rc files may print anything: only a plain absolute path counts (it is later handed to bash as an argument).
+    const hit = out
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .reverse()
+      .find((l) => /^\/[\w@%+./-]*\/opencode$/.test(l));
+    if (hit) return { available: true, via: 'wsl', distro: o.wsl.distro, path: hit };
+  }
   const P = pathFor(String(d.platform));
   const e = (k: string) => envGet(d.env, k, win);
   const home = win ? e('USERPROFILE') : e('HOME');
@@ -347,7 +373,8 @@ export async function detectOpencode(d: DetectEnv): Promise<OpencodeInfo> {
     ? [await which('opencode', d), e('APPDATA') && P.join(e('APPDATA')!, 'npm', 'opencode.cmd'), home && P.join(home, '.opencode', 'bin', 'opencode.exe')]
     : [await which('opencode', d), ...(home ? [P.join(home, '.opencode/bin/opencode'), P.join(home, '.local/bin/opencode'), P.join(home, '.npm-global/bin/opencode')] : []), '/opt/homebrew/bin/opencode', '/usr/local/bin/opencode'];
   const found = await firstExisting(cands, d);
-  return found ? { available: true, path: found } : { available: false, hint: opencodeHint(String(d.platform)), install: opencodeInstall(String(d.platform)) };
+  if (found) return { available: true, via: 'native', path: found };
+  return { available: false, hint: opencodeHint(String(d.platform), o.wsl?.distro), install: opencodeInstall(String(d.platform), !!o.wsl) };
 }
 
 /**
@@ -366,9 +393,16 @@ export function planOpencodeServe(bin: string, o: { platform: string; env: Recor
  * How to start the Opencode TUI: plain `opencode` in the folder, or — with One's private server (the
  * "Follow Opencode's edits" setting) — `opencode --server <url>`, the generated password in the terminal's
  * environment only (never in argv: the process list shows argv).
+ * Inside WSL (like planClaude): an interactive login bash, cd'ing back to the folder after the rc files, then exec
+ * of the path the lookup found (an argument, not script text). Always plain there: One's server is native only,
+ * so `server` is ignored and no password crosses into the distro.
  */
-export function planOpencode(info: OpencodeInfo, cwd: string, o: { platform: string; env: Record<string, string | undefined>; server?: { url: string; password: string } }): SpawnPlan {
+export function planOpencode(info: OpencodeInfo, cwd: string, o: { platform: string; env: Record<string, string | undefined>; wslExe?: string; server?: { url: string; password: string } }): SpawnPlan {
   const win = o.platform === 'win32';
+  if (info.via === 'wsl' && info.distro && o.wslExe) {
+    const inside = wslPathFor(cwd, info.distro);
+    return { file: o.wslExe, args: ['-d', info.distro, '--cd', inside ?? cwd, '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec "$1"', inside ?? '.', info.path ?? 'opencode'], cwd, env: {} };
+  }
   const exe = info.path!;
   const P = pathFor(o.platform);
   const pathKey = win ? (Object.keys(o.env).find((k) => k.toLowerCase() === 'path') ?? 'Path') : 'PATH';

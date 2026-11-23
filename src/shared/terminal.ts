@@ -32,9 +32,14 @@ export interface ClaudeInfo {
   install?: string;
 }
 
-/** Opencode CLI (`opencode`) — started like Claude Code; with "Follow Opencode's edits" against a server One owns (main/terminal-opencode.ts). Native only. */
+/** Opencode CLI (`opencode`) — started like Claude Code; with "Follow Opencode's edits" against a server One owns
+ *  (main/terminal-opencode.ts; native only: inside WSL it starts without that server). */
 export interface OpencodeInfo {
   available: boolean;
+  /** 'wsl': runs inside `distro` (the default shell is that WSL distro). */
+  via?: 'native' | 'wsl';
+  distro?: string;
+  /** Executable (native) or the Linux path inside the distro. */
   path?: string;
   hint?: string;
   install?: string;
@@ -80,6 +85,8 @@ export interface TerminalSpawnResult {
   cwd: string;
   /** Windows build (xterm.js ConPTY heuristics) — so the view needn't wait for the shell list. */
   windowsBuild?: number;
+  /** One line for the user (a toast): the terminal started, but without something that was asked for (follow inside WSL). */
+  notice?: string;
 }
 
 export interface TerminalDataEvent {

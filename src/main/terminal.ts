@@ -33,7 +33,7 @@ import {
   type TerminalReply,
   type TerminalSpawnResult,
 } from '../shared/terminal';
-import { claudeHint, claudeInstall, detectClaude, detectOpencode, detectShells, opencodeHint, opencodeInstall, planOpencode, envGet, pathFor, pickDefaultShell, planClaude, planSpawn, windowsBuildOf, type DetectEnv } from './terminal-shells';
+import { claudeHint, claudeInstall, detectClaude, detectOpencode, detectShells, opencodeHint, opencodeInstall, OPENCODE_WSL_NO_FOLLOW, planOpencode, envGet, pathFor, pickDefaultShell, planClaude, planSpawn, windowsBuildOf, type DetectEnv } from './terminal-shells';
 import { ClaudeFollow } from './terminal-follow';
 import { OpencodeTracker } from './terminal-opencode';
 import { winSystemExe } from '../backend/winsys';
@@ -233,8 +233,8 @@ export interface TerminalServiceOptions {
   detect?: () => Promise<ShellInfo[]>;
   /** Claude Code detection, natively or inside a WSL distro (default: the real machine). */
   detectClaude?: (wsl: { exe: string; distro: string } | null) => Promise<ClaudeInfo>;
-  /** opencode detection (native only; default: the real machine). */
-  detectOpencode?: () => Promise<OpencodeInfo>;
+  /** opencode detection, natively or inside a WSL distro (default: the real machine). */
+  detectOpencode?: (wsl: { exe: string; distro: string } | null) => Promise<OpencodeInfo>;
   /** Test hook: how the private opencode server is started. */
   opencodeSpawn?: ConstructorParameters<typeof OpencodeTracker>[0]['spawnServer'];
   limits?: Partial<TerminalLimits>;
@@ -275,7 +275,7 @@ export class TerminalService {
   private disposed = false;
   private followSvc: ClaudeFollow | null = null;
   private opencodeSvc: OpencodeTracker | null = null;
-  private opencodeP: Promise<OpencodeInfo> | null = null;
+  private readonly opencodeP = new Map<string, Promise<OpencodeInfo>>(); // by WSL distro ('' = native), like claudeP
 
   constructor(o: TerminalServiceOptions) {
     this.o = o;
@@ -308,7 +308,7 @@ export class TerminalService {
       const injected = process.env.SEC_EDIT_TEST ? process.env.SEC_EDIT_TEST_SHELLS : undefined;
       const detect = this.o.detect ?? (injected ? async () => JSON.parse(injected) as ShellInfo[] : () => detectShells(nodeDetectEnv(this.o.env ?? process.env, this.platform)));
       this.claudeP.clear();
-      this.opencodeP = null;
+      this.opencodeP.clear();
       const p = detect();
       this.shellsP = p.catch((err) => {
         this.shellsP = null; // retry next time
@@ -330,11 +330,14 @@ export class TerminalService {
     const win = this.platform === 'win32';
     const defaultId = pickDefaultShell(shells, { platform: this.platform, root: this.o.getWorkspaceRoot() });
     const preferred = shells.find((s) => s.id === prefer) ?? shells.find((s) => s.id === defaultId);
+    // Both agents live where the default shell is; the two lookups (each may start the distro's login shell) overlap.
+    const wslShell = win && preferred?.kind === 'wsl' ? preferred : null;
+    const [claude, opencode] = withClaude ? await Promise.all([this.claude(wslShell), this.opencode(wslShell)]) : [undefined, undefined];
     return {
       shells,
       defaultId,
-      claude: withClaude ? await this.claude(win && preferred?.kind === 'wsl' ? preferred : null) : undefined,
-      opencode: withClaude ? await this.opencode() : undefined,
+      claude,
+      opencode,
       platform: this.platform,
       windowsBuild: this.windowsBuild(),
     };
@@ -350,9 +353,16 @@ export class TerminalService {
     } catch {} // reported by the first spawn
   }
 
-  private opencode(): Promise<OpencodeInfo> {
-    this.opencodeP ??= (this.o.detectOpencode ?? (() => detectOpencode(nodeDetectEnv(this.o.env ?? process.env, this.platform))))().catch(() => ({ available: false, hint: opencodeHint(this.platform), install: opencodeInstall(this.platform) }));
-    return this.opencodeP;
+  private opencode(wslShell: ShellInfo | null): Promise<OpencodeInfo> {
+    const key = wslShell?.id ?? '';
+    let p = this.opencodeP.get(key);
+    if (!p) {
+      const wsl = wslShell ? { exe: wslShell.path, distro: wslShell.id.slice(4) } : null;
+      const detect = this.o.detectOpencode ?? ((w) => detectOpencode(nodeDetectEnv(this.o.env ?? process.env, this.platform), { wsl: w }));
+      p = detect(wsl).catch(() => ({ available: false, hint: opencodeHint(this.platform, wsl?.distro), install: opencodeInstall(this.platform, !!wsl) }));
+      this.opencodeP.set(key, p);
+    }
+    return p;
   }
 
   private claude(wslShell: ShellInfo | null): Promise<ClaudeInfo> {
@@ -389,6 +399,7 @@ export class TerminalService {
       const env = this.o.env ?? process.env;
       const id = this.nextId++;
       let plan;
+      let notice: string | undefined;
       if (claude) {
         const follow = req.follow ? await this.openFollow(id, root, claude, list.shells, env) : null;
         if (follow && (this.o.getWorkspaceRoot() !== root || this.disposed)) {
@@ -405,18 +416,22 @@ export class TerminalService {
       } else if (opencode) {
         // "Follow Opencode's edits": our own `opencode serve` (loopback, generated password); the TUI attaches to it
         // so main sees every change. Off: plain opencode, no server.
-        const server = req.follow ? await this.openOpencode(id, root, opencode, env) : null;
+        // Inside WSL there is no private server (not provably reachable on 127.0.0.1 from here, nor provably ended
+        // with the terminal): plain opencode, and the user is told why nothing is followed.
+        const inWsl = opencode.via === 'wsl';
+        if (inWsl && req.follow) notice = OPENCODE_WSL_NO_FOLLOW;
+        const server = req.follow && !inWsl ? await this.openOpencode(id, root, opencode, env) : null;
         if (server && (this.o.getWorkspaceRoot() !== root || this.disposed)) {
           this.opencodeSvc?.close(id);
           throw fail('NO_WORKSPACE', 'The folder changed');
         }
         try {
-          plan = planOpencode(opencode, cwd.abs, { platform: this.platform, env, server: server ?? undefined });
+          plan = planOpencode(opencode, cwd.abs, { platform: this.platform, env, wslExe: inWsl ? shell?.path : undefined, server: server ?? undefined });
         } catch (err) {
           this.opencodeSvc?.close(id); // no start plan (cmd.exe cannot take the folder): the server must not outlive it
           throw err;
         }
-        shell = { id: 'opencode', name: AGENT_NAMES.opencode, kind: 'opencode', path: opencode.path ?? plan.file, args: [], detail: 'AI assistant in this folder' };
+        shell = { id: 'opencode', name: AGENT_NAMES.opencode, kind: 'opencode', path: opencode.path ?? plan.file, args: [], detail: inWsl ? `AI assistant · in ${opencode.distro} (WSL)` : 'AI assistant in this folder' };
       } else plan = planSpawn(shell!, cwd.abs, { platform: this.platform, env });
       let pty: PtyLike;
       try {
@@ -440,7 +455,7 @@ export class TerminalService {
         pty.onData((d) => this.onData(t, d)),
         pty.onExit((e) => this.finish(t, e)),
       );
-      return { id: t.id, pid: pty.pid, shell: shell!, cwd: cwd.rel, windowsBuild: this.windowsBuild() };
+      return { id: t.id, pid: pty.pid, shell: shell!, cwd: cwd.rel, windowsBuild: this.windowsBuild(), ...(notice ? { notice } : {}) };
     } finally {
       this.release(owner);
     }
@@ -471,7 +486,7 @@ export class TerminalService {
   /** The private opencode server for terminal `id` + tracking of it, or null (opencode then starts without the change list). */
   private async openOpencode(id: number, root: string, info: OpencodeInfo, env: Record<string, string | undefined>) {
     const f = this.o.follow;
-    if (!f || !info.path) return null;
+    if (!f || !info.path || info.via === 'wsl') return null; // a Linux path is not a program main can start
     this.opencodeSvc ??= new OpencodeTracker({
       inside: f.inside,
       spawnServer: this.o.opencodeSpawn,

@@ -304,6 +304,7 @@ export class TerminalManager {
       } else view.setSize?.(size.cols, size.rows); // hidden: xterm and PTY agree until it is shown and fitted
       T.view = performance.now();
       const r = await spawnP;
+      if (r.notice) this.d.toast(r.notice, 'info');
       cwd = r.cwd;
       T.spawned = performance.now();
       T.shell = r.shell.id;

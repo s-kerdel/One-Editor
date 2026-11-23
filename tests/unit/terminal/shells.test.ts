@@ -1,6 +1,6 @@
 // Shell detection, WSL parsing, spawn planning and environment rules — Windows fixtures run on Linux.
 import { describe, it, expect } from 'vitest';
-import { decodeWslOutput, detectClaude, detectOpencode, planOpencode, detectShells, parseWslList, pickDefaultShell, planClaude, planSpawn, pwshName, which, windowsBuildOf, wslPathFor, wslUncInfo, type DetectEnv } from '../../../src/main/terminal-shells';
+import { decodeWslOutput, detectClaude, detectOpencode, OPENCODE_WSL_LOOKUP, planOpencode, detectShells, parseWslList, pickDefaultShell, planClaude, planSpawn, pwshName, which, windowsBuildOf, wslPathFor, wslUncInfo, type DetectEnv } from '../../../src/main/terminal-shells';
 import { prettyDistro, prettyExe, uniqueNames } from '../../../src/shared/terminal';
 import { buildTerminalEnv, resolveTerminalCwd } from '../../../src/main/terminal';
 import { isTerminalMethod, TERMINAL_RPC_METHODS } from '../../../src/shared/terminal';
@@ -381,6 +381,37 @@ describe('opencode detection + start plan', () => {
     expect(JSON.stringify(plan.args)).not.toContain('pw-123456789');
     expect(plan.env).toMatchObject({ OPENCODE_PASSWORD: 'pw-123456789' });
     expect(planOpencode({ available: true, path: '/x/opencode' }, '/ws', { platform: 'linux', env: {} }).args).toEqual([]);
+  });
+
+  it('WSL default shell: looked up inside the distro first (PATH, then the installer folders), native as the fallback', async () => {
+    const wsl = { exe: 'C:\\Windows\\System32\\wsl.exe', distro: 'Ubuntu' };
+    const m = machine({ platform: 'win32', env: WIN_ENV, files: [], wsl: { code: 0, stdout: Buffer.from('Welcome!\nalias opencode=x\n/home/me/.opencode/bin/opencode\n') } });
+    expect(await detectOpencode(m, { wsl })).toEqual({ available: true, via: 'wsl', distro: 'Ubuntu', path: '/home/me/.opencode/bin/opencode' });
+    expect(m.runs).toEqual([['C:\\Windows\\System32\\wsl.exe', '-d', 'Ubuntu', '-e', 'bash', '-lic', OPENCODE_WSL_LOOKUP]]);
+    for (const dir of ['$HOME/.opencode/bin', '$HOME/.local/bin', '$HOME/.npm-global/bin']) expect(OPENCODE_WSL_LOOKUP).toContain(`"${dir}/opencode"`);
+    // Output that is not a plain absolute path is never taken (it becomes a bash argument later).
+    const odd = machine({ platform: 'win32', env: WIN_ENV, files: [], wsl: { code: 0, stdout: Buffer.from('/tmp/$(calc)/opencode\n/tmp/a b/opencode\nopencode\n') } });
+    expect((await detectOpencode(odd, { wsl })).available).toBe(false);
+    // Not in the distro, but installed on Windows: native.
+    const win = machine({ platform: 'win32', env: WIN_ENV, files: ['C:\\Users\\me\\.opencode\\bin\\opencode.exe'], wsl: { code: 1, stdout: new Uint8Array() } });
+    expect(await detectOpencode(win, { wsl })).toMatchObject({ available: true, via: 'native', path: 'C:\\Users\\me\\.opencode\\bin\\opencode.exe' });
+    // Nowhere: the hint names the distro and gives the Linux command, not PowerShell / npm.
+    const none = await detectOpencode(machine({ platform: 'win32', env: WIN_ENV, files: [], wsl: 'throw' }), { wsl });
+    expect(none).toEqual({ available: false, hint: 'Opencode is not installed. In a terminal (WSL · Ubuntu): curl -fsSL https://opencode.ai/install | bash — then refresh.', install: 'curl -fsSL https://opencode.ai/install | bash' });
+    // Native Windows (no WSL default shell) keeps the PowerShell text and never starts wsl.exe.
+    const native = machine({ platform: 'win32', env: WIN_ENV, files: [] });
+    expect(await detectOpencode(native)).toEqual({ available: false, hint: 'Opencode is not installed. In PowerShell: npm i -g opencode-ai — then refresh.', install: 'npm i -g opencode-ai' });
+    expect(native.runs).toEqual([]);
+  });
+
+  it('WSL start plan: login bash, cd back after the rc files, exec the found path; never a server address or password', () => {
+    const info = { available: true, via: 'wsl' as const, distro: 'Ubuntu', path: '/home/me/.opencode/bin/opencode' };
+    const o = { platform: 'win32', env: { ...WIN_ENV, WSLENV: 'X/p' }, wslExe: 'C:\\Windows\\System32\\wsl.exe' };
+    const script = 'cd -- "$0" 2>/dev/null; exec "$1"';
+    expect(planOpencode(info, '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', o)).toEqual({ file: o.wslExe, args: ['-d', 'Ubuntu', '--cd', '/home/me/my proj', '-e', 'bash', '-lic', script, '/home/me/my proj', info.path], cwd: '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', env: {} });
+    expect(planOpencode(info, 'C:\\Users\\me\\proj', o).args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/Users/me/proj', '-e', 'bash', '-lic', script, '/mnt/c/Users/me/proj', info.path]);
+    const withServer = planOpencode(info, 'C:\\ws', { ...o, server: { url: 'http://127.0.0.1:4000', password: 'pw-123456789' } });
+    expect(JSON.stringify(withServer)).not.toMatch(/pw-123456789|--server|OPENCODE_PASSWORD|WSLENV/);
   });
 
   it('Windows npm shim (opencode.cmd) goes through cmd.exe', () => {

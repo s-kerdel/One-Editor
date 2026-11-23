@@ -92,7 +92,7 @@ export function launcherRows(m: TerminalManager, o: { setDefault?: (id: string, 
   if (c?.available) rows.push({ key: 'claude', name: AGENT_NAMES.claude, detail: c.via === 'wsl' ? `AI assistant · in ${c.distro} (WSL)` : 'AI assistant in this folder', kind: 'claude', isDefault: false, canDefault: false, launch: () => void m.create({ preset: 'claude' }) });
   else if (c) rows.push({ key: 'claude', name: AGENT_NAMES.claude, detail: 'Not installed', kind: 'claude', isDefault: false, canDefault: false, missing: true, install: c.install, launch: () => o.toast?.(c.hint ?? 'Claude Code is not installed') });
   const oc = list?.opencode;
-  if (oc?.available) rows.push({ key: 'opencode', name: AGENT_NAMES.opencode, detail: 'AI assistant in this folder', kind: 'opencode', isDefault: false, canDefault: false, launch: () => void m.create({ preset: 'opencode' }) });
+  if (oc?.available) rows.push({ key: 'opencode', name: AGENT_NAMES.opencode, detail: oc.via === 'wsl' ? `AI assistant · in ${oc.distro} (WSL)` : 'AI assistant in this folder', kind: 'opencode', isDefault: false, canDefault: false, launch: () => void m.create({ preset: 'opencode' }) });
   else if (oc) rows.push({ key: 'opencode', name: AGENT_NAMES.opencode, detail: 'Not installed', kind: 'opencode', isDefault: false, canDefault: false, missing: true, install: oc.install, launch: () => o.toast?.(oc.hint ?? 'Opencode is not installed') });
   return rows;
 }

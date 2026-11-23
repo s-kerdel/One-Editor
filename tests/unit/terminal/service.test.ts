@@ -387,7 +387,7 @@ describe('TerminalService (real node-pty)', () => {
         },
       });
       expect((await r.svc.listShells()).opencode).toBeUndefined(); // not looked up unless asked
-      expect((await r.svc.listShells(false, undefined, true)).opencode).toEqual({ available: true, path: path.join(bin, 'opencode') });
+      expect((await r.svc.listShells(false, undefined, true)).opencode).toEqual({ available: true, via: 'native', path: path.join(bin, 'opencode') });
       const t = await r.svc.spawn(1, { preset: 'opencode', follow: true });
       expect(t.shell).toMatchObject({ id: 'opencode', kind: 'opencode' });
       await r.waitFor(t.id, /OC STUB args=--server http:\/\/127\.0\.0\.1:9 pw=secret-pass-12345/);
@@ -404,6 +404,58 @@ describe('TerminalService (real node-pty)', () => {
     } finally {
       fs.rmSync(bin, { recursive: true, force: true });
     }
+  });
+
+  it('Opencode lookup follows the preferred shell like Claude (cached per distro, cleared on refresh)', async () => {
+    const calls: Array<string | null> = [];
+    const wsl: ShellInfo = { id: 'wsl:Ubuntu', name: 'Ubuntu (WSL)', kind: 'wsl', path: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu'] };
+    const r = rig({
+      platform: 'win32',
+      windowsBuild: 22631,
+      detect: async () => [{ ...SHELLS[0], id: 'pwsh', kind: 'pwsh' }, wsl],
+      detectClaude: async () => ({ available: false }),
+      detectOpencode: async (w) => (calls.push(w ? `${w.exe}|${w.distro}` : null), w ? { available: true, via: 'wsl', distro: w.distro, path: '/usr/bin/opencode' } : { available: false }),
+    });
+    expect((await r.svc.listShells(false, undefined, true)).opencode).toEqual({ available: false });
+    expect((await r.svc.listShells(false, 'wsl:Ubuntu', true)).opencode).toEqual({ available: true, via: 'wsl', distro: 'Ubuntu', path: '/usr/bin/opencode' });
+    await r.svc.listShells(false, 'wsl:Ubuntu', true);
+    await r.svc.listShells(false, 'wsl:Ubuntu'); // without withClaude: no lookup at all (it can start the distro)
+    expect(calls).toEqual([null, 'C:\\Windows\\System32\\wsl.exe|Ubuntu']);
+    await r.svc.listShells(true, 'wsl:Ubuntu', true); // refresh: looked up again
+    expect(calls).toHaveLength(3);
+  });
+
+  it('Opencode inside WSL: started through wsl.exe; Follow asks for no server and says why (no password anywhere)', async () => {
+    const spawns: Array<{ file: string; args: string[] | string; env: Record<string, string> }> = [];
+    const fakePty = { pid: 4242, onData: () => ({ dispose() {} }), onExit: () => ({ dispose() {} }), write() {}, resize() {}, kill() {}, pause() {}, resume() {} };
+    const wsl: ShellInfo = { id: 'wsl:Ubuntu', name: 'Ubuntu (WSL)', kind: 'wsl', path: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu'] };
+    let servers = 0;
+    const r = rig({
+      platform: 'win32',
+      windowsBuild: 22631,
+      env: { SystemRoot: 'C:\\Windows' },
+      getWorkspaceRoot: () => 'C:\\ws',
+      loadPty: () => ({ spawn: (file, args, o) => (spawns.push({ file, args, env: o.env as Record<string, string> }), fakePty) }),
+      detect: async () => [{ ...SHELLS[0], id: 'pwsh', kind: 'pwsh' }, wsl],
+      detectClaude: async () => ({ available: false }),
+      detectOpencode: async (w) => (w ? { available: true, via: 'wsl', distro: w.distro, path: '/home/me/.opencode/bin/opencode' } : { available: false, hint: 'native hint' }),
+      follow: { dir: 'C:\\data\\f', foldCase: () => true, inside: async () => true },
+      opencodeSpawn: () => {
+        servers++;
+        throw new Error('no server inside WSL');
+      },
+    });
+    const t = await r.svc.spawn(1, { preset: 'opencode', prefer: 'wsl:Ubuntu', follow: true });
+    expect(t.shell).toMatchObject({ id: 'opencode', kind: 'opencode', detail: 'AI assistant · in Ubuntu (WSL)' });
+    expect(t.notice).toMatch(/inside WSL.*not followed/);
+    expect(servers).toBe(0);
+    expect(spawns[0].file).toBe('C:\\Windows\\System32\\wsl.exe');
+    expect(spawns[0].args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec "$1"', '/mnt/c/ws', '/home/me/.opencode/bin/opencode']);
+    expect(Object.keys(spawns[0].env).filter((k) => /OPENCODE|WSLENV/i.test(k))).toEqual([]);
+    // Follow off: the same start, nothing to say.
+    expect((await r.svc.spawn(1, { preset: 'opencode', prefer: 'wsl:Ubuntu' })).notice).toBeUndefined();
+    // The default shell is not WSL: the native answer decides (here: not installed).
+    await expect(r.svc.spawn(1, { preset: 'opencode', prefer: 'pwsh', follow: true })).rejects.toMatchObject({ code: 'ENOENT', message: 'native hint' });
   });
 
   it('Claude lookup follows the preferred shell (WSL distro → inside it) and is cached per distro', async () => {
