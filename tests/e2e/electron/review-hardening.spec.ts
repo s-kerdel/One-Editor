@@ -39,7 +39,7 @@ test('renderer is isolated: no Node, minimal bridge, hardened webPreferences', a
   ).toEqual({ bad: 403, wrong: 403, good: 200 });
   // The integrated terminal's bridge: fixed term:* calls only (arguments re-validated in main, src/main/terminal.ts).
   expect(await page.evaluate(() => Object.entries((window as any).secEditBridge.terminal).map(([k, v]) => `${k}:${typeof v}`).sort())).toEqual(
-    ['ack', 'kill', 'onData', 'onExit', 'resize', 'shells', 'spawn', 'write'].map((k) => `${k}:function`),
+    ['ack', 'kill', 'onChanges', 'onData', 'onExit', 'onFollow', 'resize', 'shells', 'spawn', 'write'].map((k) => `${k}:function`),
   );
   // Unknown IPC channels are refused by the preload.
   expect(await page.evaluate(() => { try { (window as any).secEditBridge.on('rpc:writeFile', () => {}); return 'subscribed'; } catch { return 'refused'; } })).toBe('refused');
