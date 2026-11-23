@@ -1,11 +1,12 @@
 // Renders the icon SVGs to PNGs with Playwright's Chromium and packs a multi-size Windows .ico
-// (PNG-compressed entries, supported since Vista) and the macOS .icns (PNG chunks, 16–1024 px).
+// (PNG-compressed entries, supported since Vista) and the macOS .icns (16–1024 px, packed by icns.mjs).
 // Run after editing an SVG: npm run icons
 // Small sizes get their own pixel-snapped artwork — a scaled-down master turns to mush at 16 px.
 import { chromium } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildIcns } from './icns.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (f) => fs.readFileSync(path.join(root, 'build', f), 'utf8');
@@ -42,19 +43,8 @@ sizes.forEach((s, i) => {
 });
 fs.writeFileSync(path.join(root, 'build/icon.ico'), Buffer.concat([header, dir, ...sizes.map((s) => pngs[s])]));
 fs.writeFileSync(path.join(root, 'build/icon.png'), pngs[512]);
-// macOS .icns: 'icns' + total length, then one chunk per size (type, length, PNG). Types: icp4/icp5 = 16/32 px,
-// ic07 = 128, ic08 = 256, ic09 = 512, ic10 = 1024; ic11–ic14 are the @2x of 16/32/128/256 (so 32/64/256/512 px).
-const ICNS = [['icp4', 16], ['icp5', 32], ['ic11', 32], ['ic12', 64], ['ic07', 128], ['ic13', 256], ['ic08', 256], ['ic14', 512], ['ic09', 512], ['ic10', 1024]];
-const chunks = ICNS.map(([type, px]) => {
-  const head = Buffer.alloc(8);
-  head.write(type, 0, 'ascii');
-  head.writeUInt32BE(8 + pngs[px].length, 4);
-  return Buffer.concat([head, pngs[px]]);
-});
-const icnsHead = Buffer.alloc(8);
-icnsHead.write('icns', 0, 'ascii');
-icnsHead.writeUInt32BE(8 + chunks.reduce((n, c) => n + c.length, 0), 4);
-fs.writeFileSync(path.join(root, 'build/icon.icns'), Buffer.concat([icnsHead, ...chunks]));
+// macOS .icns: 16 / 32 px as raw ARGB, the rest as PNG (icns.mjs says why; tests/unit/review/icns.test.ts checks the file).
+fs.writeFileSync(path.join(root, 'build/icon.icns'), buildIcns(pngs));
 fs.writeFileSync(path.join(root, 'src/renderer/public/icon.png'), pngs[256]);
 fs.copyFileSync(path.join(root, 'build/icon-16.svg'), path.join(root, 'src/renderer/public/favicon.svg')); // browser tab (16 px grid: crisp at 1x and 2x)
 console.log('icons → build/icon.ico, build/icon.icns, build/icon.png, src/renderer/public/icon.png, src/renderer/public/favicon.svg');
