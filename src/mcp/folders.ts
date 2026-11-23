@@ -29,6 +29,7 @@ import { folderProblem } from './grant';
 import { defaultCacheDir, indexOptionsFrom } from '../backend/appdata';
 import type { Eol, FsEvent, Settings, TextEncoding, TreeNode } from '../shared/api';
 import type { McpConfig, McpMode } from '../shared/mcp';
+import { associationMatcher, type LanguageInfo } from '../shared/languages';
 import { ToolError } from './protocol';
 import type { FolderIndex } from './indexes';
 
@@ -341,6 +342,11 @@ export class Folder {
 
   // ---- writes: the same resolver, write side ----------------------------------------------------
 
+  /** The user's file type associations (settings.json `files.associations`), for writeTypeProblem only. */
+  mappedLanguage(): (path: string) => LanguageInfo | null {
+    return associationMatcher(this.env.settings()['files.associations']);
+  }
+
   /**
    * A path a write may change: rule 1 (cleanPath), names decided without the disk (hidden / key /
    * excluded → EACCES; file types by writeTypeProblem), then no part of it may be a link, and its
@@ -356,7 +362,7 @@ export class Folder {
     const refuse = () => new ToolError('EACCES', `Cannot change ${key}`);
     if (this.vis.hidden(key)) throw refuse();
     const typeErr = () => {
-      const why = writeTypeProblem(key, this.allowCode);
+      const why = writeTypeProblem(key, this.allowCode, this.mappedLanguage());
       return why ? new ToolError('EINVAL', `Cannot change ${key}: ${why}`) : null;
     };
     if (o.kind === 'file' && o.exists === 'mustNot') {
@@ -614,16 +620,30 @@ export const NOTE_EXTS: ReadonlySet<string> = new Set(['md', 'markdown', 'txt'])
  *  double-click, .py / .pyw in the py launcher) and their Linux / macOS cousins. */
 const NEVER_EXTS = new Set(['lnk', 'url', 'scf', 'library-ms', 'bat', 'cmd', 'ps1', 'psm1', 'psd1', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'hta', 'exe', 'dll', 'msi', 'msc', 'cpl', 'scr', 'pif', 'com', 'reg', 'jar', 'appref-ms', 'application', 'desktop', 'command', 'py', 'pyw']);
 const NEVER_NAMES = new Set(['desktop.ini', 'autorun.inf']);
+const NEVER = 'program, script and shortcut files are never written by AI apps';
+const NOTES_ONLY = 'only notes (.md, .markdown, .txt) can be written. Code and config files need "Also allow code and config files" in One → Settings → MCP server';
 
-/** Why a write to `key` is refused by its file type, or null. */
-export function writeTypeProblem(key: string, allowCode: boolean): string | null {
+/**
+ * Why a write to `key` is refused by its file type, or null. `mapped` = the user's file type associations
+ * (Folder.mappedLanguage). They can only refuse MORE, never allow: the name's own rule is decided first and
+ * stays; a name that passes it is then held to the rule of the language the user opens it as — `notes.txt`
+ * mapped to PHP needs the code grant like a .php file, anything mapped to a never-written language
+ * (JavaScript, Python, PowerShell, Batch) is never written. A mapping makes no name writable
+ * (`*.ctp` → PHP stays "no text file extension" even with the code grant): settings.json is not a grant.
+ */
+export function writeTypeProblem(key: string, allowCode: boolean, mapped?: (path: string) => LanguageInfo | null): string | null {
   const name = key.slice(key.lastIndexOf('/') + 1).toLowerCase();
   const dot = name.lastIndexOf('.');
   const ext = dot > 0 ? name.slice(dot + 1) : '';
-  if (NEVER_NAMES.has(name) || NEVER_EXTS.has(ext)) return 'program, script and shortcut files are never written by AI apps';
+  if (NEVER_NAMES.has(name) || NEVER_EXTS.has(ext)) return NEVER;
+  const lang = mapped?.(name);
+  if (lang && lang.id !== 'markdown' && lang.id !== 'text') {
+    if (lang.extensions.some((e) => NEVER_EXTS.has(e.slice(1)))) return NEVER;
+    if (!allowCode) return NOTES_ONLY;
+  }
   if (NOTE_EXTS.has(ext)) return null;
   if (allowCode) return isProbablyTextName(name) ? null : 'only text files can be written (no text file extension)';
-  return 'only notes (.md, .markdown, .txt) can be written. Code and config files need "Also allow code and config files" in One → Settings → MCP server';
+  return NOTES_ONLY;
 }
 
 export interface Narrowing {

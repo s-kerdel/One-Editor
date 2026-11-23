@@ -54,7 +54,9 @@ export type Control =
   /** Font presets (v = CSS font-family, '' = default) plus a free-text "Custom" entry. */
   | { type: 'font'; presets: Choice[]; placeholder?: string }
   /** The sidebar menu's panels: order (drag / ↑ ↓ / Alt+↑ ↓), shown or hidden (app/SidebarMenuSetting.tsx). */
-  | { type: 'panels' };
+  | { type: 'panels' }
+  /** File type associations: rows of pattern → language with add / remove (app/FileTypesSetting.tsx). */
+  | { type: 'associations' };
 
 export interface SettingDef {
   key: string;
@@ -485,6 +487,16 @@ const defs: Draft[] = [
     keywords: ['ignore', 'node_modules', 'glob', 'exclude', '**'],
     default: D.excludeGlobs,
     control: { type: 'list', placeholder: 'node_modules, *.log, docs/build, **/secrets' },
+  },
+  // { "*.ctp": "php" }; null = none. One resolution for every consumer: shared/languages.ts languageForPath.
+  {
+    key: 'files.associations',
+    section: 'files',
+    label: 'File type associations',
+    description: 'Open files with another extension or name as a language you pick, e.g. *.ctp as PHP.',
+    keywords: ['extension', 'language', 'syntax', 'highlighting', 'file type', 'language mode', 'map', 'mapping', 'associate', 'ctp', 'php', 'template', 'glob'],
+    default: null,
+    control: { type: 'associations' },
   },
   { key: 'confirmDelete', section: 'files', label: 'Confirm before deleting', description: 'Ask before moving files to the trash.', keywords: ['trash', 'recycle bin', 'remove'], default: D.confirmDelete ?? true, control: { type: 'toggle' } },
   {

@@ -2,6 +2,7 @@
 // CodeMirror (@codemirror/language-data name), Shiki, and Prettier.
 // Owned by the format agent; editor + preview consume it. Add entries, don't fork it.
 import { basename, extname } from './paths';
+import { MAX_ASSOCIATIONS, PatternTable, parsePattern } from './associations';
 
 export interface LanguageInfo {
   id: string; // canonical id, e.g. 'php'
@@ -74,21 +75,134 @@ for (const l of LANGUAGES) {
   l.filenames?.forEach((f) => byFilename.set(f, l));
 }
 
+/** The user's file type associations installed in this thread / process (setFileAssociations); null = none. */
+let user: PatternTable<LanguageInfo> | null = null;
+let userKey = '[]';
+let userVersion = 0;
+
 /** Language for a fenced code block info string ("php", "bash title=x" → first word). */
 export function languageForFence(info: string): LanguageInfo | null {
   const word = info.trim().split(/[\s{]/)[0]?.toLowerCase().replace(/^\./, '') ?? '';
   return word ? byAlias.get(word) ?? null : null;
 }
 
-/** Language for a workspace path (handles compound extensions like .blade.php). */
+/**
+ * Language for a workspace path — THE resolution, for every consumer (editor grammar, status bar, comment
+ * tokens, formatter, outline / symbol index, Go to definition, search's `lang:`): the user's file type
+ * associations first (setFileAssociations below), then the built-in table (compound extensions like
+ * .blade.php included). Markdown notes and viewer files are never re-mapped (associations.ts, RESERVED).
+ */
 export function languageForPath(path: string): LanguageInfo | null {
   const name = basename(path).toLowerCase();
+  const mapped = user?.match(name);
+  if (mapped) return mapped;
   if (name.endsWith('.blade.php')) return byAlias.get('blade')!;
   return byFilename.get(name) ?? byExt.get(extname(name)) ?? null;
 }
 
 export function languageById(id: string): LanguageInfo | null {
   return byAlias.get(id.toLowerCase()) ?? null;
+}
+
+// ---------- file type associations (setting `files.associations`, Settings → Files) ----------
+// { "*.ctp": "php" }: pattern (shared/associations.ts) → a language id / alias of the table above. The value
+// comes from the app's own settings.json, never from the open folder. Module state is per JS realm: the
+// renderer installs it from the editor's applySettings, the search workers get a `fileTypes` message, the
+// backend indexer gets the patterns as an index option; the MCP server installs nothing (it only reads the
+// setting to refuse more writes: folders.ts writeTypeProblem).
+
+export interface FileAssociation {
+  /** Canonical pattern: `*.ctp`, `dockerfile.*` or a whole name. */
+  pattern: string;
+  /** Canonical language id. */
+  language: string;
+}
+
+/** Entries looked at in a stored value (a hand-edited or hostile settings.json may hold anything). */
+const MAX_SCAN = 1000;
+const isMap = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** The stored value → valid, canonical, unique rows (the first spelling of a pattern wins; at most MAX_ASSOCIATIONS). */
+export function cleanAssociations(raw: unknown): FileAssociation[] {
+  const out: FileAssociation[] = [];
+  if (!isMap(raw)) return out;
+  const seen = new Set<string>();
+  let scanned = 0;
+  for (const key in raw) {
+    if (++scanned > MAX_SCAN || out.length >= MAX_ASSOCIATIONS) break;
+    if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
+    const value = raw[key];
+    if (typeof value !== 'string' || value.length > 40) continue;
+    const lang = byAlias.get(value.trim().toLowerCase());
+    const p = parsePattern(key);
+    if (!lang || !p.ok || seen.has(p.pattern)) continue;
+    seen.add(p.pattern);
+    out.push({ pattern: p.pattern, language: lang.id });
+  }
+  return out;
+}
+
+function tableOf(rows: FileAssociation[]): PatternTable<LanguageInfo> {
+  const t = new PatternTable<LanguageInfo>();
+  for (const r of rows) t.add(r.pattern, byAlias.get(r.language)!);
+  return t;
+}
+
+/** Installs the user's associations for this thread / process. True when they changed (re-resolve open files). */
+export function setFileAssociations(raw: unknown): boolean {
+  const rows = cleanAssociations(raw);
+  const key = JSON.stringify(rows);
+  if (key === userKey) return false;
+  userKey = key;
+  user = rows.length ? tableOf(rows) : null;
+  userVersion++;
+  return true;
+}
+
+/** Grows with every change of the installed associations (for caches keyed on a path's language). */
+export const associationsVersion = (): number => userVersion;
+
+/** The language the installed associations give `path`; null = the built-in table decides. */
+export function associatedLanguage(path: string): LanguageInfo | null {
+  return user?.match(basename(path).toLowerCase()) ?? null;
+}
+
+const NO_MATCH = (): LanguageInfo | null => null;
+const matchers = new WeakMap<object, (path: string) => LanguageInfo | null>();
+/** The same lookup over a stored value, without installing it (the MCP server's write rule). */
+export function associationMatcher(raw: unknown): (path: string) => LanguageInfo | null {
+  if (!isMap(raw)) return NO_MATCH;
+  let m = matchers.get(raw);
+  if (!m) {
+    const rows = cleanAssociations(raw);
+    const table = rows.length ? tableOf(rows) : null;
+    m = table ? (path) => table.match(basename(path).toLowerCase()) ?? null : NO_MATCH;
+    matchers.set(raw, m);
+  }
+  return m;
+}
+
+/**
+ * The stored value with `pattern` (canonical) set to `language`, or removed with null. Every spelling of the
+ * pattern is replaced, in place; rows this build cannot read (a language of another build sharing
+ * settings.json) stay as they are. null = nothing left: the setting's default.
+ */
+export function withAssociation(raw: unknown, pattern: string, language: string | null): Record<string, unknown> | null {
+  const out: Record<string, unknown> = {};
+  let placed = false;
+  if (isMap(raw)) {
+    for (const k of Object.keys(raw).slice(0, MAX_SCAN)) {
+      if (k === '__proto__') continue;
+      const p = parsePattern(k);
+      if (!p.ok || p.pattern !== pattern) out[k] = raw[k];
+      else if (language && !placed) {
+        out[pattern] = language;
+        placed = true;
+      }
+    }
+  }
+  if (language && !placed) out[pattern] = language;
+  return Object.keys(out).length ? out : null;
 }
 
 // ---------- formatting lookups (consumed by src/format) ----------

@@ -15,6 +15,7 @@ import { CacheWriter, TextCache } from './indexcache';
 import { isProbablyTextName } from './textnames';
 import { fsDelay } from './fsdelay';
 import type { FrameFile } from '../shared/textframe';
+import { PatternTable } from '../shared/associations';
 
 export interface IndexOptions {
   /** Honour .gitignore files, .git/info/exclude and the global git excludes file. */
@@ -25,10 +26,13 @@ export interface IndexOptions {
   skipMinified?: boolean;
   /** Bigger files are not indexed. */
   maxFileBytes?: number;
+  /** Names that are text because the user says so: the canonical patterns of the file type associations
+   *  (shared/associations.ts; `*.ctp` opened as PHP is searched and symbol-indexed like a .php file). */
+  textPatterns?: string[];
 }
 
 export const MAX_INDEX_BYTES = 2 * 1024 * 1024;
-export const DEFAULT_INDEX: Required<IndexOptions> = { respectGitignore: true, skipLockfiles: true, skipMinified: true, maxFileBytes: MAX_INDEX_BYTES };
+export const DEFAULT_INDEX: Required<IndexOptions> = { respectGitignore: true, skipLockfiles: true, skipMinified: true, maxFileBytes: MAX_INDEX_BYTES, textPatterns: [] };
 
 export interface IndexerConfig {
   root: string;
@@ -86,6 +90,7 @@ export class Indexer {
   private opts: Required<IndexOptions>;
   private snap: PathSnapshot = { version: '', files: [], ignoreDirs: [], repoDirs: [] };
   private list: { key: string; paths: string[] } | null = null;
+  private extra: { of: string[]; table: PatternTable<true> } | null = null;
   private ignore: { version: string; stack: IgnoreStack } | null = null;
   private outer: { prefix: string; files: Array<{ text: string; prefix: string }> } | null | undefined;
   private pool: ReadPool | null;
@@ -145,9 +150,21 @@ export class Indexer {
     return paths;
   }
 
+  /** The user's extra text names (opts.textPatterns) as a matcher, rebuilt when the options change. */
+  private extraText(): PatternTable<true> | null {
+    const patterns = this.opts.textPatterns;
+    if (!patterns?.length) return null;
+    if (this.extra?.of !== patterns) {
+      const table = new PatternTable<true>();
+      for (const p of patterns) if (typeof p === 'string') table.add(p, true);
+      this.extra = { of: patterns, table };
+    }
+    return this.extra.table;
+  }
+
   private skippedName(p: string): boolean {
     const name = p.slice(p.lastIndexOf('/') + 1);
-    if (!isProbablyTextName(name)) return true;
+    if (!isProbablyTextName(name) && !this.extraText()?.match(name.toLowerCase())) return true;
     return (this.opts.skipLockfiles && isLockfile(name)) || (this.opts.skipMinified && isMinified(name));
   }
 

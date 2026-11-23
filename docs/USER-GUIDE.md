@@ -576,6 +576,20 @@ With regex on, the replacement understands `$1`, `$<name>`, `\n`, and `\U` `\L` 
 - Also: palette → **"Change language mode…"**.
 - A `.md` file switched to another language becomes a plain code view (no live preview).
 
+### File type associations (every file of a kind)
+
+Your project uses an extension One does not know, e.g. CakePHP **`.ctp`** templates? Map it once.
+
+| Where | Steps |
+|---|---|
+| **Settings → Files → File type associations** | Type `ctp` → pick **PHP** → **Add** |
+| **Status bar** | Click the language → **"Set language for all \*.ctp files…"** → pick the language |
+
+- Open files change **at once**, no reload. The files are also **searched** and get an outline, Go to definition and formatting for that language.
+- What you can type: an extension (`ctp`, `.ctp`, `*.tpl.php`) or a file name (`nginx.conf`, `Dockerfile.*`). For a name without a dot (`Jenkinsfile`) use the status bar.
+- A mapping beats the built-in type (`*.inc` → HTML). A language you pick for **one** file (above) still wins.
+- Markdown notes, PDFs and images always keep their type.
+
 ### Code blocks inside notes
 
 - `Ctrl+Alt+F` with the cursor in a code block formats **that block**.

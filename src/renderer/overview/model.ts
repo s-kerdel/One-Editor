@@ -2,7 +2,7 @@
 // scanners other features already use — search's Markdown structure scan (ATX + setext headings,
 // fences incl. `~~~` and fences inside lists/quotes, frontmatter) and the Ctrl+Shift+O symbol scan —
 // and memoised per content string, so tab switches and cursor moves never rescan a 1 MB note.
-import { languageById } from '@shared/languages';
+import { associationsVersion, languageById } from '@shared/languages';
 import { parseStructure, K_FENCE, K_TEXT, type DocStructure } from '../../search/markdown';
 import { extractNote, plainHeading, type NoteInfo } from '../../knowledge/extract';
 import { countWords } from '../app/wordcount';
@@ -399,9 +399,15 @@ export class DocModel {
 }
 
 const models = new Map<string, DocModel>();
+let modelsLanguages = 0;
 
 /** The model for this exact text (same string → same model, parts already computed stay cached). */
 export function docModel(path: string, content: string, markdown: boolean): DocModel {
+  // A code file's outline follows its language: new file type associations (Settings → Files) start over.
+  if (modelsLanguages !== associationsVersion()) {
+    modelsLanguages = associationsVersion();
+    models.clear();
+  }
   const hit = models.get(path);
   if (hit && hit.markdown === markdown && hit.content === content) return hit;
   const m = new DocModel(path, content, markdown);

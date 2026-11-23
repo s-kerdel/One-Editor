@@ -8,7 +8,7 @@ import { applySettingsToDom, flushSettings } from './settings';
 import { refreshTree } from './documents';
 
 /** Settings that change what the indexers read (same list as SettingsOverlay.tsx). */
-const INDEX_KEYS = ['search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'search.workers', 'excludeGlobs', 'showHiddenFiles'];
+const INDEX_KEYS = ['search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'search.workers', 'excludeGlobs', 'showHiddenFiles', 'files.associations'];
 
 let installed = false;
 export function installSettingsSync() {

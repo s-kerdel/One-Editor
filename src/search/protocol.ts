@@ -59,6 +59,9 @@ export type ToWorker =
   | { type: 'pause'; on: boolean }
   /** Re-send note metadata of every indexed note (a late subscriber, e.g. the knowledge module). */
   | { type: 'replay'; gen: number }
+  /** The setting `files.associations` as stored: every shard resolves a path's language itself
+   *  (shared/languages setFileAssociations). Sent to a new shard first and on every change; a rebuild follows. */
+  | { type: 'fileTypes'; assoc: unknown }
   /** Unlinked mentions of `names` in this shard's Markdown notes (except `exclude`). */
   | { type: 'mentions'; id: number; names: string[]; exclude: string; limit: number };
 

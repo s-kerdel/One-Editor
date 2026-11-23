@@ -567,7 +567,7 @@ async function replaceInFiles(env: ToolEnv, f: Folder, c: WriteCtx, a: Record<st
   const visible = await f.visibleOnly(scope);
   const hits: Array<{ path: string; n: number; read: Awaited<ReturnType<Folder['readText']>> }> = [];
   for (const p of [...visible].sort()) {
-    if (writeTypeProblem(p, f.allowCode)) continue; // outside the type policy: not a candidate
+    if (writeTypeProblem(p, f.allowCode, f.mappedLanguage())) continue; // outside the type policy: not a candidate
     const read = await f.readText(p).catch(() => null);
     if (!read || read.binary) continue;
     const n = (read.content.match(re) ?? []).length;

@@ -14,7 +14,8 @@ import { prettyKey } from './commands';
 import { closeTabs, openWorkspace, persistSession, refreshTree } from './documents';
 import { runCommand } from './commands';
 import { updateSettings, currentWidth, WIDTHS } from './settings';
-import { LANGUAGES } from '@shared/languages';
+import { LANGUAGES, associatedLanguage, cleanAssociations, languageById } from '@shared/languages';
+import { describePattern, patternForName } from '@shared/associations';
 
 // Icons only this lazily loaded chunk draws (see addIcons).
 addIcons({ history: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8|M3 3v5h5|M12 7v5l4 2', trash: 'M3 6h18|M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6|M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2|M10 11v6|M14 11v6', rename: 'M12 20h9|M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z', reveal: 'M15 3h6v6|M10 14 21 3|M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6', exportPdf: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z|M14 3v5h5|M12 11v6|m9 14 3 3 3-3', arrowUp: 'M12 19V5|m5 12 7-7 7 7' });
@@ -683,13 +684,38 @@ export function openLanguagePicker(anchor?: Element | null) {
   // Without editor support for getLanguage, the override (if any) is what we know.
   const currentId = current ? (current.auto ? null : current.id) : override;
   const pick = (id: string | null) => () => setLanguage(path, id);
+  // Every file of this kind, not just this one: a file type association (Settings → Files). Not for notes / viewer files.
+  const pattern = patternForName(basename(path));
   ui.picker.value = {
     title: 'Select language mode',
     anchor,
     items: [
-      { label: 'Auto-detect', detail: 'by extension', checked: currentId === null, run: pick(null) },
+      { label: 'Auto-detect', detail: associatedLanguage(path) ? 'by file type association' : 'by extension', checked: currentId === null, run: pick(null) },
       { label: 'Plain text', checked: currentId === 'text', run: pick('text') },
+      ...(pattern ? [{ label: `Set language for all ${pattern} files…`, run: () => openAssociationPicker(path, pattern, anchor) }] : []),
       ...pickableLanguages().map((l, i) => ({ label: l.name, detail: l.extensions[0], checked: currentId === l.id, separator: i === 0, run: pick(l.id) })),
+    ],
+  };
+}
+
+/** Second step of "Set language for all *.ctp files…": the language (or none) for that file type association. */
+function openAssociationPicker(path: string, pattern: string, anchor?: Element | null) {
+  const current = cleanAssociations(app.settings.value['files.associations']).find((r) => r.pattern === pattern)?.language ?? null;
+  const what = describePattern(pattern);
+  const pick = (id: string | null) => async () => {
+    if (id === current) return; // as it is: no write, no index rebuild
+    const m = await import('./SettingsOverlay'); // the write lives in its chunk (app/file-types.ts)
+    m.setFileAssociation(pattern, id);
+    if (ui.languageOverrides.value[path]) setLanguage(path, null); // this file follows the association too
+    app.toast(id ? `${what.charAt(0).toUpperCase()}${what.slice(1)} now open as ${languageById(id)?.name ?? id}` : `No file type association for ${pattern} any more`, 'info', 3000);
+  };
+  ui.picker.value = {
+    title: `Language for ${what}`,
+    anchor,
+    items: [
+      { label: 'No association', detail: 'built-in detection', checked: current === null, run: pick(null) },
+      { label: 'Plain text', checked: current === 'text', run: pick('text') },
+      ...pickableLanguages().map((l, i) => ({ label: l.name, checked: current === l.id, separator: i === 0, run: pick(l.id) })),
     ],
   };
 }

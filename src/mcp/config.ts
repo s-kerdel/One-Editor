@@ -5,8 +5,9 @@ import fs from 'node:fs';
 import { DEFAULT_SETTINGS, type Settings } from '../shared/api';
 import { parseMcpConfig, type McpConfig } from '../shared/mcp';
 
-/** The settings this server uses (anything else in settings.json is ignored). */
-export const SETTINGS_USED = ['excludeGlobs', 'search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'links.updateOnRename', 'variables.fileName', 'mcp.maxReadKB', 'mcp.maxResults'] as const;
+/** The settings this server uses (anything else in settings.json is ignored). `files.associations` is read
+ *  for one thing: refusing more writes (folders.ts writeTypeProblem); it changes nothing visible or indexed. */
+export const SETTINGS_USED = ['excludeGlobs', 'search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'links.updateOnRename', 'variables.fileName', 'mcp.maxReadKB', 'mcp.maxResults', 'files.associations'] as const;
 /** Changing one of these changes what is visible or indexed: folders start over. */
 export const VISIBILITY_KEYS = ['excludeGlobs', 'search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB'] as const;
 

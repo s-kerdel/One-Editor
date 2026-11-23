@@ -17,7 +17,7 @@ browser mode served by a local Node server. Both share one renderer.
 | `src/renderer/editor/` | **editor** |
 | `src/renderer/preview/` | **preview** |
 | `src/search/`, `src/renderer/search/` | **search** |
-| `src/format/`, `src/shared/languages.ts` | **format** |
+| `src/format/`, `src/shared/languages.ts`, `src/shared/associations.ts` (file type associations: see "A file's language") | **format** |
 | `src/knowledge/`, `src/renderer/knowledge/`, `src/shared/wikilinks.ts` | **knowledge** |
 | `src/renderer/overview/` (file overview, right column; shell's `Layout` hosts it, state in `ui.overviewVisible` / `ui.overviewWidth`) | **overview** |
 | `src/renderer/terminal/`, `src/main/terminal*.ts`, `src/shared/terminal.ts` (integrated terminal + Claude glue; shell's `Layout` hosts the bottom panel while `panelOpen`) | **terminal** |
@@ -66,6 +66,34 @@ Always Read immediately before Edit (other agents edit concurrently), never rewr
   "Indexing… x / y" (`searchClient.progress`) instead of an empty state; `indexDeferred` (`search/demand.ts`) = not built yet.
 - Shared helpers: `src/shared/paths.ts` (POSIX rel paths), `src/shared/languages.ts` (ext/fence → CM/Shiki/Prettier ids),
   `src/shared/wikilinks.ts` (parse + resolve `[[links]]`).
+- **A file's language — one resolution: `languageForPath(path)`** (`src/shared/languages.ts`): the user's **file type
+  associations** first (setting `files.associations`, Settings → Files: `{ "*.ctp": "php" }`), then the built-in
+  table. Everything that needs "what language is this file" calls it (editor grammar + comment tokens + indentation,
+  status bar, formatter, outline / overview / symbol index, Go to definition, search's `lang:`, embeds): never read
+  an extension table of your own, and never read the setting yourself. Patterns (`src/shared/associations.ts`, pure)
+  match the lower-cased **base name** only, in three shapes — `*.ctp` (suffix, compound too: `*.tpl.php`),
+  `dockerfile.*` (prefix), `jenkinsfile` (whole name; whole name > longest suffix > longest prefix) — no other
+  wildcard, no regex, a lookup bounded by `MAX_PATTERN` (64) whatever the name; ≤ `MAX_ASSOCIATIONS` (100) rows. The
+  value is a language id or alias of the table. **Markdown notes and viewer files (`RESERVED`: md / markdown / mdx,
+  pdf, images) are never re-mapped**: `isMarkdown()` keeps deciding what a note is. The stored value is cleaned on
+  every read (`cleanAssociations`: hand-edited or hostile settings.json → valid, canonical, unique rows; nothing
+  throws); writes go through `withAssociation` (rows this build cannot read stay in the file; nothing left = null,
+  the default). **The table is module state, one per JS realm**, set with `setFileAssociations(raw)` (true = changed):
+  the renderer in the editor's `applySettings` (before the first document; a change re-resolves open code files in
+  place — `reconfigureLanguage`, which `setLanguage` shares — and fires `onLanguageChange`, so the status bar and
+  the overview's outline follow; a per-file language mode still wins); each search shard on a `fileTypes` message
+  (`search/client.ts` sends it to a new shard first and on `settings:changed`); the format worker gets none
+  (`format/install.ts` names the language of a mapped file in the request). The backend needs no language: the app's
+  index options carry the patterns (`IndexOptions.textPatterns`, `appIndexOptions` in `service.ts`), so a mapped name
+  is **text for the indexer** (searched, symbol-indexed) like a built-in one. A change saves, then emits
+  `index:stale` (`app/file-types.ts`, the two `INDEX_KEYS` lists). **App-level only**: the value comes from the
+  app's settings.json, never from the open folder. The **MCP server installs nothing** and keeps the built-in text
+  names; it reads the key for one thing, refusing more writes (Security contracts). UI: `app/FileTypesSetting.tsx`
+  (control type `associations`, Settings chunk; what you type goes through `patternFromInput`: `ctp` = `.ctp` =
+  `*.ctp`) and the status bar's language picker ("Set language for all *.ctp files…", Popups → Settings' re-export
+  `setFileAssociation`). The tree icon is still by extension (`icons.tsx`, startup). Tests:
+  `tests/unit/format/associations.test.ts`, `editor/file-types.test.ts`, `app/file-types.test.tsx`,
+  `backend/file-types.test.ts`, `mcp/file-types.test.ts`, `tests/e2e/file-types.spec.ts`.
 - Link graph (knowledge): `KnowledgeIndex` keeps adjacency patched per edit — `linksFrom(path)` (unique resolved notes),
   `linksTo(path)` (live set), `tagsOf` / `notesTagged` (incremental tag index). Neighbourhood queries go through
   `src/knowledge/connections.ts` (`relatedNotes` = co-citation + coupling + shared tags with a work budget, `localGraph`
@@ -582,3 +610,13 @@ Also pass a private results dir, or parallel runs clobber `test-results/`:
 - Commits: short subject titles (e.g. "Add multi-core search indexing"), no long bodies, **no co-author / tool trailers or links**. Author = the repo-local identity.
 - Before each release: `npm run security` (npm audit, outdated packages, newest Electron patch + end of support, fuses of a built package; exit 1 = fix first). Electron patches carry Chromium security fixes: take them every release.
 - Each iteration ends with `npm run iteration -- "summary"` (bumps the minor version, commits `Release vX.Y.0`, adds an annotated tag).
+- **File type associations are not a grant** (`files.associations`, a page-writable setting: a page taken over can
+  add rows). For MCP writes they can therefore only refuse **more** (`writeTypeProblem(key, allowCode, mapped)`,
+  `Folder.mappedLanguage()`): the name's own rule (`NEVER_EXTS`, notes, the code grant, text names) is decided
+  first and stays; a name that passes is then held to the rule of the language the user opens it as — `notes.txt`
+  mapped to PHP needs `allowCode` like a `.php` file, anything mapped to a never-written language (JavaScript,
+  Python, PowerShell, Batch) is never written. A mapping makes **no** name writable (`*.ctp` → PHP stays "no text
+  file extension" even with the code grant), changes nothing the server lists, reads or indexes, and is not in
+  `VISIBILITY_KEYS`. `tests/unit/mcp/file-types.test.ts` holds the property (for every language, with and without
+  the grant: what the name alone refuses stays refused). Elsewhere a mapping only changes how a file inside the open
+  folder is highlighted, formatted and indexed as text; a settings file inside the opened folder is never read.

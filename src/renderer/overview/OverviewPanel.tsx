@@ -539,6 +539,7 @@ export function OverviewPanel() {
   const doc = path ? app.docs.get(path) : undefined;
   const md = ui.isMarkdownView(path);
   const binary = !!doc?.binary;
+  ui.languageVersion.value; // the file's language changed (language mode, file type associations): new outline
   const model = path && content != null && !binary ? docModel(path, content, md) : null;
 
   let body: ComponentChildren;

@@ -14,8 +14,11 @@ import './settings-ui.css';
 import { primeClassic } from './classic-loader';
 import { lazyComponent } from './lazy';
 import { SidebarMenuControl } from './SidebarMenuSetting';
+import { FileTypesControl } from './FileTypesSetting';
 // The sidebar pills' right-click "Hide …" (Popups) loads this chunk for the write.
 export { setPanelHidden } from './panel-menu';
+// So does the status bar's language picker ("Always open *.ctp files as…").
+export { setFileAssociation } from './file-types';
 
 // Settings → Browser mode: live server state + start / stop (the desktop-only web-server-ui chunk).
 const WebServerPanel = lazyComponent(() => import('../webserver/web-server-ui').then((m) => m.SettingsPanel));
@@ -54,7 +57,7 @@ function apply(def: SettingDef, value: unknown, debounceMs = 0) {
 }
 
 /** Settings that change what the indexers read: rebuild once the backend has them (debounced: typing a number). */
-const INDEX_KEYS = new Set(['search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'search.workers', 'excludeGlobs', 'showHiddenFiles']);
+const INDEX_KEYS = new Set(['search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'search.workers', 'excludeGlobs', 'showHiddenFiles', 'files.associations']);
 let staleTimer: ReturnType<typeof setTimeout> | null = null;
 function indexSettingChanged(key: string) {
   if (!INDEX_KEYS.has(key)) return;
@@ -75,6 +78,7 @@ function describeDefault(def: SettingDef): string {
   const d = def.default;
   if (def.control.type === 'toggle') return d ? 'on' : 'off';
   if (def.control.type === 'panels') return 'every panel, default order';
+  if (def.control.type === 'associations') return 'none';
   if (def.control.type === 'color') return def.control.swatches.find((o) => o.v === d)?.label ?? String(d);
   if (def.control.type === 'font') return def.control.presets.find((o) => o.v === d)?.label ?? String(d);
   if (def.control.type === 'select' || def.control.type === 'segmented') return choicesFor(def, d).find((o) => o.v === d)?.label ?? String(d);
@@ -193,6 +197,8 @@ function Control({ def, s, disabled }: { def: SettingDef; s: Values; disabled: b
       return <ListControl key={(value as string[]).join('\n')} def={def} value={Array.isArray(value) ? (value as string[]) : []} disabled={disabled} />;
     case 'panels':
       return <SidebarMenuControl id={def.id} />;
+    case 'associations':
+      return <FileTypesControl id={def.id} />;
   }
 }
 
@@ -327,7 +333,7 @@ function SettingRow({ def, s }: { def: SettingDef; s: Values }) {
   const desktopOff = !!def.desktopOnly && !app.backend.setZoom;
   const disabled = desktopOff || (def.enabledWhen ? !def.enabledWhen(s) : false);
   const changed = isChanged(def, s);
-  const wide = def.control.type === 'list' || def.control.type === 'panels';
+  const wide = def.control.type === 'list' || def.control.type === 'panels' || def.control.type === 'associations';
   // The window keeps the frame it was created with until a restart.
   const restart = def.key === 'windowFrame' && !!app.backend.frame && !!app.backend.relaunch && valueOf(def, s) !== app.backend.frame;
   return (

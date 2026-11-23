@@ -7,6 +7,7 @@ import type { SearchDoc } from './types';
 import { extractNote } from '../knowledge/extract';
 import { findMentions, linkSnippets, mentionMatcher, type Mention } from '../knowledge/index';
 import { isMarkdown } from '@shared/paths';
+import { setFileAssociations } from '@shared/languages';
 
 /** Metadata of the Markdown notes among `docs` (computed where the text already is). */
 export function notesOf(docs: readonly SearchDoc[]): NoteItem[] {
@@ -83,6 +84,10 @@ export class SearchHost {
           break;
         case 'cancel':
           this.cancelled.add(msg.id);
+          break;
+        case 'fileTypes':
+          // This thread's copy of the user's file type associations (documents indexed from now on use it).
+          setFileAssociations(msg.assoc);
           break;
         case 'headings':
           this.post({ type: 'headings', id: msg.id, hits: this.engine.headings(msg.q.query, msg.q) });

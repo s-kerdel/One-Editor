@@ -21,7 +21,7 @@ import { docPath } from './host';
 import { linkHandlers } from './links';
 import { pagePreview } from './hover';
 import { loadLanguage, loadedLanguage, languageDataFallback, indentGuides, detectIndent, autoLanguage } from './code';
-import { languageById } from '@shared/languages';
+import { languageById, setFileAssociations } from '@shared/languages';
 
 export { detectIndent };
 import { searchHighlighter, setHighlightQuery, toSearchQuery, highlightQueryField } from './search-highlight';
@@ -45,6 +45,8 @@ export { nextChange, previousChange, peekChangeAtCursor, revertChangeAtCursor } 
 interface DocRecord {
   state: EditorState;
   scroll: StateEffect<unknown> | null;
+  /** Language the file name resolved to when its extensions were last built (file type associations may change it). */
+  lang?: string;
 }
 
 type Mode = 'live' | 'source';
@@ -323,6 +325,24 @@ export function createEditor(parent: HTMLElement): EditorController {
     });
   };
 
+  /** A doc's language changed (override, file type associations): rebuild its extensions in place. */
+  const reconfigureLanguage = (path: string) => {
+    const rec = docs.get(path);
+    if (!rec) return;
+    if (pending?.path === path) flushChange();
+    // Swap the whole extension set in place: doc, selection and undo history (state fields) survive.
+    // Compartments keep their old content across a full reconfigure, so each is set explicitly too.
+    const state = path === current ? view.state : rec.state;
+    collected = new Map();
+    const exts = extensionsFor(path, state.doc.toString());
+    const fx: StateEffect<unknown>[] = [StateEffect.reconfigure.of(exts), ...[...collected].map(([c, e]) => c.reconfigure(e))];
+    collected = null;
+    if (path === current) fx.push(view.scrollSnapshot());
+    applyTo(path, { effects: fx });
+    ensureLanguage(path);
+    langCbs.forEach((cb) => cb(path));
+  };
+
   const stash = () => {
     if (!current) return;
     const rec = docs.get(current);
@@ -364,7 +384,7 @@ export function createEditor(parent: HTMLElement): EditorController {
       stash();
       let rec = docs.get(path);
       if (!rec) {
-        rec = { state: createState(path, content), scroll: null };
+        rec = { state: createState(path, content), scroll: null, lang: autoLanguage(path).id };
         docs.set(path, rec);
         ensureLanguage(path);
       }
@@ -438,6 +458,7 @@ export function createEditor(parent: HTMLElement): EditorController {
       const kindChanged = wasMd !== isMdView(to);
       if (kindChanged) rec.state = createState(to, state.doc.toString(), state.selection);
       else rec.state = state.update({ effects: pathComp.reconfigure(docPath.of(to)) }).state;
+      rec.lang = autoLanguage(to).id;
       docs.set(to, rec);
       if (current === from) {
         current = to;
@@ -475,6 +496,16 @@ export function createEditor(parent: HTMLElement): EditorController {
     },
     applySettings(s) {
       settings = s;
+      // File type associations: the renderer's table is installed here (before the first document opens, and on
+      // every later change of the setting); open code files whose language it changes are re-resolved in place.
+      if (setFileAssociations(s['files.associations'])) {
+        for (const [path, rec] of docs) {
+          const lang = autoLanguage(path).id;
+          if (rec.lang === lang) continue;
+          rec.lang = lang;
+          if (!isMdView(path) && !langOverride.has(path)) reconfigureLanguage(path);
+        }
+      }
       parent.style.setProperty('--editor-font-size', `${s.fontSize}px`);
       measureMono();
       ctrl.setViewMode(s.viewMode);
@@ -545,18 +576,7 @@ export function createEditor(parent: HTMLElement): EditorController {
       if ((langOverride.get(path) ?? null) === next) return;
       if (next) langOverride.set(path, next);
       else langOverride.delete(path);
-      if (pending?.path === path) flushChange();
-      // Swap the whole extension set in place: doc, selection and undo history (state fields) survive.
-      // Compartments keep their old content across a full reconfigure, so each is set explicitly too.
-      const state = path === current ? view.state : rec.state;
-      collected = new Map();
-      const exts = extensionsFor(path, state.doc.toString());
-      const fx: StateEffect<unknown>[] = [StateEffect.reconfigure.of(exts), ...[...collected].map(([c, e]) => c.reconfigure(e))];
-      collected = null;
-      if (path === current) fx.push(view.scrollSnapshot());
-      applyTo(path, { effects: fx });
-      ensureLanguage(path);
-      langCbs.forEach((cb) => cb(path));
+      reconfigureLanguage(path);
     },
     getLanguage(path) {
       const p = path ?? current;

@@ -36,6 +36,7 @@ import type { ProcRequest, ProcSnapshot } from '../shared/processes';
 import { winSystemExe } from './winsys';
 import { isMainOwnedKey } from '../shared/mcp';
 import { applyOp, cleanList, cleanOp, type Bookmark } from '../shared/bookmarks';
+import { cleanAssociations } from '../shared/languages';
 
 // Moved to ./appdata (dependency-light, shared with the MCP server); re-exported for existing callers.
 export { defaultConfigDir, defaultCacheDir, indexOptionsFrom } from './appdata';
@@ -78,7 +79,10 @@ const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 /** Stable per-folder id for config files (sessions, export folders). */
 export const rootId = (root: string) => crypto.createHash('sha1').update(root.toLowerCase()).digest('hex').slice(0, 16);
 
-const INDEX_KEYS = ['search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB'];
+const INDEX_KEYS = ['search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'files.associations'];
+/** The app's index options: a name the user's file type associations cover is text too (search, symbols).
+ *  The MCP server keeps the built-in names (it calls indexOptionsFrom itself). */
+const appIndexOptions = (s: Settings): IndexOptions => ({ ...indexOptionsFrom(s), textPatterns: cleanAssociations(s['files.associations']).map((r) => r.pattern) });
 
 const samePath = (a: string, b: string) => (process.platform === 'linux' ? a === b : a.toLowerCase() === b.toLowerCase());
 
@@ -238,7 +242,7 @@ export class BackendService {
     // One's own data (settings, mcp.json, the vault, git trust, the text cache) is never served, even
     // when the open folder contains it (the home folder on Windows: AppData is no dot name).
     const deny = [this.configDir, ...(cacheDir ? [cacheDir] : [])];
-    this.workspace = new Workspace(resolved, { exclude: s.excludeGlobs, showHidden: s.showHiddenFiles, index: indexOptionsFrom(s), warmIndexer, ...this.workspaceOptions, cacheDir, deny });
+    this.workspace = new Workspace(resolved, { exclude: s.excludeGlobs, showHidden: s.showHiddenFiles, index: appIndexOptions(s), warmIndexer, ...this.workspaceOptions, cacheDir, deny });
     this.unwatch = this.workspace.onEvents((e) => {
       this.fsListeners.forEach((l) => l(e));
       this.monitor?.trigger('fs', e.map((x) => x.path));
@@ -464,7 +468,7 @@ export class BackendService {
     if (this.workspace && ('excludeGlobs' in patch || 'showHiddenFiles' in patch)) {
       this.workspace.setOptions({ exclude: next.excludeGlobs, showHidden: next.showHiddenFiles });
     }
-    if (this.workspace && INDEX_KEYS.some((k) => k in patch)) this.workspace.setIndexOptions(indexOptionsFrom(next));
+    if (this.workspace && INDEX_KEYS.some((k) => k in patch)) this.workspace.setIndexOptions(appIndexOptions(next));
     if ('git.wslRouting' in patch) this.disposeGit(); // the next git call rebuilds the monitor with the new routing
     if ('git.refreshIndex' in patch) this.monitor?.setRefreshIndex(next['git.refreshIndex'] !== false);
   }

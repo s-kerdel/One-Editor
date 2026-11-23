@@ -5,7 +5,7 @@ import { registerCommands } from '../renderer/app/commands';
 import { setBeforeSave } from '../renderer/app/documents';
 import { trimForSave } from '../renderer/whitespace/save';
 import { updateSettings } from '../renderer/app/settings';
-import { formatterForPath, languageForPath } from '../shared/languages';
+import { associatedLanguage, formatterForPath, languageForPath } from '../shared/languages';
 import { formatInWorker } from './client';
 import { ConfigResolver, isConfigFile } from './config';
 import { mapCursor, minimalChanges } from './diff';
@@ -91,7 +91,9 @@ function unsupported(path: string) {
 }
 
 async function run(path: string, text: string, req: FormatRequest, timeoutMs?: number): Promise<FormatResult> {
-  return formatInWorker(text, { path, options: await optionsFor(path), ...req }, { timeoutMs });
+  // The worker has no copy of the user's file type associations: a mapped file (*.ctp → PHP) names its language.
+  const lang = associatedLanguage(path)?.id;
+  return formatInWorker(text, { path, ...(lang ? { lang } : {}), options: await optionsFor(path), ...req }, { timeoutMs });
 }
 
 /** "Format document". Returns true when the document is now formatted. */

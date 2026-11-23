@@ -1,0 +1,21 @@
+/* Settings → Files → File type associations (FileTypesSetting.tsx, lazy Settings chunk).
+   Like the Sidebar menu list: full width, flat rows with hairline dividers, no boxed panel. */
+
+/* A wide row's control column is capped (300 px, right-aligned) for small controls: this list takes the width. */
+.se-prefs .se-set-row.wide .se-set-control:has(> .se-assoc) { max-width: none; width: 100%; align-items: stretch; }
+
+.se-assoc { display: flex; flex-direction: column; gap: 8px; width: 100%; align-items: stretch; }
+.se-assoc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.se-assoc-item, .se-assoc-add { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 180px) 52px; align-items: center; gap: 8px; }
+.se-assoc-item { min-height: 38px; }
+.se-assoc-item + .se-assoc-item { border-top: 1px solid var(--border); }
+.se-assoc-item > .se-icon-btn { justify-self: end; }
+.se-assoc-pattern { min-width: 0; padding-left: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; color: var(--text); }
+.se-assoc-arrow { color: var(--text-faint); text-align: center; }
+.se-assoc .se-select { width: 100%; min-width: 0; }
+.se-assoc-add > .se-btn { justify-content: center; padding: 0; height: 30px; }
+/* Nothing valid to add yet (app.css has no disabled look for .se-btn). */
+.se-assoc-add > .se-btn:disabled { opacity: 0.5; }
+.se-assoc-add > .se-btn:disabled:hover { background: var(--bg-elev); }
+.se-assoc-note { min-height: 17px; font-size: 12px; line-height: 1.4; color: var(--text-faint); }
+.se-assoc-note.err { color: var(--danger); }

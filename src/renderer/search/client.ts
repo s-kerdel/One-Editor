@@ -95,6 +95,8 @@ class SearchClient {
   /** Shard 0 pulls the text itself (index channel) for the current build. */
   private feeding = false;
   private buildTrigger = 'workspace-open';
+  /** The `files.associations` value the shards hold (JSON), so only a real change is sent again. */
+  private fileTypes = 'null';
   private notesCbs = new Set<(e: NotesEvent) => void>();
   private refreshPending = new Set<string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -185,6 +187,8 @@ class SearchClient {
     });
     // Files changed on disk that are not open: re-read just those, coalesced (never a full pass).
     app.events.on('files:changed', (paths) => this.refreshPaths(paths, 'fs-events'));
+    // File type associations changed: the shards get them now; the rebuild follows as 'index:stale'.
+    app.events.on('settings:changed', (s) => this.sendFileTypes(s['files.associations']));
     // What gets indexed changed (ignore rules, size cap, excluded folders): rebuild.
     app.events.on('index:stale', () => {
       this.buildTrigger = 'settings';
@@ -236,9 +240,19 @@ class SearchClient {
         ports[i].postPorts!({ type: 'feedPort' }, [ch.port2]);
       }
     }
+    // Each shard decides a file's language itself (lang: filter, symbol index): the user's associations go first.
+    this.fileTypes = '';
+    this.sendFileTypes(app.settings.value['files.associations']);
     this.shards = new ShardedSearch(ports);
     this.shardCount.value = n;
     this.shardWaiters.splice(0).forEach((f) => f());
+  }
+
+  private sendFileTypes(assoc: unknown) {
+    const key = JSON.stringify(assoc ?? null);
+    if (key === this.fileTypes) return;
+    this.fileTypes = key;
+    for (const p of this.ports) p.post({ type: 'fileTypes', assoc: assoc ?? null });
   }
 
   private createPort(i: number): Port {
