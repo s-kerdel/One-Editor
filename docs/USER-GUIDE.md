@@ -1548,7 +1548,7 @@ vars:
 
 **Off by default.** Turn on: Settings → Editor → **Smart paste**.
 
-After a paste a small **"Paste as…"** chip appears for a few seconds. Ignore it and **your paste stays as it is**. `Esc` or typing hides it. One `Ctrl+Z` undoes either way.
+After a paste of **recognized** content (the table below) a small **"Paste as…"** chip appears for a few seconds. Ordinary prose, a paste in a code file, or a paste inside a code block get **no chip** — there is nothing to offer. Ignore it and **your paste stays as it is**. `Esc` or typing hides it. One `Ctrl+Z` undoes either way.
 
 | You paste | Offered |
 |---|---|

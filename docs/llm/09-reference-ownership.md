@@ -75,7 +75,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 ### variables: `src/renderer/whitespace/`
 
-- trailing whitespace: paste trim via CodeMirror's `clipboardInputFilter`, trim on save through format's `beforeSave` hook in `src/format/install.ts`, the `editor.trimWhitespace` command; editor chunk only
+- trailing whitespace: paste trim via CodeMirror's `clipboardInputFilter` (a paste CodeMirror does not insert itself — `src/renderer/editor/paste.ts`'s rich HTML → Markdown — asks `pastedText()` with the same gates), trim on save through format's `beforeSave` hook in `src/format/install.ts`, the `editor.trimWhitespace` command; editor chunk only
 
 ### pdf: `src/renderer/pdf/`
 

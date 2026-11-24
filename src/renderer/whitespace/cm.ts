@@ -2,7 +2,8 @@
 // every line with spaces), Ctrl+Shift+V pastes exactly as copied, the caret line an autosave skipped
 // is cleaned once the caret leaves it, and the "Trim trailing whitespace" command.
 // Pastes go through CodeMirror's own clipboardInputFilter: multi-cursor and line-wise pasting keep
-// working and the result is a single `input.paste` transaction (smart paste composes with it).
+// working and the result is a single `input.paste` transaction (smart paste composes with it). A paste
+// CodeMirror does not insert itself (paste.ts's rich HTML → Markdown) asks pastedText() instead.
 import { Prec, Transaction, type Extension } from '@codemirror/state';
 import { EditorView, ViewPlugin, keymap, type ViewUpdate } from '@codemirror/view';
 import { app } from '../app/app';

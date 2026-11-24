@@ -10,6 +10,7 @@ import { basename, normalize } from '@shared/paths';
 import { app } from '../app/app';
 import { findPathCandidates } from '../terminal/links';
 import { pastedText, pasteIsRaw } from '../whitespace/cm';
+import { richPasteText } from '../editor/paste';
 import { afterBootIdle, lazy } from '../app/lazy';
 import { docPath } from '../editor/host';
 import type { CodeHeaderVars, VariablesApi, VarsProvider } from './api';
@@ -280,8 +281,11 @@ const smartPaste = [
       // Ctrl+Shift+V pastes exactly as copied: no chip either.
       if (!smartPasteOn() || pasteIsRaw()) return void (lastPaste = null), false;
       const dt = e.clipboardData;
-      // What CodeMirror will insert: the text after the trailing-whitespace trim (../whitespace).
-      lastPaste = dt ? { text: pastedText(dt.getData('text/plain'), view.state.facet(docPath)), vscode: dt.getData('vscode-editor-data') || null, at: Date.now() } : null;
+      // What will really be inserted: paste.ts's Markdown for a rich clipboard, else the plain text
+      // after the trailing-whitespace trim (../whitespace). This handler is registered before
+      // pasteAndDrop() so it still runs when paste.ts takes the event over.
+      const md = richPasteText(view, e);
+      lastPaste = dt ? { text: pastedText(md ?? dt.getData('text/plain'), view.state.facet(docPath)), vscode: dt.getData('vscode-editor-data') || null, at: Date.now() } : null;
       if (lastPaste?.text) void pasteUi.load().catch(() => {}); // warm while CodeMirror inserts
       return false; // the normal paste (paste.ts / CodeMirror) always happens first
     },
@@ -300,7 +304,8 @@ const smartPaste = [
       range = { from: fromB, to: toB, text: ins.toString() };
     });
     const r = range as { from: number; to: number; text: string } | null;
-    // Only what was really pasted as plain text (paste.ts converted HTML / images → not ours).
+    // Only the paste that was just recorded: image embeds and line-wise multi-cursor pastes insert
+    // something else than `lp.text`.
     if (n !== 1 || !r || r.text !== lp.text) return;
     const view = u.view;
     const inCode = codeContext(u.state, r.from) !== null;

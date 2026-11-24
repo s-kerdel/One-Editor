@@ -234,8 +234,10 @@ export function createEditor(parent: HTMLElement): EditorController {
       frontmatterStyling,
       linkHandlers,
       pagePreview,
-      pasteAndDrop(),
+      // variablesEditor first: its paste handler must run before pasteAndDrop()'s rich-HTML branch takes
+      // the paste event over (CodeMirror stops handing a prevented event to the later handlers).
       variablesEditor(),
+      pasteAndDrop(),
       placeholder('Start writing…'),
       EditorView.editorAttributes.of({ class: 'se-md' }),
     ];

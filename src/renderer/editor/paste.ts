@@ -11,6 +11,7 @@ import { insertNode } from '../app/tree-model';
 import { docPath } from './host';
 import { inCodeContext } from './mdkeys';
 import { htmlLooksRich, htmlToMarkdown } from './html-md';
+import { pastedText } from '../whitespace/cm';
 import { IMAGE_EXT_RE, attachmentDir, bytesToBase64, extForMime, linkMarkdown, pastedImageName, sanitizeFileName, uniquePath } from './attachments';
 
 const TREE_MIME = 'application/x-sec-edit-paths';
@@ -164,6 +165,33 @@ const plainKey = Prec.high(
   ]),
 );
 
+/**
+ * The Markdown a rich clipboard becomes here, or null when the plain text is what should land
+ * (no / flat HTML, inside a code block, or nothing gained over text/plain).
+ * Cached per paste event: the smart-paste handler (../variables) asks first and this file's paste
+ * handler reuses the answer, so htmlToMarkdown runs once per paste.
+ */
+let richFor: { e: ClipboardEvent; md: string | null } | null = null;
+
+export function richPasteText(view: EditorView, e: ClipboardEvent): string | null {
+  if (richFor && richFor.e === e) return richFor.md;
+  const dt = e.clipboardData;
+  const html = dt?.getData('text/html');
+  let md: string | null = null;
+  if (dt && html && isMarkdown(view.state.facet(docPath)) && !inCodeContext(view.state, view.state.selection.main.head) && htmlLooksRich(html)) {
+    try {
+      const conv = htmlToMarkdown(html);
+      const squash = (s: string) => s.replace(/\s+/g, ' ').trim();
+      // Nothing gained over the exact plain text: keep that (CodeMirror's own paste).
+      md = !conv || squash(conv) === squash(dt.getData('text/plain')) ? null : conv;
+    } catch (err) {
+      console.warn('[editor] html paste conversion failed', err);
+    }
+  }
+  richFor = { e, md };
+  return md;
+}
+
 const handlers = EditorView.domEventHandlers({
   paste(e, view) {
     const dt = e.clipboardData;
@@ -180,20 +208,13 @@ const handlers = EditorView.domEventHandlers({
       void insertFiles(view, images, null, 'paste');
       return true;
     }
-    const html = dt.getData('text/html');
-    if (!html || inCodeContext(view.state, view.state.selection.main.head) || !htmlLooksRich(html)) return false;
-    const text = dt.getData('text/plain');
-    let md: string;
-    try {
-      md = htmlToMarkdown(html);
-    } catch (err) {
-      console.warn('[editor] html paste conversion failed', err);
-      return false;
-    }
-    const squash = (s: string) => s.replace(/\s+/g, ' ').trim();
-    if (!md || squash(md) === squash(text)) return false; // nothing gained: keep the exact plain text
+    const md = richPasteText(view, e);
+    richFor = null; // last consumer: don't keep the clipboard payload alive
+    if (!md) return false;
     e.preventDefault();
-    view.dispatch(view.state.replaceSelection(md), { userEvent: 'input.paste', scrollIntoView: true });
+    // The same trailing-whitespace trim (and the Ctrl+Shift+V exemption) CodeMirror's own paste applies:
+    // this dispatch goes past clipboardInputFilter, so it has to ask ../whitespace itself.
+    view.dispatch(view.state.replaceSelection(pastedText(md, view.state.facet(docPath))), { userEvent: 'input.paste', scrollIntoView: true });
     return true;
   },
   dragover(e) {

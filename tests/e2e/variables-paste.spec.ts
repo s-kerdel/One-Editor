@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Page } from '@playwright/test';
 import { test, expect } from './harness';
-import { openNote } from './editor-helpers';
+import { cursorTo, openNote } from './editor-helpers';
 
 const SHOTS = path.resolve('.tmp/vars/shots');
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -110,6 +110,34 @@ test.describe('smart paste', () => {
     await link.click({ modifiers: ['Control'] });
     await expect.poll(() => page.evaluate(() => (window as any).__secEdit.activePath.value)).toBe('code/app.ts');
     await expect.poll(() => page.evaluate(() => (window as any).__secEdit.editor.getCursor().line)).toBe(2);
+  });
+
+  test('recognized content only: prose gets no chip, and code files get none at all', async ({ page, ws }) => {
+    await setup(page, ws);
+    await paste(page, 'the migration runs after the deploy, then we check the dashboards\n');
+    await expect.poll(() => content(page)).toContain('the migration runs after the deploy');
+    await page.waitForTimeout(400); // the chip would have appeared by now (the other tests show it in ms)
+    await expect(chip(page)).toHaveCount(0);
+    // The same JSON does get a chip in a note. In a code file smart paste is not offered at all:
+    // its extension (../variables/cm.ts) is part of the Markdown note extensions only.
+    await ws.write('ops/data.json', '{\n  "name": "web01"\n}\n');
+    await openNote(page, 'ops/data.json', 'web01');
+    await page.locator('.cm-content').click();
+    await page.keyboard.press('Control+End');
+    await paste(page, '{"name":"web01","ports":[80,443]}');
+    await expect.poll(() => content(page)).toContain('"ports":[80,443]');
+    await page.waitForTimeout(400);
+    await expect(chip(page)).toHaveCount(0);
+    // And inside a code block of a note: only a secret is offered there, re-fencing JSON makes no sense.
+    await openNote(page, 'ops/paste.md', 'Intro');
+    await page.locator('.cm-content').click();
+    await page.keyboard.press('Control+End');
+    await paste(page, '```json\n\n```');
+    await cursorTo(page, { after: '```json\n' });
+    await paste(page, '{"name":"web01"}');
+    await expect.poll(() => content(page)).toContain('"name":"web01"');
+    await page.waitForTimeout(400);
+    await expect(chip(page)).toHaveCount(0);
   });
 
   test('VS Code clipboard → fenced with its language; secret → replaced by {{variable}}', async ({ page, ws }) => {
