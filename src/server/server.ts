@@ -146,6 +146,10 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     async processes() {
       throw new BackendFailure('ENOTSUP', 'Not available from a shared web server');
     },
+    // The OS build number / distro says more about this machine than the platform name the page already has.
+    async osVersion() {
+      throw new BackendFailure('ENOTSUP', 'Not available from a shared web server');
+    },
     async saveSettings([patch]) {
       const clean = Object.fromEntries(Object.entries(patch && typeof patch === 'object' ? patch : {}).filter(([k]) => !DESKTOP_SETTING.test(k)));
       return service.saveSettings(clean);

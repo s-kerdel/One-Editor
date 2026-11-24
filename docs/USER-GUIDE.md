@@ -993,6 +993,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | See what you changed | A **blue dot** marks it. The count is bottom left |
 | Undo a change | Click the **↺ button** next to the control |
 | Look up a shortcut | Section **Keyboard shortcuts**. The search box filters it too |
+| Say which build you have | The bottom of the left list: version, commit, build date, Electron and the **OS version** (Windows build number, macOS version, Linux distro) of the computer running One — in browser mode that is the computer serving the folder. **Copy** puts it all on the clipboard |
 
 ### All settings
 

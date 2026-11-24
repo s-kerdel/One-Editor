@@ -197,4 +197,6 @@ test('the Settings nav shows the version and build details; Copy puts them on th
   expect(text).toContain(`One ${version} (browser)`);
   expect(text).toMatch(/commit \S+/);
   expect(text).toMatch(/Chromium \d+/);
+  // Browser mode adds no CPU arch, so the second part of the platform line is the server's OS version.
+  expect(text).toMatch(/platform \S+ · \S+/);
 });

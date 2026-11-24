@@ -37,6 +37,7 @@ import { winSystemExe } from './winsys';
 import { isMainOwnedKey } from '../shared/mcp';
 import { applyOp, cleanList, cleanOp, type Bookmark } from '../shared/bookmarks';
 import { cleanAssociations } from '../shared/languages';
+import { linuxDistro, macSystemVersion, type OsVersionInfo } from '../shared/os-version';
 
 // Moved to ./appdata (dependency-light, shared with the MCP server); re-exported for existing callers.
 export { defaultConfigDir, defaultCacheDir, indexOptionsFrom } from './appdata';
@@ -704,6 +705,21 @@ export class BackendService {
     if (op === 'kill') return this.explorer?.kill(Number((req as { pid: unknown }).pid), !!(req as { group?: unknown }).group) ?? false;
     if (op === 'restartIndexer') return void this.workspace?.restartIndexer(), true;
     throw new BackendFailure('EINVAL', `Unknown process explorer request: ${String(op)}`);
+  }
+
+  /**
+   * OS version of the machine running One, for the Settings build footer. No arguments, so nothing to validate;
+   * the two system files are fixed paths, never a path from the page. Any read failure leaves os.release() alone.
+   */
+  async osVersion(): Promise<OsVersionInfo> {
+    const info: OsVersionInfo = { platform: process.platform, release: os.release() };
+    try {
+      if (process.platform === 'darwin') Object.assign(info, macSystemVersion(await fsp.readFile('/System/Library/CoreServices/SystemVersion.plist', 'utf8')));
+      else if (process.platform === 'linux') info.distro = linuxDistro(await fsp.readFile('/etc/os-release', 'utf8'));
+    } catch {
+      /* no SystemVersion.plist / no /etc/os-release (a minimal container): the release string still says enough */
+    }
+    return info;
   }
 
   /** Every git operation (see GitOps in shared/git.ts); arguments are validated by GitService. */

@@ -257,6 +257,9 @@ export interface BackendApi {
   openExternal(url: string): Promise<void>;
   /** "Developer: Process explorer" (shared/processes.ts): a snapshot while open, 'close' when closed. */
   processes?(req: import('./processes').ProcRequest): Promise<import('./processes').ProcSnapshot | boolean>;
+  /** OS version of the machine running One (shared/os-version.ts), for the Settings footer: the backend reads it,
+   *  never navigator. Refused by a web server that serves one folder only (server.ts PINNED) → the footer shows the OS name only. */
+  osVersion(): Promise<import('./os-version').OsVersionInfo | null>;
   /** Electron: mouse side buttons / keyboard browser keys that arrive as a window `app-command` (Windows). */
   onNavCommand?(cb: (dir: import('./nav').NavDir) => void): () => void;
   /** Paths the app was asked to open by a second instance (Electron). Launch-time paths come via bootstrap(). */
@@ -339,5 +342,6 @@ export const RPC_METHODS = [
   'showExportedFile',
   'git',
   'processes',
+  'osVersion',
 ] as const;
 export type RpcMethod = (typeof RPC_METHODS)[number];

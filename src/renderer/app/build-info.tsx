@@ -3,6 +3,7 @@
 // a local `npm run build` shows "dev".
 import { useEffect, useState } from 'preact/hooks';
 import { BRAND } from '@shared/brand';
+import { osVersionText, type OsVersionInfo } from '@shared/os-version';
 import { version } from '../../../package.json';
 import { app } from './app';
 import { Icon } from './icons';
@@ -59,11 +60,17 @@ export function buildInfoText(b: BuildInfo = buildInfo()): string {
 
 export function BuildFooter() {
   const [arch, setArch] = useState<string | undefined>();
+  const [osv, setOsv] = useState<OsVersionInfo | null>(null);
   const base = buildInfo();
-  const b = arch ? { ...base, platform: `${base.platform} · ${arch}` } : base;
-  useEffect(() => void (b.mode === 'desktop' && cpuArch().then(setArch)), []);
+  const osLine = (full: boolean) => [base.platform, osVersionText(osv, full), arch].filter(Boolean).join(' · ');
+  const b = { ...base, platform: osLine(false) };
+  useEffect(() => {
+    if (b.mode === 'desktop') void cpuArch().then(setArch);
+    // Always the backend's answer: navigator would describe the viewing browser, not the machine running One.
+    void app.backend?.osVersion?.().then(setOsv, () => undefined);
+  }, []);
   const [copied, setCopied] = useState(false);
-  const text = buildInfoText(b);
+  const text = buildInfoText({ ...b, platform: osLine(true) });
   return (
     <div class="se-prefs-build" data-testid="settings-build" title={text}>
       <div class="se-prefs-build-row">

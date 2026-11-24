@@ -116,3 +116,4 @@ grep -n "keyword" docs/llm/09-reference*.md
 - **The number is a patch bump:** `v0.5.4` -> `v0.5.5` -> `v0.5.6`. A minor bump (`v0.4.9` -> `v0.5.0`) is rare and the lead decides it. Current version: `v0.5.5`.
 - **`scripts/iteration.mjs` (`npm run iteration -- "summary"`) differs:** it bumps the **minor** version (`v0.5.5` -> `v0.6.0`). **Ask the lead before running it.**
 - The script needs a clean tree. It sets `version` in `package.json`, commits and tags.
+- **The commit shown in Settings gets `-dirty`** (`scripts/stage.mjs`): when `git status --porcelain --untracked-files=no` prints anything at stage time — tracked edits, staged or not. Untracked files (a new test file) never make it dirty. The string is baked into the build, so that build keeps saying `-dirty` after the tree is clean again.

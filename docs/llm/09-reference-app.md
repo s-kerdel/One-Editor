@@ -50,6 +50,11 @@ grep -n "keyword" docs/llm/09-reference*.md
 - Rows (`ProcRow`) are read only while the explorer is open (every 2 s): keep `rows()` cheap, never spawn or wake a stopped thread for it.
 - Child processes (git, terminals, watchers) are found automatically from the OS process tree.
 
+## Build info (Settings footer)
+
+- Build info (`src/renderer/app/build-info.tsx`, in the lazy Settings chunk): version from `package.json`, commit + build date from `scripts/stage.mjs` (`VITE_SEC_EDIT_COMMIT` / `VITE_SEC_EDIT_BUILD_DATE`, `dev` for a plain `npm run build`), Electron/Chromium from the UA, CPU arch from Chromium client hints (**desktop only** — in browser mode they describe the viewing machine).
+- The OS version comes from the backend (`osVersion` in `RPC_METHODS` → `BackendService.osVersion()` reads `os.release()` + `SystemVersion.plist` / `/etc/os-release`; parsing and the one-line format are pure in `src/shared/os-version.ts`). A web server that serves one folder only refuses it (`PINNED` in `src/server/server.ts`) → the footer shows the OS name only.
+
 ## Viewer docs (PDF)
 
 - Viewer docs (PDF, pdf area): a `.pdf` is never read as text — `loadDoc` makes a `binary` doc without a read, the shell's lazy `Viewer` mounts `pdf/PdfView` per path, unmount = `task.destroy()` (document + worker).
