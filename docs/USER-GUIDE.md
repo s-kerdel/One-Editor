@@ -257,6 +257,20 @@ Hover an icon for details (MCP: which app, last call). Desktop app only.
 - **Not searched:** PDF text is not in **Find in files** (no OCR). `Ctrl+F` inside the open PDF works.
 - **Safe by design:** no PDF JavaScript, no forms, nothing sent anywhere.
 
+### Other binary files
+
+A binary file (`.zip`, a compiled file, a font) opens as a **card**, not as text.
+
+- **Open as text anyway** — the button on that card. The card says what you get: the **first 2 MB** as
+  best-effort text; bytes that are not text show as `�`.
+- **Load all (12.3 MB)** — a second step in the toast after opening, when the file is bigger. It asks first
+  ("One may become slow while a file this large is open"). Files over **16 MB** are never offered: too big
+  for the editor.
+- It is **never saved back**: saving stays blocked while the tab is open, so looking cannot corrupt the file.
+- Once it is open as text, the **language button** in the status bar works as usual, so you can highlight it
+  (also palette → "Change language mode…").
+- Closing the tab forgets it: opening the file again shows the card again.
+
 ---
 
 ## 2. Writing notes

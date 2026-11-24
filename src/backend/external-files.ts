@@ -7,11 +7,11 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { FileData, FsEvent, WriteOptions } from '../shared/api';
+import { MAX_AS_TEXT_BYTES, MAX_AS_TEXT_FULL_BYTES, type FileData, type FsEvent, type WriteOptions } from '../shared/api';
 import { EXT_PREFIX, extAbsOf, extIdOf, isExtPath } from '../shared/external';
 import { BackendFailure } from './errors';
-import { decode, detectEol, encode, toLf, withEol } from './textcodec';
-import { atomicWrite } from './workspace';
+import { decode, decodeBestEffort, detectEol, encode, toLf, withEol } from './textcodec';
+import { atomicWrite, readHead } from './workspace';
 
 const MAX_ALLOWED = 200;
 const MAX_OPEN_BYTES = 64 * 1024 * 1024;
@@ -88,13 +88,18 @@ export class ExternalFiles {
     return e;
   }
 
-  async read(id: string, opts: { maxBytes?: number } = {}): Promise<FileData> {
+  async read(id: string, opts: { maxBytes?: number; asText?: true | 'full' } = {}): Promise<FileData> {
     const e = await this.target(id);
     const st = await fsp.stat(e.real);
     if (!st.isFile()) throw new BackendFailure('EINVAL', `Not a regular file: ${e.real}`);
     if (st.size > MAX_OPEN_BYTES) throw new BackendFailure('ETOOBIG', `File is too large to open (${Math.round(st.size / 1048576)} MB)`);
     if (opts.maxBytes !== undefined && st.size > opts.maxBytes) throw new BackendFailure('ETOOBIG', `File is larger than ${opts.maxBytes} bytes`);
-    const d = decode(await fsp.readFile(e.real));
+    // asText: a window / the whole file of a file decode() refuses; it stays flagged binary (see Workspace.readFile).
+    if (opts.asText === 'full' && st.size > MAX_AS_TEXT_FULL_BYTES)
+      throw new BackendFailure('ETOOBIG', `File is too large to open as text (${Math.round(st.size / 1048576)} MB; the limit is ${MAX_AS_TEXT_FULL_BYTES / 1048576} MB)`);
+    const window = opts.asText === 'full' ? st.size : MAX_AS_TEXT_BYTES;
+    const buf = opts.asText ? await readHead(e.real, Math.min(st.size, window)) : await fsp.readFile(e.real);
+    const d = opts.asText ? decodeBestEffort(buf) : decode(buf);
     this.note(e, st.mtimeMs, st.size);
     const data: FileData = { path: id, content: toLf(d.text), mtime: st.mtimeMs, eol: detectEol(d.text), size: st.size };
     if (d.bom) data.bom = true;

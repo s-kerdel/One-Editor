@@ -99,6 +99,8 @@ export const recentFolders = signal<string[]>([]);
 export const cursorInfo = signal<{ line: number; col: number; selectionLength: number } | null>(null);
 /** Bumped whenever a doc's metadata (eol, encoding) changes. */
 export const docMetaVersion = signal(0);
+/** Bumped when a binary doc is force-opened as text: the editor replaces the viewer screen. */
+export const docAsTextVersion = signal(0);
 /** Per-file language overrides picked in the status bar (path → languages.ts id); saved with the session. */
 export const languageOverrides = signal<Record<string, string>>({});
 /** Bumped when a doc's language changes (status bar label). */

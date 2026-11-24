@@ -678,7 +678,7 @@ export const pickableLanguages = () => LANGUAGES.filter((l) => l.cm).sort((a, b)
 export function openLanguagePicker(anchor?: Element | null) {
   const path = app.activePath.value;
   const doc = path ? app.docs.get(path) : undefined;
-  if (!path || !doc || doc.binary) return;
+  if (!path || !doc || (doc.binary && !doc.asText)) return;
   const override = ui.languageOverrides.value[path] ?? null;
   const current = app.editor?.getLanguage?.(path);
   // Without editor support for getLanguage, the override (if any) is what we know.

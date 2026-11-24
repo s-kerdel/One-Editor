@@ -81,7 +81,8 @@ export function EditorArea() {
   const doc = active ? app.docs.get(active) : undefined;
   const md = ui.isMarkdownView(active);
   const effective = md ? mode : 'source';
-  const viewer = !!doc?.binary;
+  ui.docAsTextVersion.value; // a binary doc force-opened as text: the editor takes over from the viewer
+  const viewer = !!doc?.binary && !doc.asText;
 
   useEffect(() => {
     if (md && (mode === 'split' || mode === 'preview')) void ensurePreview();

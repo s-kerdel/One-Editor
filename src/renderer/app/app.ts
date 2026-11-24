@@ -90,6 +90,8 @@ export interface DocState {
   encoding?: TextEncoding;
   /** Binary/image file: shown in a viewer, never written back. */
   binary?: boolean;
+  /** A binary file the user chose to read as text: shown in the editor, still never written back. */
+  asText?: boolean;
   /** Viewer docs (PDF): where to go once the viewer is ready (openFile's reveal), consumed by the viewer. */
   reveal?: RevealTarget;
 }

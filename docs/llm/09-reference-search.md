@@ -27,6 +27,11 @@ grep -n "keyword" docs/llm/09-reference*.md
   - `filePaths()` / `readable()` filter them.
 - An open excluded file is still searchable while open (open documents' live text always is) and leaves the index when it closes.
 - `readFile(path, { maxBytes })` refuses (`ETOOBIG`) before reading a bigger file: use it as a cheap probe.
+- `readFile(path, { asText: true })` = "Open as text anyway": the first `MAX_AS_TEXT_BYTES` (2 MB) of a file
+  `decode()` refuses, decoded best-effort; `{ asText: 'full' }` reads the whole file but refuses (`ETOOBIG`)
+  above `MAX_AS_TEXT_FULL_BYTES` (16 MB). Either way the result **keeps `binary: true`**, so it never reaches
+  the index and never becomes savable (the renderer's `doc.binary` guards all still apply; `doc.asText` only
+  switches the viewer screen for the editor).
 - The index may be built **on demand** (`search.indexing`).
   - A feature that reads it must ask for it: `searchClient.start()` / `(app as any).knowledge.ensure()` (search, mentions, headings already do).
   - It must show "Indexing… x / y" (`searchClient.progress`) instead of an empty state.

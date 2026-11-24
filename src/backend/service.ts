@@ -293,11 +293,14 @@ export class BackendService {
   listTree(p?: string) {
     return this.ws().listTree(p ?? '');
   }
-  /** `opts` comes from the page: only a finite, non-negative `maxBytes` is passed on. */
+  /** `opts` comes from the page: only a finite, non-negative `maxBytes` and `asText: true | 'full'` are passed on. */
   readFile(p: string, opts?: unknown) {
-    const max = opts && typeof opts === 'object' ? (opts as { maxBytes?: unknown }).maxBytes : undefined;
-    if (isExtPath(p)) return this.ext.read(p, typeof max === 'number' && Number.isFinite(max) && max >= 0 ? { maxBytes: Math.floor(max) } : {});
-    return this.ws().readFile(p, typeof max === 'number' && Number.isFinite(max) && max >= 0 ? { maxBytes: Math.floor(max) } : {});
+    const o = opts && typeof opts === 'object' ? (opts as { maxBytes?: unknown; asText?: unknown }) : {};
+    const max = typeof o.maxBytes === 'number' && Number.isFinite(o.maxBytes) && o.maxBytes >= 0 ? { maxBytes: Math.floor(o.maxBytes) } : {};
+    // Anything but the two known modes (a made-up string, a truthy number) is the normal refusal.
+    const asText = o.asText === 'full' ? { asText: 'full' as const } : o.asText === true ? { asText: true as const } : {};
+    if (isExtPath(p)) return this.ext.read(p, { ...max, ...asText });
+    return this.ws().readFile(p, { ...max, ...asText });
   }
   writeFile(p: string, content: string, opts?: WriteOptions) {
     if (isExtPath(p)) return this.ext.write(p, content, opts);

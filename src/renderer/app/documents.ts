@@ -132,7 +132,7 @@ function docFromFile(path: string, f: FileData): DocState {
 export async function openFile(path: string, reveal?: RevealTarget) {
   const doc = await loadDoc(path);
   if (!doc) return;
-  if (doc.binary && reveal) doc.reveal = reveal; // the viewer consumes it (PDF page)
+  if (doc.binary && !doc.asText && reveal) doc.reveal = reveal; // the viewer consumes it (PDF page)
   if (!app.tabs.value.some((t) => t.path === path)) {
     // New tabs open right of the active one (like every browser / VS Code).
     const tabs = [...app.tabs.value];
@@ -142,7 +142,7 @@ export async function openFile(path: string, reveal?: RevealTarget) {
   }
   app.activePath.value = path;
   touchMru(path);
-  if (!doc.binary) {
+  if (!doc.binary || doc.asText) {
     await editorReady;
     if (app.activePath.value !== path) return; // user moved on while the editor loaded
     app.editor?.open(path, doc.content);
@@ -152,8 +152,8 @@ export async function openFile(path: string, reveal?: RevealTarget) {
   }
   app.events.emit('doc:opened', path);
   app.events.emit('active:changed', path);
-  if (doc.binary && reveal) app.events.emit('viewer:reveal', path, reveal);
-  if (reveal && !doc.binary) requestAnimationFrame(() => app.editor?.reveal(reveal));
+  if (doc.binary && !doc.asText && reveal) app.events.emit('viewer:reveal', path, reveal);
+  if (reveal && (!doc.binary || doc.asText)) requestAnimationFrame(() => app.editor?.reveal(reveal));
   persistSession();
 }
 

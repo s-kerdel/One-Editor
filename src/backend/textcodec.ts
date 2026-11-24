@@ -37,6 +37,15 @@ export function decode(buf: Uint8Array): Decoded {
   }
 }
 
+/**
+ * A file `decode` refused (NUL bytes), opened because the user asked for it. Nothing is refused here:
+ * invalid UTF-8 becomes U+FFFD and NUL becomes U+FFFD, so the result is one string the editor can hold.
+ * `binary` stays true — that flag is what tells the renderer "never write this back".
+ */
+export function decodeBestEffort(buf: Uint8Array): Decoded {
+  return { text: new TextDecoder('utf-8').decode(buf).replace(/\0/g, '\uFFFD'), encoding: 'utf8', bom: false, binary: true };
+}
+
 export function encode(text: string, encoding: TextEncoding = 'utf8', bom = false): Buffer {
   switch (encoding) {
     case 'utf16le':

@@ -1,16 +1,18 @@
 // State-specific parts of the editor area, loaded on demand: split drag handle, conflict /
 // deleted-on-disk banner, and the viewer for images and binary files.
 import { basename } from '@shared/paths';
-import { app } from './app';
+import { MAX_AS_TEXT_BYTES, MAX_AS_TEXT_FULL_BYTES, type FileData } from '@shared/api';
+import { toMB } from '@shared/processes';
+import { app, type Toast } from './app';
 import * as ui from './ui';
-import { save, persistSession, closeTabs, discardDoc } from './documents';
+import { save, persistSession, closeTabs, discardDoc, openFile } from './documents';
 import { reloadFromDisk } from './disk-sync';
 import { addIcons, Icon, isImagePath } from './icons';
 import './icon-pack'; // alert (conflict banner)
 import './editor-extras.css';
 import { fileUrl } from '../platform';
 import { revealInOs, revealLabel } from './fileops';
-import { lazyComponent } from './lazy';
+import { holdKeys, lazyComponent } from './lazy';
 
 // pdf.js + its viewer: their own chunk, fetched when the first PDF opens.
 const PdfView = lazyComponent<{ path: string }>(() => import('../pdf/PdfView').then((m) => m.PdfView));
@@ -94,6 +96,61 @@ export function Banner() {
   return null;
 }
 
+/**
+ * Put force-opened text into the doc. `doc.binary` is left alone (still true): the save guard
+ * (`doc-save.ts`), the search index and the git compare paths all key off it, so this file stays
+ * non-savable whether the user got a window of it or the whole thing.
+ */
+function applyAsText(path: string, f: FileData): void {
+  const doc = app.docs.get(path);
+  if (!doc) return;
+  doc.content = f.content;
+  doc.saved = f.content; // moves with the content: the doc never looks "edited but unsavable"
+  doc.mtime = f.mtime;
+  doc.eol = f.eol;
+  doc.asText = true;
+  ui.docAsTextVersion.value++;
+}
+
+/**
+ * "Open as text anyway": the backend's bounded window (MAX_AS_TEXT_BYTES). The limit is said twice —
+ * on the card before the click, in the toast after it — and the rest is offered as a second step.
+ */
+async function openAsText(path: string) {
+  const doc = app.docs.get(path);
+  if (!doc) return;
+  try {
+    const f = await app.backend.readFile(path, { asText: true });
+    applyAsText(path, f);
+    await openFile(path); // the normal open path: it now sees doc.asText and puts the text in the editor
+    const size = f.size ?? f.content.length;
+    const actions: Toast['actions'] = [{ label: 'Set language', run: () => holdKeys(import('./Popups').then((m) => m.openLanguagePicker())) }];
+    if (size > MAX_AS_TEXT_BYTES) {
+      if (size <= MAX_AS_TEXT_FULL_BYTES) actions.push({ label: `Load all (${toMB(size)} MB)`, run: () => void loadAllText(path, size) });
+      app.toast(`“${basename(path)}” opened as text: the first ${toMB(MAX_AS_TEXT_BYTES)} MB of ${toMB(size)}. Never saved back.`, 'info', 8000, actions);
+    } else {
+      app.toast(`“${basename(path)}” opened as text — never saved back.`, 'info', 6000, actions);
+    }
+  } catch (err) {
+    app.toast(`Cannot open ${path} as text: ${(err as Error).message}`, 'error');
+  }
+}
+
+/** "Load all": the whole file as text, behind a confirm that names the size. Still never savable. */
+async function loadAllText(path: string, size: number) {
+  if (!app.docs.get(path)?.asText) return;
+  const mb = toMB(size);
+  if (!(await ui.confirmDialog(`Load all ${mb} MB of ${basename(path)}?`, 'One may become slow while a file this large is open. It is still never saved back.', `Load ${mb} MB`))) return;
+  try {
+    const f = await app.backend.readFile(path, { asText: 'full' });
+    applyAsText(path, f);
+    app.editor?.setContent(path, f.content, { resetHistory: true }); // in place: no tab switch, no undo history of the window
+    app.toast(`“${basename(path)}” loaded in full: ${toMB(f.size ?? f.content.length)} MB of text. Never saved back.`, 'info');
+  } catch (err) {
+    app.toast(`Cannot load all of ${path}: ${(err as Error).message}`, 'error');
+  }
+}
+
 export function Viewer({ path }: { path: string }) {
   if (/\.pdf$/i.test(path)) return <PdfView key={path} path={path} />;
   if (isImagePath(path)) {
@@ -111,9 +168,16 @@ export function Viewer({ path }: { path: string }) {
         <p>
           <b>{basename(path)}</b> is a binary file and can’t be edited here.
         </p>
-        <button class="se-btn small" onClick={() => revealInOs(path)}>
-          {revealLabel()}
-        </button>
+        <div class="se-viewer-actions">
+          <button class="se-btn small primary" title={`Reads the first ${toMB(MAX_AS_TEXT_BYTES)} MB of the file as text; it is never saved back`} onClick={() => void openAsText(path)}>
+            Open as text anyway
+          </button>
+          <button class="se-btn small" onClick={() => revealInOs(path)}>
+            {revealLabel()}
+          </button>
+        </div>
+        {/* The window has to be visible before the click, not only after it. */}
+        <div class="se-viewer-caption">Opens the first {toMB(MAX_AS_TEXT_BYTES)} MB as text · never saved back</div>
       </div>
     </div>
   );

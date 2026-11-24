@@ -64,6 +64,13 @@ export interface WriteOptions {
 /** Upper bound for `writeBinary` payloads (decoded bytes). Pasted screenshots are far below this. */
 export const MAX_BINARY_BYTES = 50 * 1024 * 1024;
 
+/** `readFile({ asText: true })`: a force-opened binary becomes at most this many bytes of text (the same
+ *  bound the indexer uses). The UI must say so: the rest is only loaded when the user asks for it. */
+export const MAX_AS_TEXT_BYTES = 2 * 1024 * 1024;
+/** `readFile({ asText: 'full' })`: the most a user may force into the editor. A string this big is already
+ *  slow to parse and hold, so "load all" stops here instead of at the 48 MB `readFile` open limit. */
+export const MAX_AS_TEXT_FULL_BYTES = 16 * 1024 * 1024;
+
 export interface TextPageOptions {
   /** Opaque cursor from the previous page's `nextCursor`; omit for the first page. */
   cursor?: string | null;
@@ -222,8 +229,13 @@ export interface BackendApi {
 
   /** Whole tree, or just the subtree at `path` (used after a folder appears on disk). */
   listTree(path?: RelPath): Promise<TreeNode>;
-  /** `maxBytes`: fail with ETOOBIG instead of reading a bigger file (a cheap existence / size probe). */
-  readFile(path: RelPath, opts?: { maxBytes?: number }): Promise<FileData>;
+  /**
+   * `maxBytes`: fail with ETOOBIG instead of reading a bigger file (a cheap existence / size probe).
+   * `asText`: the user asked to see a file `decode()` calls binary: its bytes come back as best-effort
+   * text — `true` = the first MAX_AS_TEXT_BYTES, `'full'` = the whole file up to MAX_AS_TEXT_FULL_BYTES
+   * (ETOOBIG above that). `binary` stays true either way, so the renderer still refuses to write it back.
+   */
+  readFile(path: RelPath, opts?: { maxBytes?: number; asText?: true | 'full' }): Promise<FileData>;
   writeFile(path: RelPath, content: string, opts?: WriteOptions): Promise<{ mtime: number }>;
   createFile(path: RelPath, content?: string): Promise<{ mtime: number }>;
   createDir(path: RelPath): Promise<void>;

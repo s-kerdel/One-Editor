@@ -194,12 +194,15 @@ export function StatusDocStart({ path, crumbs }: { path: string; crumbs: boolean
 export function StatusDocEnd({ path }: { path: string }) {
   const doc = app.docs.get(path);
   ui.docMetaVersion.value; // re-render on eol/encoding changes
+  ui.docAsTextVersion.value; // re-render when a binary doc is force-opened as text
   ui.languageVersion.value;
   const md = ui.isMarkdownView(path);
   const words = useWordCount(path, md);
   const cur = ui.cursorInfo.value;
-  // Viewer tabs (PDF…) have no language mode: name the file type instead of "Plain text".
-  const lang = doc?.binary ? fileTypeLabel(path) : languageName(path);
+  // Viewer tabs (PDF…) have no language mode: name the file type instead of "Plain text". A binary file
+  // opened as text does have one, so its language is shown and can be changed like any other file.
+  const viewer = !!doc?.binary && !doc.asText;
+  const lang = viewer ? fileTypeLabel(path) : languageName(path);
   return (
     <>
       {cur && doc && !doc.binary && (
@@ -228,10 +231,10 @@ export function StatusDocEnd({ path }: { path: string }) {
         <button
           class="se-status-item se-status-btn"
           data-testid="language"
-          title={doc?.binary ? 'File type' : 'Language mode — click to change'}
+          title={viewer ? 'File type' : 'Language mode — click to change'}
           aria-haspopup="listbox"
           aria-expanded={ui.picker.value?.anchor ? 'true' : undefined}
-          disabled={!doc || !!doc.binary}
+          disabled={!doc || viewer}
           onClick={(e) => {
             const anchor = e.currentTarget;
             // Typing right after the click (while the chunk loads) lands in the picker's filter.

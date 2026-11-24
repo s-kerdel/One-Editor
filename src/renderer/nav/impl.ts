@@ -25,7 +25,11 @@ let queue: Promise<unknown> = Promise.resolve();
 /** The buttons' state (./install owns the signals: they render before this chunk is in). */
 let can: { back: Signal<boolean>; forward: Signal<boolean> } | undefined;
 
-const isViewer = (path: string) => PDF_RE.test(path) || !!app.docs.get(path)?.binary;
+/** A binary doc the user opened as text lives in the editor, so its cursor is recordable. */
+const isViewer = (path: string) => {
+  const doc = app.docs.get(path);
+  return PDF_RE.test(path) || (!!doc?.binary && !doc.asText);
+};
 
 function here(): NavEntry | null {
   const path = app.activePath.value;

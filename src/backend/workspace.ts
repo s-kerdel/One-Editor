@@ -9,9 +9,9 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { MAX_BINARY_BYTES, type Eol, type FileData, type FsEvent, type TextEncoding, type TextPage, type TextPageOptions, type TreeNode, type WorkspaceInfo, type WriteOptions } from '../shared/api';
+import { MAX_AS_TEXT_BYTES, MAX_AS_TEXT_FULL_BYTES, MAX_BINARY_BYTES, type Eol, type FileData, type FsEvent, type TextEncoding, type TextPage, type TextPageOptions, type TreeNode, type WorkspaceInfo, type WriteOptions } from '../shared/api';
 import { normalize } from '../shared/paths';
-import { decode, detectEol, encode, toLf, withEol } from './textcodec';
+import { decode, decodeBestEffort, detectEol, encode, toLf, withEol } from './textcodec';
 import { createExcludeMatcher, type ExcludeMatcher } from './exclude';
 import { createWatchBackend, defaultWatchMode, type WatchBackend, type WatchMode } from './watcher';
 import { BackendFailure } from './errors';
@@ -31,6 +31,19 @@ export { MAX_INDEX_BYTES, type IndexOptions } from './indexer';
 export { BackendFailure } from './errors';
 
 const MAX_OPEN_BYTES = 48 * 1024 * 1024;
+
+/** The first `bytes` of a file, without reading the rest (the bounded window of a force-opened binary). */
+export async function readHead(abs: string, bytes: number): Promise<Buffer> {
+  if (bytes <= 0) return Buffer.alloc(0);
+  const fh = await fsp.open(abs, 'r');
+  try {
+    const buf = Buffer.allocUnsafe(bytes);
+    const { bytesRead } = await fh.read(buf, 0, bytes, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await fh.close();
+  }
+}
 export const MAX_TREE_ENTRIES = 200_000;
 const MAX_DEPTH = 40;
 const isWin = process.platform === 'win32';
@@ -697,8 +710,11 @@ export class Workspace {
 
   // ---- reading / writing ----------------------------------------------------------------------
 
-  /** `maxBytes`: refuse (ETOOBIG) before reading anything bigger — a cheap existence / size probe. */
-  async readFile(rel: string, opts: { maxBytes?: number } = {}): Promise<FileData> {
+  /**
+   * `maxBytes`: refuse (ETOOBIG) before reading anything bigger — a cheap existence / size probe.
+   * `asText`: see BackendApi.readFile — a window (default) or the whole file ('full') of a binary file.
+   */
+  async readFile(rel: string, opts: { maxBytes?: number; asText?: true | 'full' } = {}): Promise<FileData> {
     const key = normalize(rel);
     const abs = await this.real(key);
     await fsDelayAsync(); // tests: latency injection (slow bridge / antivirus)
@@ -712,8 +728,14 @@ export class Workspace {
       if (!st.isFile()) throw new BackendFailure('EINVAL', `Not a regular file: ${rel}`);
       if (st.size > MAX_OPEN_BYTES) throw new BackendFailure('ETOOBIG', `File is too large to open (${Math.round(st.size / 1048576)} MB): ${rel}`);
       if (opts.maxBytes !== undefined && st.size > opts.maxBytes) throw new BackendFailure('ETOOBIG', `File is larger than ${opts.maxBytes} bytes: ${rel}`);
-      const buf = await fsp.readFile(abs);
-      const d = decode(buf);
+      // asText: the user overrode the "binary" verdict. It stays flagged binary, so every "never write
+      // this back" guard in the renderer keeps working. Default = a bounded window; 'full' = the whole
+      // file, but only up to MAX_AS_TEXT_FULL_BYTES: a bigger string is not safe to put in the editor.
+      if (opts.asText === 'full' && st.size > MAX_AS_TEXT_FULL_BYTES)
+        throw new BackendFailure('ETOOBIG', `File is too large to open as text (${Math.round(st.size / 1048576)} MB; the limit is ${MAX_AS_TEXT_FULL_BYTES / 1048576} MB): ${rel}`);
+      const window = opts.asText === 'full' ? st.size : MAX_AS_TEXT_BYTES;
+      const buf = opts.asText ? await readHead(abs, Math.min(st.size, window)) : await fsp.readFile(abs);
+      const d = opts.asText ? decodeBestEffort(buf) : decode(buf);
       // An excluded / hidden place (vendor/, a dot folder) is not part of the listing: reading it — Go to
       // definition does — must not hand it to the indexers, nor push the user's files off the hot list.
       if (!this.matcher.path(key)) {
