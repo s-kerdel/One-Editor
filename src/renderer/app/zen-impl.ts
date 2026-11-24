@@ -1,8 +1,10 @@
 // Zen mode, the part that runs on a toggle (lazy chunk; the startup stub is ./zen.tsx). Entering saves
 // the layout parts zen closes (sidebar, file overview, process dock, terminal) and leaving puts back
-// exactly that. The tab strip stays; the sidebar and the file overview (if it was open) fold into thin
-// strips at the window's edges. Showing a panel in zen (strip click, its shortcut) is a peek over the
-// text that closes when you go back to the editor — the panel's own signal, so every shortcut works.
+// exactly that — with zen.keepTerminal on (Settings → Appearance → Zen mode) the terminal is not one of
+// them: zen leaves the panel as the user left it. The tab strip stays; the sidebar and the file overview
+// (if it was open) fold into thin strips at the window's edges. Showing a panel in zen (strip click, its
+// shortcut) is a peek over the text that closes when you go back to the editor — the panel's own signal,
+// so every shortcut works.
 import { batch } from '@preact/signals';
 import { app } from './app';
 import * as ui from './ui';
@@ -15,7 +17,7 @@ export { ZenStrip } from './zen-strip';
 
 /** Settings → Appearance → Zen mode, read leniently (missing / odd value = default). `zen.keepFileTree`
  *  (zen before the strips) is not read any more: the strip shows the tree in one click. */
-export const zenOptions = (s: Record<string, unknown>) => ({ fullScreen: s['zen.fullScreen'] !== false, keepStatusBar: s['zen.keepStatusBar'] === true });
+export const zenOptions = (s: Record<string, unknown>) => ({ fullScreen: s['zen.fullScreen'] !== false, keepStatusBar: s['zen.keepStatusBar'] === true, keepTerminal: s['zen.keepTerminal'] !== false });
 const opts = () => zenOptions(app.settings.peek() as Record<string, unknown>);
 
 /** Folds the sidebar and the overview into their strips (entering zen; going back to the text). */
@@ -30,17 +32,20 @@ export function setZen(on: boolean) {
   if (on === !!cur) return;
   batch(() => {
     if (on) {
-      ui.zen.value = { sidebarVisible: app.sidebarVisible.peek(), sidebarPanel: app.sidebarPanel.peek(), overviewVisible: ui.overviewVisible.peek(), processesOpen: ui.processesOpen.peek(), terminal: panelOpen.peek() };
+      // zen.keepTerminal (Settings → Appearance → Zen mode): the panel is left alone in both directions, so
+      // nothing is saved either — leaving then has nothing to restore (no panel reopened under the user).
+      const keepTerminal = opts().keepTerminal;
+      ui.zen.value = { sidebarVisible: app.sidebarVisible.peek(), sidebarPanel: app.sidebarPanel.peek(), overviewVisible: ui.overviewVisible.peek(), processesOpen: ui.processesOpen.peek(), terminal: keepTerminal ? undefined : panelOpen.peek() };
       closePeeks();
       ui.processesOpen.value = false;
-      panelOpen.value = false;
+      if (!keepTerminal) panelOpen.value = false;
     } else if (cur) {
       ui.zen.value = null;
       app.sidebarVisible.value = cur.sidebarVisible;
       if (app.panels.peek().some((p) => p.id === cur.sidebarPanel)) app.sidebarPanel.value = cur.sidebarPanel;
       ui.overviewVisible.value = cur.overviewVisible;
       ui.processesOpen.value = cur.processesOpen;
-      if (cur.terminal) panelOpen.value = true; // its slot is resolved: it was open in this window
+      if (cur.terminal) panelOpen.value = true; // its slot is resolved: it was open in this window (only saved when zen closed it)
     }
   });
   // A panel that just closed may have had the focus (terminal, tree): continue in the text.

@@ -1,7 +1,8 @@
 // Zen mode (View: Toggle zen mode, Ctrl+Alt+Z; app/zen.tsx): full screen, tabs stay, the sidebar and the
 // file overview (if it was open) fold into strips; a strip click / a panel shortcut shows the panel as a
-// peek over the text that closes when you go back to the editor; status bar optional; leaving restores the
-// layout from before; it survives a reload with the skeleton and the first frame already in zen.
+// peek over the text that closes when you go back to the editor; status bar optional; the terminal panel
+// stays unless Settings → Appearance → Zen mode → Keep the terminal is off; leaving restores the layout
+// from before; it survives a reload with the skeleton and the first frame already in zen.
 import type { Page } from '@playwright/test';
 import { test, expect, type WsFixture } from './harness';
 import { appRegionReport, forceIntegratedFrame } from './frame-regions';
@@ -59,9 +60,11 @@ for (const style of ['shelf', 'classic'] as const) {
     await corner.click();
     await expect(page.locator('.se-root.se-zen')).toBeVisible();
     await expect.poll(() => full(page)).toBe(true);
-    // Tabs stay; sidebar + overview are strips; terminal, status bar and classic's icon bar are gone.
+    // Tabs stay; sidebar + overview are strips; the status bar and classic's icon bar are gone. The terminal
+    // stays: Settings → Appearance → Zen mode → Keep the terminal is on.
     await expect(page.locator('.se-tabbar')).toBeVisible();
-    for (const sel of ['.se-sidebar', '.se-overview', '.se-status', '[data-testid="terminal-panel"]', '.se-activity', '.se-shelf-head']) await expect(page.locator(sel), sel).toHaveCount(0);
+    for (const sel of ['.se-sidebar', '.se-overview', '.se-status', '.se-activity', '.se-shelf-head']) await expect(page.locator(sel), sel).toHaveCount(0);
+    await expect(page.locator('.se-content [data-testid="terminal-panel"]')).toBeVisible();
     const left = page.locator('.se-zen-strip.left');
     await expect(left.locator('[data-panel="files"]')).toBeVisible();
     await expect(left.locator('[data-panel="search"]')).toHaveAttribute('title', 'Search (Ctrl+Shift+F)');
@@ -119,6 +122,37 @@ for (const style of ['shelf', 'classic'] as const) {
     expect(await layout(page)).toEqual(before);
   });
 }
+
+test('the terminal in zen: "Keep the terminal" (on) leaves it alone; off closes it on entering and puts it back on leaving', async ({ page, ws }) => {
+  await openNote(page, ws);
+  await page.keyboard.press('Control+`'); // browser mode: the panel shows the desktop-only note, no shell
+  await expect(page.locator('[data-testid="terminal-panel"]')).toBeVisible();
+
+  // On (the default): entering zen keeps the panel, Ctrl+` still works in zen, and leaving does not reopen
+  // a panel the user closed there — what you see is what you left.
+  await page.keyboard.press('Control+Alt+z');
+  await expect(page.locator('.se-root.se-zen')).toBeVisible();
+  await expect(page.locator('.se-content [data-testid="terminal-panel"]')).toBeVisible();
+  await page.keyboard.press('Control+`');
+  await expect(page.locator('[data-testid="terminal-panel"]')).toHaveCount(0);
+  await page.keyboard.press('Control+Alt+z');
+  await expect.poll(() => isZen(page)).toBe(false);
+  await expect(page.locator('[data-testid="terminal-panel"]')).toHaveCount(0);
+
+  // Off (Settings → Appearance → Zen mode): the old pair — entering closes it, leaving puts it back.
+  await page.keyboard.press('Control+`');
+  await expect(page.locator('[data-testid="terminal-panel"]')).toBeVisible();
+  await page.keyboard.press('Control+,');
+  await page.getByTestId('settings').locator('[data-setting="zen.keepTerminal"]').click();
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => ((await ws.server.service.getSettings()) as any)['zen.keepTerminal']).toBe(false);
+  await page.keyboard.press('Control+Alt+z');
+  await expect(page.locator('.se-root.se-zen')).toBeVisible();
+  await expect(page.locator('[data-testid="terminal-panel"]')).toHaveCount(0);
+  await page.keyboard.press('Control+Alt+z');
+  await expect.poll(() => isZen(page)).toBe(false);
+  await expect(page.locator('[data-testid="terminal-panel"]')).toBeVisible();
+});
 
 test('full screen: left from outside, zen stays and works; leaving zen then leaves the window alone; the option turns it off', async ({ page, ws }) => {
   await openNote(page, ws);

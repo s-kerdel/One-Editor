@@ -317,6 +317,16 @@ const defs: Draft[] = [
     default: false,
     control: { type: 'toggle' },
   },
+  {
+    key: 'zen.keepTerminal',
+    section: 'appearance',
+    group: 'Zen mode',
+    label: 'Keep the terminal',
+    description: 'Zen mode keeps the terminal panel. Off: it closes on entering and comes back on leaving.',
+    keywords: ['zen', 'distraction free', 'focus', 'terminal', 'shell', 'console', 'writing'],
+    default: true,
+    control: { type: 'toggle' },
+  },
 
   // ---- Editor ----
   {

@@ -83,13 +83,14 @@ grep -n "keyword" docs/llm/09-reference*.md
 - **Zen mode** (shell, "View: Toggle zen mode", `Mod-Alt-z`): the flag is **`ui.zen`** (null = off, else the layout to restore).
   - Files: stub `app/zen.tsx`, the lazy chunk `app/zen-impl.ts` + `zen-strip.tsx` + `zen.css`.
   - The toggle button is `ZenButton` in `app/Shelf.tsx`: shelf foot, classic icon bar, the left strip's foot, the tab strip's end.
-- Entering saves sidebar visibility / panel, the overview, the process dock and the terminal panel, closes them through **their own signals** and goes full screen; leaving restores exactly that.
+- Entering saves sidebar visibility / panel, the overview, the process dock and (with `zen.keepTerminal` off) the terminal panel, closes them through **their own signals** and goes full screen; leaving restores exactly that.
 - Tabs stay; the sidebar and the overview (if it was open: `ui.zen.overviewVisible`) are **strips** (`.se-zen-strip`, lazy, resolved before the first zen frame: main.tsx awaits `preloadZenUi()` when restored).
 - Showing a panel in zen (`sidebarVisible` / `overviewVisible`, by strip click or its shortcut) is a **peek**: `.se-zen-peek`.
   - It is absolutely placed, rendered *after* `.se-content` and no-drag (Chromium: the last region box wins).
   - It is closed by a press in `.se-main` outside peeks / strips, focus moving into `.se-content`, or `Esc`.
   - It is never restored (`applySessionLayout`, skeleton cache).
 - Status bar only with `zen.keepStatusBar`.
+- `zen.keepTerminal` (default on): zen leaves `terminal/state.panelOpen` alone in **both** directions — entering saves no `ui.zen.terminal`, so leaving never reopens a panel the user closed in zen (no asymmetric restore). Off: the old save / close / restore pair. It does **not** apply mid-zen (unlike `keepStatusBar`): it takes effect at the next enter / leave. `Mod-\`` (`terminal.toggle`) is already in `APP_KEYS_IN_TERMINAL`, so it works in zen and from a focused shell: no new key.
 - `zen.fullScreen` (default on):
   - desktop: `zenFullScreen(on)` → `main/zen-fullscreen.ts`. It remembers the pre-zen state, never leaves a full screen the user had, and forgets its claim when the user leaves it. window-state.json keeps the pre-zen `maximized`;
   - browser: Fullscreen API inside the toggle's gesture + `navigator.keyboard.lock(['Escape'])`.

@@ -150,15 +150,16 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 
 | | |
 |---|---|
-| **Stays** | Your tabs. The status bar only if you keep it |
+| **Stays** | Your tabs. The status bar and the terminal only if you keep them |
 | **Thin strips** | Sidebar on the left. File overview on the right (only if it was open) |
 | **Peek at a panel** | Click its icon on a strip, or use its shortcut (`Ctrl+Shift+F`, `Ctrl+Alt+B`…). It opens over the text |
 | **Close the peek** | Click back in the text, press `Esc`, or click the icon again |
-| **Hidden** | Terminal, process explorer (Classic: also the icon bar) |
+| **Hidden** | Process explorer (Classic: also the icon bar) |
 | **Leave** | `Ctrl+Alt+Z` · zen button at the **bottom of the left strip** · zen button at the **right end of the tab strip** |
-| **Options** | Settings → Appearance → Zen mode: **Full screen** (on), **Keep the status bar** (off) |
+| **Options** | Settings → Appearance → Zen mode: **Full screen** (on), **Keep the status bar** (off), **Keep the terminal** (on) |
 
-- **Leaving puts everything back** exactly as it was: sidebar, width, panel, overview, terminal, window size.
+- **Leaving puts everything back** exactly as it was: sidebar, width, panel, overview, window size. With **Keep the terminal** on, the terminal is left as you left it: still open, or still closed if you closed it in zen.
+- **The terminal in zen** (`Ctrl+\``): it slides up under the text and your shells keep running while you write. **Keep the terminal** off brings the old behaviour back: zen closes it and puts it back when you leave.
 - **Left full screen another way** (the OS, or holding `Esc` in a browser)? Zen stays and keeps working. Leave it as usual.
 - **Already full screen** before zen? It stays full screen when you leave zen.
 - **Remembered:** still in zen after a refresh or restart. The desktop app goes full screen again.
@@ -1030,7 +1031,7 @@ Sign-in, an SSH passphrase, or "choose merge or rebase": the app **never guesses
 | | Zoom (desktop only) | 100% |
 | | Window frame (desktop only) | Integrated (no title bar) |
 | | Back and forward buttons (left of the status bar) | On |
-| | Zen mode: Full screen / Keep the status bar | On / Off |
+| | Zen mode: Full screen / Keep the status bar / Keep the terminal | On / Off / On |
 | **Editor** | View mode | Live |
 | | Formatting toolbar in live mode | On |
 | | Line numbers in Markdown source & split mode | On |

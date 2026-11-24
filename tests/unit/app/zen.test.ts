@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
-// Zen mode state: entering folds the sidebar / overview into strips and closes the bottom panels, a panel
-// shown in zen is a peek, leaving restores exactly the layout before; options (full screen, status bar,
-// the retired keepFileTree); full screen requests; persistence (session + the skeleton's cached attribute).
+// Zen mode state: entering folds the sidebar / overview into strips and closes the bottom panels (the
+// terminal only with zen.keepTerminal off), a panel shown in zen is a peek, leaving restores exactly the
+// layout before; options (full screen, status bar, terminal, the retired keepFileTree); full screen
+// requests; persistence (session + the skeleton's cached attribute).
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -35,7 +36,8 @@ beforeEach(() => {
 });
 
 describe('zen mode', () => {
-  it('folds the sidebar and the overview into strips, closes the bottom panels; leaving restores exactly the layout before', () => {
+  it('keepTerminal off (the old behaviour): folds the sidebar and the overview into strips, closes the bottom panels; leaving restores exactly the layout before', () => {
+    settings({ 'zen.keepTerminal': false });
     const before = layout();
     toggleZen();
     expect(ui.zen.value).toMatchObject({ sidebarVisible: true, sidebarPanel: 'git', overviewVisible: true });
@@ -43,6 +45,17 @@ describe('zen mode', () => {
     toggleZen();
     expect(ui.zen.value).toBeNull();
     expect(layout()).toEqual(before);
+  });
+
+  it('keepTerminal on (the default): entering zen keeps the terminal open, and a panel the user closed in zen stays closed on leaving', () => {
+    const before = layout(); // terminal open, like the case above
+    toggleZen();
+    expect(layout()).toEqual({ sidebar: false, panel: 'git', overview: false, processes: false, terminal: true });
+    expect(ui.zen.value!.terminal).toBeUndefined(); // nothing saved: leaving has nothing to force back open
+    panelOpen.value = false; // Ctrl+` in zen hides the panel
+    toggleZen();
+    expect(ui.zen.value).toBeNull();
+    expect(layout()).toEqual({ ...before, terminal: false });
   });
 
   it('a peek opened in zen (strip, shortcut) is the panel’s own signal; leaving still restores the layout from before zen', () => {
@@ -62,15 +75,17 @@ describe('zen mode', () => {
     setZen(true);
     expect(app.sidebarVisible.value).toBe(false);
     expect(settingByKey('zen.keepFileTree')).toBeUndefined();
-    expect(zenOptions({ 'zen.keepFileTree': true })).toEqual({ fullScreen: true, keepStatusBar: false });
+    expect(zenOptions({ 'zen.keepFileTree': true })).toEqual({ fullScreen: true, keepStatusBar: false, keepTerminal: true });
   });
 
-  it('reads its options leniently: full screen unless explicitly off, the status bar only when explicitly kept', () => {
-    expect(zenOptions({})).toEqual({ fullScreen: true, keepStatusBar: false });
-    expect(zenOptions({ 'zen.fullScreen': null, 'zen.keepStatusBar': 'yes' })).toEqual({ fullScreen: true, keepStatusBar: false });
-    expect(zenOptions({ 'zen.fullScreen': false, 'zen.keepStatusBar': true })).toEqual({ fullScreen: false, keepStatusBar: true });
+  it('reads its options leniently: full screen unless explicitly off, the status bar only when explicitly kept, the terminal unless explicitly off', () => {
+    expect(zenOptions({})).toEqual({ fullScreen: true, keepStatusBar: false, keepTerminal: true });
+    expect(zenOptions({ 'zen.fullScreen': null, 'zen.keepStatusBar': 'yes' })).toEqual({ fullScreen: true, keepStatusBar: false, keepTerminal: true });
+    expect(zenOptions({ 'zen.fullScreen': false, 'zen.keepStatusBar': true, 'zen.keepTerminal': false })).toEqual({ fullScreen: false, keepStatusBar: true, keepTerminal: false });
+    expect(zenOptions({ 'zen.keepTerminal': null })).toEqual({ fullScreen: true, keepStatusBar: false, keepTerminal: true });
     expect(settingByKey('zen.fullScreen')?.default).toBe(true);
     expect(settingByKey('zen.keepStatusBar')?.default).toBe(false);
+    expect(settingByKey('zen.keepTerminal')?.default).toBe(true);
   });
 });
 
@@ -116,6 +131,8 @@ describe('persistence', () => {
     expect(ui.zen.value).toMatchObject({ sidebarVisible: true, sidebarPanel: 'git' });
     expect(app.sidebarVisible.value).toBe(false); // the peek is not restored
     setZen(false);
+    // The session never carries the terminal (zenSaved drops it) and with zen.keepTerminal on leaving zen
+    // does not touch the panel at all, so a restored zen leaves it closed either way.
     expect(layout()).toMatchObject({ sidebar: true, panel: 'git', overview: true, processes: true, terminal: false });
   });
 

@@ -26,7 +26,8 @@ export interface ZenSaved {
   sidebarPanel: string;
   overviewVisible: boolean;
   processesOpen: boolean;
-  /** Terminal panel: memory only (terminals don't outlive the window). */
+  /** Terminal panel: memory only (terminals don't outlive the window), and only remembered when zen closes
+   *  it — with `zen.keepTerminal` on (the default) zen leaves the panel alone and this stays unset. */
   terminal?: boolean;
 }
 export const zen = signal<ZenSaved | null>(null);
