@@ -40,6 +40,18 @@ test('new note via Mod-n: created, opened, named inline, then typing goes into i
   await expect.poll(() => ws.read('Meeting notes.md'), { timeout: 5000 }).toContain('Agenda');
 });
 
+test('new note from the shelf: the tree selection wins over the active file, even when the editor has focus', async ({ page, ws }) => {
+  await ws.open(page);
+  await row(page, 'README').click(); // active file: README.md at the root
+  await expect.poll(async () => (await app(page)).active).toBe('README.md');
+  await row(page, 'notes').click(); // tree selection: the notes folder (tree now focused)
+  await page.locator('.cm-content').click(); // focus moves to the editor; selection stays on notes
+  await page.locator('.se-new-note').click();
+  await expect.poll(() => exists(ws.root, 'notes/untitled-1.md')).toBe(true);
+  expect(exists(ws.root, 'untitled-1.md')).toBe(false); // NOT next to the active README
+  await page.locator('.se-tree-input').press('Enter');
+});
+
 test('context menu → New file …: picker with popular extensions first, creates with the stem pre-selected', async ({ page, ws }) => {
   await ws.open(page);
   await row(page, 'README').click({ button: 'right' });

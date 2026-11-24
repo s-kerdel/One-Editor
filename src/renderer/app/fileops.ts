@@ -33,19 +33,14 @@ export function expandTo(path: string, includeSelf = false) {
   }
 }
 
-/** Folder new items go into: the selected tree folder when the tree has focus, else the active file's folder. */
+/** Folder new items go into: the selected tree folder regardless of focus (like VS Code), else the active file's folder. */
 export function currentFolder(): string {
-  const treeFocused = !!document.activeElement?.closest?.('.se-tree');
   const sel = ui.treeSelection.value;
-  if (treeFocused && sel !== null) {
-    const n = findNode(app.tree.value, sel);
-    if (n) return n.kind === 'dir' ? n.path : dirname(n.path);
-  }
-  if (app.activePath.value) return dirname(app.activePath.value);
   if (sel !== null) {
     const n = findNode(app.tree.value, sel);
     if (n) return n.kind === 'dir' ? n.path : dirname(n.path);
   }
+  if (app.activePath.value) return dirname(app.activePath.value);
   return '';
 }
 
