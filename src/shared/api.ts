@@ -274,6 +274,9 @@ export interface BackendApi {
   osVersion(): Promise<import('./os-version').OsVersionInfo | null>;
   /** Electron: mouse side buttons / keyboard browser keys that arrive as a window `app-command` (Windows). */
   onNavCommand?(cb: (dir: import('./nav').NavDir) => void): () => void;
+  /** Electron: the window entered / left full screen. Chromium keeps env(titlebar-area-*) reporting the WCO
+   *  area while fullscreen hides the buttons; main tells us so the CSS reservations collapse (html.fs-full). */
+  onFullScreen?(cb: (on: boolean) => void): () => void;
   /** Paths the app was asked to open by a second instance (Electron). Launch-time paths come via bootstrap(). */
   onOpenRequest(cb: (absPaths: string[]) => void): () => void;
 

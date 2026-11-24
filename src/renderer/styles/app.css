@@ -429,6 +429,9 @@ html[data-folders='one'] .se-root .se-ficon-folder { color: var(--folder-color, 
    .se-no-drag class. The OS draws min/max/close over the strip's right end (Window Controls
    Overlay, coloured like the strip by app/titlebar.ts); --wco-right keeps our controls out from under them. */
 .frame-integrated { --wco-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)); --frame-top: 10px; }
+/* Full screen hides the buttons but Chromium keeps env(titlebar-area-*) at full measure (the old "hidden → 0"
+   assumption is wrong on Electron): main reports the state (app:fullScreen), so the reservations collapse. */
+html.fs-full .frame-integrated { --wco-right: 0px; }
 .frame-integrated .se-topline,
 .frame-integrated.ui-shelf .se-shelf-head,
 .frame-integrated.ui-classic .se-panel-head,

@@ -50,6 +50,7 @@ function electronBackend(bridge: Bridge): BackendApi {
       onOpenRequest: (cb) => bridge.on('app:openRequest', (p) => cb(p as string[])),
       onCloseRequest: (cb) => bridge.on('app:closeRequest', () => cb()),
       onNavCommand: (cb) => bridge.on('app:navigate', (d) => cb(d as 'back' | 'forward')),
+      onFullScreen: (cb) => bridge.on('app:fullScreen', (p) => cb(p === true)),
       approveClose: (ok) => bridge.approveClose(ok),
       getPathForFile: (f) => bridge.getPathForFile(f),
       setZoom: (z) => bridge.setZoom(z),

@@ -15,10 +15,11 @@
 .ui-classic .se-zen-strip { padding-top: 8px; background: var(--bg-activity); }
 .ui-classic .se-zen-strip.left { border-right: 1px solid var(--border); }
 .ui-classic .se-zen-strip.right { border-left: 1px solid var(--border); }
-/* Nothing under the window controls: the right strip starts below them (WCO hidden in full screen → 0);
-   macOS keeps its traffic lights top left. */
+/* Nothing under the window controls: the right strip starts below them (collapsed in full screen by
+   html.fs-full, app.css); macOS keeps its traffic lights top left. */
 .frame-integrated .se-zen-strip.right,
 .frame-integrated[data-os='darwin'] .se-zen-strip.left { padding-top: max(10px, calc(env(titlebar-area-height, 0px) + 6px)); }
+html.fs-full .frame-integrated .se-zen-strip.right { padding-top: 10px; }
 .se-zen-strip-spacer { flex: 1; }
 .se-zen-strip-btn { flex: none; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-faint); transition: background 0.12s, color 0.12s; }
 .se-zen-strip-btn:hover { background: var(--bg-hover); color: var(--text); }

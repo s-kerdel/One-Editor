@@ -496,6 +496,10 @@ function main() {
     });
     const w = win;
     zenFs.attach(w);
+    // Electron hides the WCO buttons in full screen but keeps env(titlebar-area-*) reporting their area (the
+    // CSS assumption "hidden → 0" is wrong): tell the renderer, which drops the reservations (html.fs-full).
+    w.on('enter-full-screen', () => w.webContents.send('app:fullScreen', true));
+    w.on('leave-full-screen', () => w.webContents.send('app:fullScreen', false));
     w.once('ready-to-show', () => {
       mark('readyToShow');
       if (st.maximized) w.maximize();

@@ -6,7 +6,7 @@ import { webServerBridge } from './web-server-bridge';
 import { updateCheckBridge } from './update-check-bridge';
 import { mcpBridge } from './mcp-bridge';
 
-const CHANNELS = new Set(['fs:events', 'app:openRequest', 'app:closeRequest', 'git:changed', 'settings:changed', 'app:navigate']);
+const CHANNELS = new Set(['fs:events', 'app:openRequest', 'app:closeRequest', 'git:changed', 'settings:changed', 'app:navigate', 'app:fullScreen']);
 // The frame main created this window with (webPreferences.additionalArguments): the renderer styles
 // by what the window really has, not by the setting (which may have changed until a restart).
 const frame = process.argv.includes('--sec-edit-frame=integrated') ? 'integrated' : 'native';

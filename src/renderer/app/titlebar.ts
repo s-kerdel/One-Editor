@@ -73,6 +73,8 @@ const schedule = () => {
 export function installTitleBar() {
   if (app.backend.frame !== 'integrated' || !app.backend.setTitleBarOverlay) return;
   syncTitleBar();
+  // Full screen: the buttons vanish but their env() reservation stays (see app.css) → collapse it.
+  app.backend.onFullScreen?.((on) => document.documentElement.classList.toggle('fs-full', on));
   app.events.on('settings:changed', schedule);
   // Opening / closing the file overview moves the controls between the strip and the overview's top band.
   ui.overviewVisible.subscribe(schedule);
