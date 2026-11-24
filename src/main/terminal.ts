@@ -33,7 +33,7 @@ import {
   type TerminalReply,
   type TerminalSpawnResult,
 } from '../shared/terminal';
-import { claudeHint, claudeInstall, detectClaude, detectOpencode, detectShells, opencodeHint, opencodeInstall, OPENCODE_WSL_NO_FOLLOW, planOpencode, envGet, pathFor, pickDefaultShell, planClaude, planSpawn, windowsBuildOf, type DetectEnv } from './terminal-shells';
+import { claudeHint, claudeInstall, detectClaude, detectOpencode, detectShells, opencodeHint, opencodeInstall, planOpencode, planOpencodeServeWsl, wslFollowNotice, type WslFollowFail, envGet, pathFor, pickDefaultShell, planClaude, planSpawn, windowsBuildOf, type DetectEnv } from './terminal-shells';
 import { ClaudeFollow } from './terminal-follow';
 import { OpencodeTracker } from './terminal-opencode';
 import { winSystemExe } from '../backend/winsys';
@@ -416,11 +416,12 @@ export class TerminalService {
       } else if (opencode) {
         // "Follow Opencode's edits": our own `opencode serve` (loopback, generated password); the TUI attaches to it
         // so main sees every change. Off: plain opencode, no server.
-        // Inside WSL there is no private server (not provably reachable on 127.0.0.1 from here, nor provably ended
-        // with the terminal): plain opencode, and the user is told why nothing is followed.
+        // Inside WSL the server runs in that distro and main must reach it through WSL's localhost forwarding: a
+        // failure there means plain opencode, with a notice naming the part that failed.
         const inWsl = opencode.via === 'wsl';
-        if (inWsl && req.follow) notice = OPENCODE_WSL_NO_FOLLOW;
-        const server = req.follow && !inWsl ? await this.openOpencode(id, root, opencode, env) : null;
+        let why: WslFollowFail | undefined;
+        const server = req.follow ? await this.openOpencode(id, root, opencode, env, inWsl ? shell?.path : undefined, (x) => (why = x)) : null;
+        if (inWsl && req.follow && !server) notice = wslFollowNotice(why);
         if (server && (this.o.getWorkspaceRoot() !== root || this.disposed)) {
           this.opencodeSvc?.close(id);
           throw fail('NO_WORKSPACE', 'The folder changed');
@@ -484,9 +485,16 @@ export class TerminalService {
   }
 
   /** The private opencode server for terminal `id` + tracking of it, or null (opencode then starts without the change list). */
-  private async openOpencode(id: number, root: string, info: OpencodeInfo, env: Record<string, string | undefined>) {
+  private async openOpencode(id: number, root: string, info: OpencodeInfo, env: Record<string, string | undefined>, wslExe: string | undefined, onFail: (why: WslFollowFail) => void) {
     const f = this.o.follow;
-    if (!f || !info.path || info.via === 'wsl') return null; // a Linux path is not a program main can start
+    if (!f || !info.path) return null;
+    // Inside WSL: started in the distro through wsl.exe (a Linux path is not a program main can start).
+    const wsl = info.via === 'wsl' ? (wslExe ? planOpencodeServeWsl(info, root, wslExe) : null) : undefined;
+    // No plan (another distro's folder, a network share): nothing was started.
+    if (wsl === null) {
+      onFail(wslExe ? 'folder' : 'spawn');
+      return null;
+    }
     this.opencodeSvc ??= new OpencodeTracker({
       inside: f.inside,
       spawnServer: this.o.opencodeSpawn,
@@ -495,7 +503,7 @@ export class TerminalService {
       emitChanges: (termId, e) => this.emitFor(termId, CH.changes, e),
     });
     // opencode names files by its own working folder, which the OS reports without links: both names of the folder count.
-    return this.opencodeSvc.open(id, { bin: info.path, root, realRoot: await realRootOf(root, this.o.fs ?? fsp), platform: this.platform, foldCase: f.foldCase(), env });
+    return this.opencodeSvc.open(id, { bin: info.path, root, realRoot: wsl ? null : await realRootOf(root, this.o.fs ?? fsp), platform: this.platform, foldCase: f.foldCase(), env, wsl }, onFail);
   }
 
   /** Only for a live terminal of the folder that is still open. */

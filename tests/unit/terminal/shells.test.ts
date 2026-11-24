@@ -1,6 +1,6 @@
 // Shell detection, WSL parsing, spawn planning and environment rules — Windows fixtures run on Linux.
 import { describe, it, expect } from 'vitest';
-import { decodeWslOutput, detectClaude, detectOpencode, OPENCODE_WSL_LOOKUP, planOpencode, detectShells, parseWslList, pickDefaultShell, planClaude, planSpawn, pwshName, which, windowsBuildOf, wslPathFor, wslUncInfo, type DetectEnv } from '../../../src/main/terminal-shells';
+import { decodeWslOutput, detectClaude, detectOpencode, OPENCODE_WSL_CWD, OPENCODE_WSL_LOOKUP, OPENCODE_WSL_SERVE, planOpencode, planOpencodeServeWsl, wslFollowNotice, detectShells, parseWslList, pickDefaultShell, planClaude, planSpawn, pwshName, which, windowsBuildOf, wslPathFor, wslUncInfo, type DetectEnv } from '../../../src/main/terminal-shells';
 import { prettyDistro, prettyExe, uniqueNames } from '../../../src/shared/terminal';
 import { buildTerminalEnv, resolveTerminalCwd } from '../../../src/main/terminal';
 import { isTerminalMethod, TERMINAL_RPC_METHODS } from '../../../src/shared/terminal';
@@ -404,14 +404,52 @@ describe('opencode detection + start plan', () => {
     expect(native.runs).toEqual([]);
   });
 
-  it('WSL start plan: login bash, cd back after the rc files, exec the found path; never a server address or password', () => {
+  it('WSL start plan: login bash, cd back after the rc files, exec the found path; with a server: address as an argument, password through WSLENV', () => {
     const info = { available: true, via: 'wsl' as const, distro: 'Ubuntu', path: '/home/me/.opencode/bin/opencode' };
     const o = { platform: 'win32', env: { ...WIN_ENV, WSLENV: 'X/p' }, wslExe: 'C:\\Windows\\System32\\wsl.exe' };
     const script = 'cd -- "$0" 2>/dev/null; exec "$1"';
     expect(planOpencode(info, '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', o)).toEqual({ file: o.wslExe, args: ['-d', 'Ubuntu', '--cd', '/home/me/my proj', '-e', 'bash', '-lic', script, '/home/me/my proj', info.path], cwd: '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', env: {} });
     expect(planOpencode(info, 'C:\\Users\\me\\proj', o).args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/Users/me/proj', '-e', 'bash', '-lic', script, '/mnt/c/Users/me/proj', info.path]);
+    // Plain: nothing of a server.
+    expect(JSON.stringify(planOpencode(info, 'C:\\ws', o))).not.toMatch(/--server|OPENCODE_PASSWORD|WSLENV/);
     const withServer = planOpencode(info, 'C:\\ws', { ...o, server: { url: 'http://127.0.0.1:4000', password: 'pw-123456789' } });
-    expect(JSON.stringify(withServer)).not.toMatch(/pw-123456789|--server|OPENCODE_PASSWORD|WSLENV/);
+    // The script stays fixed text: address + path are arguments; the password is never in argv.
+    expect(withServer.args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec "$1" --server "$2"', '/mnt/c/ws', info.path, 'http://127.0.0.1:4000']);
+    expect(JSON.stringify(withServer.args)).not.toContain('pw-123456789');
+    expect(withServer.env).toEqual({ OPENCODE_PASSWORD: 'pw-123456789', WSLENV: 'X/p:OPENCODE_PASSWORD' });
+    expect(planOpencode(info, 'C:\\ws', { ...o, env: WIN_ENV, server: { url: 'http://127.0.0.1:4000', password: 'pw-123456789' } }).env.WSLENV).toBe('OPENCODE_PASSWORD');
+  });
+
+  it('WSL server plan: the fixed script through wsl.exe in the folder\'s Linux path; none for a folder the distro cannot name', () => {
+    const info = { available: true, via: 'wsl' as const, distro: 'Ubuntu', path: '/home/me/.opencode/bin/opencode' };
+    const exe = 'C:\\Windows\\System32\\wsl.exe';
+    expect(planOpencodeServeWsl(info, '\\\\wsl$\\ubuntu\\home\\me\\my proj', exe)).toEqual({ file: exe, args: ['-d', 'Ubuntu', '--cd', '/home/me/my proj', '-e', 'bash', '-lic', OPENCODE_WSL_SERVE, '/home/me/my proj', info.path], linuxRoot: '/home/me/my proj' });
+    expect(planOpencodeServeWsl(info, 'C:\\ws', exe)?.linuxRoot).toBe('/mnt/c/ws');
+    expect(planOpencodeServeWsl(info, '\\\\wsl.localhost\\Debian\\home\\me', exe)).toBeNull(); // another distro's folder
+    expect(planOpencodeServeWsl(info, '\\\\nas\\share\\proj', exe)).toBeNull();
+    expect(planOpencodeServeWsl({ available: true, via: 'native', path: 'C:\\x\\opencode.exe' }, 'C:\\ws', exe)).toBeNull();
+    // Fixed text: loopback only, a port of the OS's choice, ends with its stdin, no password of the user's.
+    expect(OPENCODE_WSL_SERVE).toContain('"$1" serve --hostname 127.0.0.1 --port 0');
+    expect(OPENCODE_WSL_SERVE).toContain('unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD');
+    expect(OPENCODE_WSL_SERVE).toMatch(/trap "kill -- \\\$g 2>\/dev\/null" EXIT.*cat >\/dev\/null$/);
+    // No single quotes: wsl.exe re-quotes each argument for the distro with `'` — a `'` here would leave bash
+    // waiting for the rest of that quote, and the server would never start.
+    expect(OPENCODE_WSL_SERVE).not.toContain("'");
+    expect(OPENCODE_WSL_CWD.exec('hello\r\none-cwd /home/me/my proj\r\nserver listening')?.[1]).toBe('/home/me/my proj');
+    expect(OPENCODE_WSL_CWD.exec('one-cwd relative/x\n')).toBeNull();
+  });
+
+  it('WSL follow: every failure says which part failed, never "WSL is not supported"', () => {
+    const n = (w: 'folder' | 'spawn' | 'answer' | 'reach' | undefined) => wslFollowNotice(w);
+    // Each names WSL, what failed, and the consequence — a wrong one sends the user to the wrong fix.
+    expect(n('folder')).toMatch(/inside WSL.*no path inside that distro.*not followed/s);
+    expect(n('answer')).toMatch(/inside WSL.*did not report itself.*not followed/s);
+    expect(n('reach')).toMatch(/inside WSL.*answers there.*cannot reach it from Windows.*not followed/s);
+    expect(n('spawn')).toBe(n('answer'));
+    expect(n(undefined)).toBe(n('answer'));
+    // Three distinct sentences; none claims WSL is unsupported.
+    expect(new Set([n('folder'), n('answer'), n('reach')]).size).toBe(3);
+    for (const x of [n('folder'), n('answer'), n('reach')]) expect(x).not.toMatch(/not supported|not available/);
   });
 
   it('Windows npm shim (opencode.cmd) goes through cmd.exe', () => {

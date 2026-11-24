@@ -2,6 +2,9 @@
 // caps, cwd rules, environment hygiene, batching, flow control and "no orphans".
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import fs from 'node:fs';
+import http from 'node:http';
+import { EventEmitter } from 'node:events';
+import { OPENCODE_WSL_SERVE } from '../../../src/main/terminal-shells';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { TerminalService, type PtyModuleLike } from '../../../src/main/terminal';
@@ -425,38 +428,117 @@ describe('TerminalService (real node-pty)', () => {
     expect(calls).toHaveLength(3);
   });
 
-  it('Opencode inside WSL: started through wsl.exe; Follow asks for no server and says why (no password anywhere)', async () => {
+  it('Opencode inside WSL: Follow starts the server in the distro and attaches the TUI to it; unreachable / no Linux path = plain + a notice', async () => {
     const spawns: Array<{ file: string; args: string[] | string; env: Record<string, string> }> = [];
     const fakePty = { pid: 4242, onData: () => ({ dispose() {} }), onExit: () => ({ dispose() {} }), write() {}, resize() {}, kill() {}, pause() {}, resume() {} };
     const wsl: ShellInfo = { id: 'wsl:Ubuntu', name: 'Ubuntu (WSL)', kind: 'wsl', path: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu'] };
-    let servers = 0;
+    // Stands in for the server inside the distro as Windows reaches it (localhost forwarding).
+    const srv = http.createServer((req, res) => {
+      if (req.url!.startsWith('/api/event')) return void res.writeHead(200, { 'content-type': 'text/event-stream' }).write(':\n\n');
+      res.writeHead(200).end('{"data":[]}');
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const url = `http://127.0.0.1:${(srv.address() as { port: number }).port}`;
+    const plans: unknown[] = [];
+    const children: Array<{ ended: boolean }> = [];
+    let reachable = true;
+    /** The child in the distro dies before it says "listening" (the script itself failed there). */
+    let dies = false;
+    let root = 'C:\\ws';
     const r = rig({
       platform: 'win32',
       windowsBuild: 22631,
-      env: { SystemRoot: 'C:\\Windows' },
-      getWorkspaceRoot: () => 'C:\\ws',
+      env: { SystemRoot: 'C:\\Windows', WSLENV: 'X/p' },
+      getWorkspaceRoot: () => root,
       loadPty: () => ({ spawn: (file, args, o) => (spawns.push({ file, args, env: o.env as Record<string, string> }), fakePty) }),
       detect: async () => [{ ...SHELLS[0], id: 'pwsh', kind: 'pwsh' }, wsl],
       detectClaude: async () => ({ available: false }),
       detectOpencode: async (w) => (w ? { available: true, via: 'wsl', distro: w.distro, path: '/home/me/.opencode/bin/opencode' } : { available: false, hint: 'native hint' }),
       follow: { dir: 'C:\\data\\f', foldCase: () => true, inside: async () => true },
-      opencodeSpawn: () => {
-        servers++;
-        throw new Error('no server inside WSL');
+      fs: { stat: async () => ({ isDirectory: () => true }), realpath: async (p: string) => p } as never,
+      opencodeSpawn: (_bin, _cwd, _env, plan) => {
+        plans.push(plan);
+        const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { end: () => void (child.ended = true) }), ended: false, kill() {}, exitCode: null, signalCode: null });
+        children.push(child);
+        setTimeout(() => child.stdout.emit('data', Buffer.from(`one-cwd /mnt/c/ws\nserver listening on ${reachable ? url : 'http://127.0.0.1:9'}\nserver password secret-pass-12345\n`)), 0);
+        return child as never;
       },
     });
-    const t = await r.svc.spawn(1, { preset: 'opencode', prefer: 'wsl:Ubuntu', follow: true });
-    expect(t.shell).toMatchObject({ id: 'opencode', kind: 'opencode', detail: 'AI assistant · in Ubuntu (WSL)' });
-    expect(t.notice).toMatch(/inside WSL.*not followed/);
-    expect(servers).toBe(0);
-    expect(spawns[0].file).toBe('C:\\Windows\\System32\\wsl.exe');
+    try {
+      const t = await r.svc.spawn(1, { preset: 'opencode', prefer: 'wsl:Ubuntu', follow: true });
+      expect(t.shell).toMatchObject({ id: 'opencode', kind: 'opencode', detail: 'AI assistant · in Ubuntu (WSL)' });
+      expect(t.notice).toBeUndefined();
+      // The server: the fixed script inside the distro, in the folder's Linux path.
+      expect(plans[0]).toEqual({ file: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', OPENCODE_WSL_SERVE, '/mnt/c/ws', '/home/me/.opencode/bin/opencode'], linuxRoot: '/mnt/c/ws' });
+      // The TUI: attached by address (an argument), the password only in its environment, carried over by WSLENV.
+      expect(spawns[0].file).toBe('C:\\Windows\\System32\\wsl.exe');
+      expect(spawns[0].args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec "$1" --server "$2"', '/mnt/c/ws', '/home/me/.opencode/bin/opencode', url]);
+      expect(JSON.stringify(spawns[0].args)).not.toContain('secret-pass-12345');
+      expect(spawns[0].env.OPENCODE_PASSWORD).toBe('secret-pass-12345');
+      expect(spawns[0].env.WSLENV).toBe('X/p:OPENCODE_PASSWORD');
+      // The terminal ends: the server is ended through its stdin.
+      r.svc.kill(1, t.id);
+      r.svc.dispose();
+      expect(children[0].ended).toBe(true);
+    } finally {
+      srv.closeAllConnections();
+      srv.close();
+    }
+
+    // Main cannot reach the server (no localhost forwarding): plain opencode, the server is ended, the user is told.
+    reachable = false;
+    spawns.length = 0;
+    const r2 = rig({
+      platform: 'win32',
+      windowsBuild: 22631,
+      env: { SystemRoot: 'C:\\Windows' },
+      getWorkspaceRoot: () => root,
+      loadPty: () => ({ spawn: (file, args, o) => (spawns.push({ file, args, env: o.env as Record<string, string> }), fakePty) }),
+      detect: async () => [{ ...SHELLS[0], id: 'pwsh', kind: 'pwsh' }, wsl],
+      detectClaude: async () => ({ available: false }),
+      detectOpencode: async (w) => (w ? { available: true, via: 'wsl', distro: w.distro, path: '/home/me/.opencode/bin/opencode' } : { available: false, hint: 'native hint' }),
+      follow: { dir: 'C:\\data\\f', foldCase: () => true, inside: async () => true },
+      fs: { stat: async () => ({ isDirectory: () => true }), realpath: async (p: string) => p } as never,
+      opencodeSpawn: (_bin, _cwd, _env, plan) => {
+        plans.push(plan);
+        const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { end: () => void (child.ended = true) }), ended: false, kill() {}, exitCode: null, signalCode: null });
+        children.push(child);
+        setTimeout(() => {
+          if (dies) {
+            child.stdout.emit('data', Buffer.from('one-cwd /mnt/c/ws\n'));
+            child.emit('exit', 1); // the distro side is up, the server never reports itself
+            return;
+          }
+          child.stdout.emit('data', Buffer.from('server listening on http://127.0.0.1:9\nserver password secret-pass-12345\n'));
+        }, 0);
+        return child as never;
+      },
+    });
+    const t2 = await r2.svc.spawn(1, { preset: 'opencode', prefer: 'wsl:Ubuntu', follow: true });
+    // It answers inside the distro; only the reach from Windows failed — that is what the toast has to say.
+    expect(t2.notice).toMatch(/inside WSL.*answers there.*cannot reach it from Windows.*not followed/s);
+    expect(children[1].ended).toBe(true);
     expect(spawns[0].args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec "$1"', '/mnt/c/ws', '/home/me/.opencode/bin/opencode']);
     expect(Object.keys(spawns[0].env).filter((k) => /OPENCODE|WSLENV/i.test(k))).toEqual([]);
-    // Follow off: the same start, nothing to say.
-    expect((await r.svc.spawn(1, { preset: 'opencode', prefer: 'wsl:Ubuntu' })).notice).toBeUndefined();
+    // Follow off: the same start, no server, nothing to say.
+    const before = plans.length;
+    expect((await r2.svc.spawn(1, { preset: 'opencode', prefer: 'wsl:Ubuntu' })).notice).toBeUndefined();
+    expect(plans.length).toBe(before);
+    // A folder the distro cannot name (another distro's): no server is started, and the toast says that, not "unreachable".
+    root = '\\\\wsl.localhost\\Debian\\home\\me';
+    expect((await r2.svc.spawn(1, { preset: 'opencode', prefer: 'wsl:Ubuntu', follow: true })).notice).toMatch(/inside WSL.*no path inside that distro.*not followed/s);
+    expect(plans.length).toBe(before);
+    root = 'C:\\ws';
+    // The server dies there before it reports itself: the toast says it never reported.
+    dies = true;
+    expect((await r2.svc.spawn(1, { preset: 'opencode', prefer: 'wsl:Ubuntu', follow: true })).notice).toMatch(/inside WSL.*did not report itself.*not followed/s);
+    expect(plans.length).toBe(before + 1);
+    expect(children[children.length - 1].ended).toBe(true);
+    dies = false;
     // The default shell is not WSL: the native answer decides (here: not installed).
-    await expect(r.svc.spawn(1, { preset: 'opencode', prefer: 'pwsh', follow: true })).rejects.toMatchObject({ code: 'ENOENT', message: 'native hint' });
-  });
+    await expect(r2.svc.spawn(1, { preset: 'opencode', prefer: 'pwsh', follow: true })).rejects.toMatchObject({ code: 'ENOENT', message: 'native hint' });
+    r2.svc.dispose();
+  }, 15_000);
 
   it('Claude lookup follows the preferred shell (WSL distro → inside it) and is cached per distro', async () => {
     const calls: Array<string | null> = [];

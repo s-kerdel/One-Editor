@@ -33,7 +33,7 @@ export interface ClaudeInfo {
 }
 
 /** Opencode CLI (`opencode`) — started like Claude Code; with "Follow Opencode's edits" against a server One owns
- *  (main/terminal-opencode.ts; native only: inside WSL it starts without that server). */
+ *  (main/terminal-opencode.ts), native or inside the default shell's WSL distro. */
 export interface OpencodeInfo {
   available: boolean;
   /** 'wsl': runs inside `distro` (the default shell is that WSL distro). */

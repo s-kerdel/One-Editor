@@ -342,8 +342,29 @@ export function opencodeHint(platform: string, distro?: string): string {
   return `Opencode is not installed. In ${where}: ${opencodeInstall(platform, !!distro)} — then refresh.`;
 }
 
-/** Shown once (toast) when "Follow Opencode's edits" is on but opencode runs inside WSL. */
-export const OPENCODE_WSL_NO_FOLLOW = 'Opencode runs inside WSL here: its edits are not followed and not listed under AI changes (native installs only).';
+/**
+ * Which part of the WSL follow start failed: no Linux name for the folder (`folder`), no child started (`spawn`),
+ * it never reported itself there (`answer`), or it answers there but main cannot reach it from Windows (`reach`).
+ * A wrong one sends the user to fix something that is not broken.
+ */
+export type WslFollowFail = 'folder' | 'spawn' | 'answer' | 'reach';
+
+/** Started there, never said "listening" there. */
+export const OPENCODE_WSL_NO_FOLLOW =
+  'Opencode runs inside WSL here, but its private server there did not report itself: its edits are not followed and not listed under AI changes. The first start of a distro takes a while — try again.';
+/** Answers there; WSL does not forward that port to Windows. */
+export const OPENCODE_WSL_NO_REACH =
+  'Opencode runs inside WSL here and its private server answers there, but One cannot reach it from Windows: WSL does not forward its localhost here. Its edits are not followed and not listed under AI changes.';
+/** The open folder has no path in that distro. */
+export const OPENCODE_WSL_NO_FOLDER =
+  'Opencode runs inside WSL here, but this folder has no path inside that distro, so One cannot run its private server there: its edits are not followed and not listed under AI changes. Open the folder as \\wsl.localhost\\<distro>\\… instead.';
+
+/** The toast for one failed WSL follow start. */
+export function wslFollowNotice(why: WslFollowFail | undefined): string {
+  if (why === 'reach') return OPENCODE_WSL_NO_REACH;
+  if (why === 'folder') return OPENCODE_WSL_NO_FOLDER;
+  return OPENCODE_WSL_NO_FOLLOW;
+}
 
 /** Fixed script (nothing is built into it): PATH of the user's login shell, then the installers' usual folders. */
 export const OPENCODE_WSL_LOOKUP = 'command -v opencode || for p in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode" "$HOME/.npm-global/bin/opencode"; do [ -x "$p" ] && { echo "$p"; break; }; done';
@@ -389,19 +410,55 @@ export function planOpencodeServe(bin: string, o: { platform: string; env: Recor
   return { file: comspec, args: ['/D', cmdTail('/C', `${cmdQuote(bin)} ${args.join(' ')}`)], verbatim: true };
 }
 
+/** The line the WSL serve script prints first: the folder without links, as opencode will name it. */
+export const OPENCODE_WSL_CWD = /^one-cwd (\/[^\r\n]{0,4095})\r?$/m;
+
+/**
+ * Fixed script (nothing is built into it; "$0" = the folder, "$1" = the path the lookup found) that runs One's
+ * private server INSIDE a WSL distro:
+ *  - no server in another folder (`cd` must work) and no password of the user's in its environment;
+ *  - the server gets a session of its own (`setsid`, job control off so `$!` is the server), so its whole
+ *    process group — the agent's shell commands too — is ended at once;
+ *  - `cat` holds the script on stdin: main closing that pipe, wsl.exe being killed or One crashing all read as
+ *    end-of-file inside the distro, and the EXIT trap then ends the server. Nothing has to reach in to stop it;
+ *  - **no single quotes anywhere**: `wsl.exe` re-quotes every argument for the distro with `'`, so a `'` in the
+ *    script ends that quote there — bash waits for the rest of it and the server is never started.
+ */
+export const OPENCODE_WSL_SERVE =
+  'cd -- "$0" 2>/dev/null || exit 1; set +m; unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD; printf "one-cwd %s\\n" "$(pwd -P)"; ' +
+  'if command -v setsid >/dev/null 2>&1; then setsid "$1" serve --hostname 127.0.0.1 --port 0 </dev/null & g=-$!; ' +
+  'else "$1" serve --hostname 127.0.0.1 --port 0 </dev/null & g=$!; fi; ' +
+  'trap "kill -- \\$g 2>/dev/null" EXIT; trap "exit 0" HUP INT TERM; cat >/dev/null';
+
+/**
+ * How main starts its private server inside the WSL distro opencode was found in (an interactive login bash like
+ * the TUI: the user's PATH). null: the folder has no path inside that distro (another distro's, a network share).
+ */
+export function planOpencodeServeWsl(info: OpencodeInfo, root: string, wslExe: string): { file: string; args: string[]; linuxRoot: string } | null {
+  if (info.via !== 'wsl' || !info.distro || !info.path) return null;
+  const linuxRoot = wslPathFor(root, info.distro);
+  if (!linuxRoot) return null;
+  return { file: wslExe, args: ['-d', info.distro, '--cd', linuxRoot, '-e', 'bash', '-lic', OPENCODE_WSL_SERVE, linuxRoot, info.path], linuxRoot };
+}
+
 /**
  * How to start the Opencode TUI: plain `opencode` in the folder, or — with One's private server (the
  * "Follow Opencode's edits" setting) — `opencode --server <url>`, the generated password in the terminal's
  * environment only (never in argv: the process list shows argv).
  * Inside WSL (like planClaude): an interactive login bash, cd'ing back to the folder after the rc files, then exec
- * of the path the lookup found (an argument, not script text). Always plain there: One's server is native only,
- * so `server` is ignored and no password crosses into the distro.
+ * of the path the lookup found (an argument, not script text). With a server (it runs in the same distro, so its
+ * 127.0.0.1 address is the TUI's own loopback): the address is one more argument and the password crosses as an
+ * environment variable through WSLENV, like Claude's ONE_FOLLOW_DIR.
  */
 export function planOpencode(info: OpencodeInfo, cwd: string, o: { platform: string; env: Record<string, string | undefined>; wslExe?: string; server?: { url: string; password: string } }): SpawnPlan {
   const win = o.platform === 'win32';
   if (info.via === 'wsl' && info.distro && o.wslExe) {
     const inside = wslPathFor(cwd, info.distro);
-    return { file: o.wslExe, args: ['-d', info.distro, '--cd', inside ?? cwd, '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec "$1"', inside ?? '.', info.path ?? 'opencode'], cwd, env: {} };
+    const head = ['-d', info.distro, '--cd', inside ?? cwd, '-e', 'bash', '-lic'];
+    const tail = [inside ?? '.', info.path ?? 'opencode'];
+    if (!o.server) return { file: o.wslExe, args: [...head, 'cd -- "$0" 2>/dev/null; exec "$1"', ...tail], cwd, env: {} };
+    const wslenv = [envGet(o.env, 'WSLENV', true), 'OPENCODE_PASSWORD'].filter(Boolean).join(':');
+    return { file: o.wslExe, args: [...head, 'cd -- "$0" 2>/dev/null; exec "$1" --server "$2"', ...tail, o.server.url], cwd, env: { OPENCODE_PASSWORD: o.server.password, WSLENV: wslenv } };
   }
   const exe = info.path!;
   const P = pathFor(o.platform);

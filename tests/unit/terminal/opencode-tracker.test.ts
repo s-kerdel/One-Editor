@@ -6,6 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { EventEmitter, getEventListeners } from 'node:events';
+import { spawn } from 'node:child_process';
+import { OPENCODE_WSL_SERVE } from '../../../src/main/terminal-shells';
 import { OpencodeTracker, parseHandshake } from '../../../src/main/terminal-opencode';
 import type { TerminalChangesEvent, TerminalFollowEvent } from '../../../src/shared/terminal';
 
@@ -237,5 +239,144 @@ describe('tracker', () => {
     expect(envSeen.OPENCODE_SERVER_PASSWORD).toBeUndefined();
     tr.close(1);
     expect(child.killed).toBe(true);
+  });
+
+  // ---- inside WSL (One on Windows, opencode in a distro) ----
+  const wslPlan = { file: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu'], linuxRoot: '/ws' };
+  const winFolder = { bin: '/usr/bin/opencode', root: '\\\\wsl.localhost\\Ubuntu\\ws', platform: 'win32', foldCase: false, env: {} };
+  const fakeChild = () => {
+    const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { end: () => void (child.ended = true) }), ended: false, killed: false, kill: () => (child.killed = true), exitCode: null, signalCode: null });
+    return child;
+  };
+
+  it('WSL: tracks the folder by its Linux name once the server answers; the TUI keeps the server\'s own address', async () => {
+    const f = await fake();
+    const child = fakeChild();
+    const follow: TerminalFollowEvent[] = [];
+    const changes: TerminalChangesEvent[] = [];
+    let planSeen: unknown;
+    const tr = new OpencodeTracker({ inside: async () => true, emitFollow: (_i, e) => follow.push(e), emitChanges: (_i, e) => changes.push(e), spawnServer: (_b, _c, _e, wsl) => ((planSeen = wsl), child as never) });
+    const p = tr.open(1, { ...winFolder, wsl: wslPlan });
+    child.stdout.emit('data', Buffer.from(`rc noise\none-cwd /ws\nserver listening on ${f.url}\nserver password ${PASS}\n`));
+    expect(await p).toEqual({ url: f.url, password: PASS });
+    expect(planSeen).toBe(wslPlan);
+    // The proof request came first, authenticated, for the Linux folder.
+    expect(f.seen[0]).toEqual({ method: 'GET', url: '/api/session?directory=%2Fws&limit=1', auth: AUTH });
+    // Linux paths from the recording (/ws/…) land in the Windows-named folder as workspace-relative paths.
+    await until(() => follow.some((e) => e.kind === 'stop') && changes.length > 0);
+    const paths = follow.filter((e) => e.path).map((e) => e.path!);
+    expect(paths.length).toBeGreaterThan(0);
+    expect(paths.every((x) => !x.startsWith('/') && !x.includes('\\'))).toBe(true);
+    expect(f.seen.every((r) => r.method === 'GET' && r.auth === AUTH)).toBe(true);
+    // Ended by closing stdin (the script in the distro ends the server), not by killing wsl.exe first.
+    tr.close(1);
+    expect(child.ended).toBe(true);
+    expect(child.killed).toBe(false);
+    child.emit('exit', 0);
+  });
+
+  it('WSL: a slow server start gets its own wait once the distro script answered; a script that never answers is "answer"', async () => {
+    const f = await fake();
+    // Short waits (real: 15 s / 40 s): which deadline applies after which line.
+    const slow = fakeChild();
+    const whyA: string[] = [];
+    const a = new OpencodeTracker({ inside: async () => true, emitFollow: () => {}, emitChanges: () => {}, spawnServer: () => slow as never, handshakeMs: 150, wslHandshakeMs: 1500 });
+    const p = a.open(1, { ...winFolder, wsl: wslPlan }, (w) => void whyA.push(w));
+    slow.stdout.emit('data', Buffer.from('rc noise\none-cwd /ws\n')); // the script is up
+    setTimeout(() => slow.stdout.emit('data', Buffer.from(`server listening on ${f.url}\nserver password ${PASS}\n`)), 400); // serve needs longer there
+    expect(await p).toEqual({ url: f.url, password: PASS }); // the native 15 s deadline alone would have given up here
+    expect(whyA).toEqual([]);
+    a.dispose();
+
+    // Without that line only the short wait runs: a start that never reports itself is written off, quickly.
+    const dead = fakeChild();
+    const whyB: string[] = [];
+    const b = new OpencodeTracker({ inside: async () => true, emitFollow: () => {}, emitChanges: () => {}, spawnServer: () => dead as never, handshakeMs: 150, wslHandshakeMs: 1500 });
+    const q = b.open(2, { ...winFolder, wsl: wslPlan }, (w) => void whyB.push(w));
+    setTimeout(() => dead.stdout.emit('data', Buffer.from(`server listening on ${f.url}\nserver password ${PASS}\n`)), 400);
+    expect(await q).toBeNull();
+    expect(whyB).toEqual(['answer']);
+    expect(dead.ended).toBe(true); // the half-started server is ended, not left in the distro
+    dead.emit('exit', 0);
+    b.dispose();
+  });
+
+  it('WSL: falls back to the IPv6 loopback when 127.0.0.1 is not forwarded; unreachable = no tracking, server ended', async () => {
+    const f = await fake();
+    const port = new URL(f.url).port;
+    const asked: string[] = [];
+    // Stands in for WSL forwarding that only listens on [::1]: 127.0.0.1 is refused, [::1] reaches the server.
+    const v6only: typeof fetch = (input, init) => {
+      const u = String(input);
+      asked.push(u);
+      return u.startsWith('http://[::1]:') ? fetch(u.replace('[::1]', '127.0.0.1'), init) : Promise.reject(new Error('ECONNREFUSED'));
+    };
+    const child = fakeChild();
+    const changes: TerminalChangesEvent[] = [];
+    const tr = new OpencodeTracker({ inside: async () => true, emitFollow: () => {}, emitChanges: (_i, e) => changes.push(e), spawnServer: () => child as never, fetch: v6only });
+    const p = tr.open(1, { ...winFolder, wsl: wslPlan });
+    child.stdout.emit('data', Buffer.from(`server listening on ${f.url}\nserver password ${PASS}\n`));
+    expect(await p).toEqual({ url: f.url, password: PASS }); // the TUI (inside the distro) still gets 127.0.0.1
+    expect(asked.slice(0, 2)).toEqual([`http://127.0.0.1:${port}/api/session?directory=%2Fws&limit=1`, `http://[::1]:${port}/api/session?directory=%2Fws&limit=1`]);
+    await until(() => changes.length > 0);
+    expect(asked.slice(2).every((u) => u.startsWith(`http://[::1]:${port}/`))).toBe(true);
+    tr.dispose();
+
+    const dead = fakeChild();
+    const why: string[] = [];
+    const none = new OpencodeTracker({ inside: async () => true, emitFollow: () => {}, emitChanges: () => {}, spawnServer: () => dead as never, fetch: () => Promise.reject(new Error('ECONNREFUSED')) });
+    const q = none.open(2, { ...winFolder, wsl: wslPlan }, (w) => void why.push(w));
+    dead.stdout.emit('data', Buffer.from(`server listening on ${f.url}\nserver password ${PASS}\n`));
+    expect(await q).toBeNull();
+    expect(none.count()).toBe(0);
+    expect(why).toEqual(['reach']); // it answered there: only the reach from Windows failed (a different toast)
+    expect(dead.ended).toBe(true);
+    dead.emit('exit', 0);
+  });
+
+  it.skipIf(process.platform === 'win32')('WSL serve script (real bash): reports the link-free folder; closing stdin ends the server AND what it started', async () => {
+    const f = await fake();
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'oc-wsl-')));
+    const link = dir + '-link';
+    fs.symlinkSync(dir, link);
+    const bin = path.join(dir, 'opencode');
+    // Stands in for `opencode serve`: checks its arguments + environment, starts a child, says the handshake, stays.
+    fs.writeFileSync(bin, `#!/bin/sh\n[ "$*" = "serve --hostname 127.0.0.1 --port 0" ] || exit 9\n[ -z "$OPENCODE_PASSWORD$OPENCODE_SERVER_PASSWORD" ] || exit 8\nsleep 300 &\necho $! > child.pid\necho $$ > server.pid\necho "server listening on ${f.url}"\necho "server password ${PASS}"\nwait\n`, { mode: 0o755 });
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const seenDirs: string[] = [];
+    const tr = new OpencodeTracker({
+      inside: async () => true,
+      emitFollow: () => {},
+      emitChanges: () => {},
+      backoffMs: [5000],
+      // wsl.exe … -e bash -lic SCRIPT <folder> <path>, minus wsl.exe and the user's rc files.
+      spawnServer: (b, _c, env) => spawn('bash', ['-c', OPENCODE_WSL_SERVE, link, b], { env: { ...env, OPENCODE_PASSWORD: 'leak', OPENCODE_SERVER_PASSWORD: 'leak2' }, stdio: ['pipe', 'pipe', 'pipe'] }),
+      fetch: (input, init) => (seenDirs.push(new URL(String(input)).searchParams.get('directory') ?? ''), fetch(input, init)),
+    });
+    let pids: number[] = [];
+    try {
+      expect(await tr.open(1, { ...winFolder, bin, env: { PATH: process.env.PATH }, wsl: { ...wslPlan, linuxRoot: link } })).toEqual({ url: f.url, password: PASS });
+      expect(seenDirs[0]).toBe(dir); // `pwd -P`: the name opencode itself uses, not the link
+      pids = ['server.pid', 'child.pid'].map((n) => Number(fs.readFileSync(path.join(dir, n), 'utf8')));
+      expect(pids.every((x) => x > 1 && alive(x))).toBe(true);
+      tr.close(1); // only closes stdin
+      await until(() => pids.every((x) => !alive(x)), 4000);
+    } finally {
+      for (const x of pids) {
+        try {
+          process.kill(x, 'SIGKILL');
+        } catch {}
+      }
+      tr.dispose();
+      fs.rmSync(link, { force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

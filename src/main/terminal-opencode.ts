@@ -9,15 +9,26 @@
 // file, the log or the child's environment — a password in the server's env reaches the agent's shell
 // commands). Main only issues GETs, to the literal 127.0.0.1, redirects are errors. Every path is checked
 // against the open folder (lexical rule in the model, the workspace's real-path rule here).
+// Inside WSL (One on Windows, opencode in a distro): the server is started in that distro through wsl.exe by a
+// fixed script that ends it when its stdin closes; main reaches it over WSL's localhost forwarding and only tracks
+// it after an authenticated request proved that; the folder is then tracked by its Linux name.
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import type { TerminalChangesEvent, TerminalFollowEvent } from '../shared/terminal';
 import { addSession, diffQuery, emptyState, isBusy, onDiff, onEvent, OPENCODE_EVENT_TYPES, OPENCODE_ID, worktreeOf, type OpencodeCtx, type OpencodeState } from './terminal-opencode-model';
 import { ChangesSender, isObj } from './terminal-changes';
 import { mapFollowPath } from './terminal-follow';
-import { planOpencodeServe } from './terminal-shells';
+import { OPENCODE_WSL_CWD, planOpencodeServe, type WslFollowFail } from './terminal-shells';
 
-const LOOPBACK = /^http:\/\/127\.0\.0\.1:(\d{1,5})$/;
+// [::1] only ever comes from `reach` (WSL's localhost forwarding may listen on the IPv6 loopback alone).
+const LOOPBACK = /^http:\/\/(?:127\.0\.0\.1|\[::1\]):(\d{1,5})$/;
 const HANDSHAKE_MS = 15_000;
+/**
+ * WSL, once the script printed `one-cwd`: only `opencode serve` is missing, and there its start costs far more than
+ * a native one (its own runtime + the folder over drvfs). The 15 s alone writes off a start that works.
+ */
+const WSL_SERVER_MS = 40_000;
+/** WSL: rounds of "can main reach the server" (the Windows side of the forwarding may come up a moment after the listener). */
+const REACH = { tries: 3, gapMs: 500, requestMs: 4000 };
 /** One SSE event larger than this ends the stream (and reconnects with a resync). */
 const MAX_EVENT_BYTES = 4 * 1024 * 1024;
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -33,7 +44,7 @@ const MAX_DORMANT = 500;
 export function parseHandshake(text: string): { url: string; password: string } | null {
   const url = /server listening on (http:\/\/127\.0\.0\.1:\d{1,5})(?![\d.])/.exec(text)?.[1];
   const password = /server password (\S{8,200})/.exec(text)?.[1];
-  return url && password && LOOPBACK.test(url) ? { url, password } : null;
+  return url && password ? { url, password } : null;
 }
 
 export interface OpencodeServer {
@@ -47,12 +58,15 @@ export interface OpencodeOptions {
   emitFollow: (terminalId: number, e: TerminalFollowEvent) => void;
   emitChanges: (terminalId: number, e: TerminalChangesEvent) => void;
   /** Test hook: the server process (default: `opencode serve` in a process group of its own). */
-  spawnServer?: (bin: string, cwd: string, env: NodeJS.ProcessEnv) => ChildProcess;
+  spawnServer?: (bin: string, cwd: string, env: NodeJS.ProcessEnv, wsl?: OpencodeWslPlan) => ChildProcess;
   /** Windows: kill a process tree (the server may sit behind cmd.exe + node: killing the first process alone leaves it running). */
   treeKill?: (pid: number) => void;
   fetch?: typeof fetch;
   /** Test hook: reconnect waits. */
   backoffMs?: number[];
+  /** Test hooks: the two handshake waits (native / WSL). */
+  handshakeMs?: number;
+  wslHandshakeMs?: number;
 }
 
 /** Where the tracked folder is: as One names it, and without links (opencode reports its own, link-free working folder). */
@@ -63,8 +77,19 @@ export interface OpencodeFolder {
   foldCase: boolean;
 }
 
-/** How a server child is ended: its process group (ours, POSIX), its tree (Windows), or just it (an injected one). */
-type KillHow = 'plain' | 'group' | 'tree';
+/** The server runs inside a WSL distro (`planOpencodeServeWsl`): started through wsl.exe, the folder by its Linux name. */
+export interface OpencodeWslPlan {
+  file: string;
+  args: string[];
+  linuxRoot: string;
+}
+
+/**
+ * How a server child is ended: its process group (ours, POSIX), its tree (Windows), just it (an injected one), or
+ * — inside WSL — by closing its stdin (the script in the distro then ends the server's group; killing wsl.exe
+ * alone is not known to end Linux processes), with the tree kill of wsl.exe as the hard stop.
+ */
+type KillHow = 'plain' | 'group' | 'tree' | 'wsl';
 
 interface SessionInfo {
   parent: string | null;
@@ -101,51 +126,119 @@ export class OpencodeTracker {
   /**
    * Starts the private server for terminal `id` and begins tracking; null when it cannot start (the terminal then
    * runs plain opencode, without the change list). The password is in the result for the terminal's own environment only.
+   * `onFail` names the part that failed: that is the toast the user gets.
    */
-  async open(id: number, a: OpencodeFolder & { bin: string; env: NodeJS.ProcessEnv }): Promise<OpencodeServer | null> {
+  async open(
+    id: number,
+    a: OpencodeFolder & { bin: string; env: NodeJS.ProcessEnv; wsl?: OpencodeWslPlan | null },
+    onFail?: (why: WslFollowFail) => void,
+  ): Promise<OpencodeServer | null> {
     const env = { ...a.env };
     for (const k of Object.keys(env)) if (/^OPENCODE_(SERVER_)?PASSWORD$/i.test(k)) delete env[k];
     const win = a.platform === 'win32';
     let child: ChildProcess;
     try {
-      if (this.o.spawnServer) child = this.o.spawnServer(a.bin, a.root, env);
+      if (this.o.spawnServer) child = this.o.spawnServer(a.bin, a.root, env, a.wsl ?? undefined);
+      // No cwd: wsl.exe gets the folder as --cd (a \\wsl.localhost folder need not be a valid Windows working folder).
+      else if (a.wsl) child = nodeSpawn(a.wsl.file, a.wsl.args, { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       else {
         // POSIX: a process group of its own, so the commands the agent started go with the server.
         const plan = planOpencodeServe(a.bin, { platform: a.platform, env });
         child = nodeSpawn(plan.file, plan.args, { cwd: a.root, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, windowsVerbatimArguments: plan.verbatim, detached: !win });
       }
     } catch {
+      onFail?.('spawn');
       return null;
     }
-    const how: KillHow = this.o.spawnServer ? 'plain' : win ? 'tree' : 'group';
+    const how: KillHow = a.wsl ? 'wsl' : this.o.spawnServer ? 'plain' : win ? 'tree' : 'group';
+    child.stdin?.on('error', () => {}); // WSL: the pipe may already be gone when it is closed
+    let linuxReal: string | null = null;
     const server = await new Promise<OpencodeServer | null>((resolve) => {
       let out = '';
       let settled = false;
+      let serverWait = false;
       const done = (v: OpencodeServer | null) => {
         if (settled) return;
         settled = true;
+        // The last such line is the script's own (the rc files ran before it).
+        if (v && a.wsl) linuxReal = [...out.matchAll(new RegExp(OPENCODE_WSL_CWD.source, 'gm'))].pop()?.[1] ?? null;
         out = '';
         clearTimeout(timer);
         resolve(v);
       };
-      const timer = setTimeout(() => done(null), HANDSHAKE_MS);
+      let timer = setTimeout(() => done(null), this.o.handshakeMs ?? HANDSHAKE_MS);
       // Both pipes stay drained for the server's whole life (a full pipe would block it); never logged (paths, the password).
       child.stdout?.on('data', (c: Buffer) => {
         if (settled) return;
         out = (out + c.toString('utf8')).slice(-8192);
         const h = parseHandshake(out);
-        if (h) done(h);
+        if (h) {
+          done(h);
+          return;
+        }
+        // WSL: the script answered — only the server is slow: its own wait.
+        if (a.wsl && !serverWait && OPENCODE_WSL_CWD.test(out)) {
+          serverWait = true;
+          clearTimeout(timer);
+          timer = setTimeout(() => done(null), this.o.wslHandshakeMs ?? WSL_SERVER_MS);
+        }
       });
       child.stderr?.on('data', () => {});
       child.on('error', () => done(null));
       child.on('exit', () => done(null));
     });
     if (!server) {
+      onFail?.('answer');
       this.kill(child, how);
       return null;
     }
-    this.attach(id, server, a, child, how);
-    return server;
+    if (!a.wsl) {
+      this.attach(id, server, a, child, how);
+      return server;
+    }
+    // Inside WSL the files have Linux names, and main talks to the server through WSL's localhost forwarding:
+    // tracked only once that provably works (else the caller starts plain opencode and says so).
+    const folder: OpencodeFolder = { root: a.wsl.linuxRoot, realRoot: linuxReal, platform: 'linux', foldCase: a.foldCase };
+    const url = await this.reach(server, folder.realRoot || folder.root);
+    if (!url) {
+      onFail?.('reach');
+      this.kill(child, how);
+      return null;
+    }
+    this.attach(id, { url, password: server.password }, folder, child, how);
+    return this.tracks.has(id) ? server : null; // the TUI runs in the distro: it takes the server's own address
+  }
+
+  /**
+   * WSL: the address main reaches the server at — the one it printed, else the IPv6 loopback with the same port —
+   * proven by an authenticated request it answers (so it is the server that knows our password), or null.
+   */
+  private async reach(server: OpencodeServer, dir: string): Promise<string | null> {
+    const f = this.o.fetch ?? fetch;
+    const ask = async (url: string) => {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), REACH.requestMs);
+      try {
+        const r = await f(`${url}/api/session?directory=${encodeURIComponent(dir)}&limit=1`, {
+          method: 'GET',
+          redirect: 'error',
+          signal: ac.signal,
+          headers: { authorization: 'Basic ' + Buffer.from('opencode:' + server.password).toString('base64'), accept: 'application/json' },
+        });
+        void r.body?.cancel().catch(() => {});
+        return r.ok;
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    for (let i = 0; i < REACH.tries; i++) {
+      if (i) await new Promise((r) => setTimeout(r, REACH.gapMs));
+      // One after the other: the password goes to the second address only when the first did not answer.
+      for (const url of [server.url, server.url.replace('//127.0.0.1:', '//[::1]:')]) if (await ask(url)) return url;
+    }
+    return null;
   }
 
   /** Tracks an already running server (tests, or `open`). */
@@ -208,6 +301,21 @@ export class OpencodeTracker {
   }
 
   private kill(c: ChildProcess, how: KillHow) {
+    if (how === 'wsl') {
+      try {
+        c.stdin?.end(); // end-of-file inside the distro: the script ends the server and everything it started
+      } catch {}
+      if (c.exitCode !== null || c.signalCode !== null) return;
+      const hard = setTimeout(() => {
+        try {
+          if (c.pid) this.o.treeKill?.(c.pid);
+          c.kill();
+        } catch {}
+      }, 2000);
+      hard.unref?.();
+      c.once('exit', () => clearTimeout(hard));
+      return;
+    }
     if (how === 'tree' && c.pid) {
       try {
         this.o.treeKill?.(c.pid);

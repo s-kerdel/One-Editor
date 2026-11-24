@@ -838,7 +838,7 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 - **Follow it:** Settings → Terminal → **Follow Opencode's edits (preview)**, or palette → **"Opencode: Toggle follow edits"**. Off by default; new Opencode terminals only.
 - **Off:** Opencode starts exactly as in any terminal. **On:** One starts a private Opencode server on this computer for that terminal and stops it with the terminal.
 - **Each switch is for its own assistant.** Claude on and Opencode off (or the other way round) is fine.
-- **Windows + WSL:** when your ★ default shell is a WSL distro, One looks for Opencode inside that distro and starts it there. Following is not available inside WSL yet: Opencode starts plain and One says so once.
+- **Windows + WSL:** when your ★ default shell is a WSL distro, One looks for Opencode inside that distro and starts it there — **and its private server runs in that distro too**. One reaches it through WSL's own localhost forwarding, and stops it with the terminal. If it cannot, Opencode still starts as a plain terminal and One names **which part** failed: this folder has no path inside that distro, the server did not report itself there, or WSL does not forward its localhost to Windows.
 
 **AI changes** (sidebar, `Ctrl+Alt+A`) lists what the assistant changed, **turn by turn**.
 
@@ -1574,6 +1574,7 @@ After a paste a small **"Paste as…"** chip appears for a few seconds. Ignore i
 | **Need more history in a terminal** | Settings → Terminal → **Scrollback** (each 1000 lines ≈ 1.5–2 MB per terminal) |
 | **A shell is missing in ▾** | Install it, then **▾ → Refresh list** |
 | **Claude Code says "Not installed"** | **Copy** the install command in the ▾ card, run it, check `claude --version`, then **Refresh list** |
+| **Opencode in WSL: a toast about its private server** | Opencode runs; only the change list is missing. **"no path inside that distro"** → open the folder as `\\wsl.localhost\<distro>\…` (not a network share or another distro's folder). **"did not report itself"** → the first start of a distro is slow: try again. **"cannot reach it from Windows"** → WSL is not forwarding its localhost: in `%USERPROFILE%\.wslconfig` set `[wsl2]` **`networkingMode=mirrored`** (or `localhostForwarding=true`), then `wsl --shutdown` and try again |
 | **`` Ctrl+` `` does nothing** | Some keyboard layouts have no backtick key: palette → **"Terminal: Toggle panel"** |
 | **Git is slow on a `\\wsl.localhost` folder** | Settings → Files → **Run git inside WSL** must be **Auto**, and the distro needs git (`sudo apt install git` inside WSL) |
 | **Marks look stale after a big checkout** | Run `git status` once in a terminal: git then refreshes its index and every later check is fast again |
