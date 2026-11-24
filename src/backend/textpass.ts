@@ -12,6 +12,18 @@ const READ_AHEAD_CHARS = 8 << 20;
 /** A page waits at most this long to fill up once it holds something. */
 const PAGE_WAIT_MS = 60;
 
+/**
+ * A "no content" entry: a file that exists but cannot be content-indexed (binary/NUL, oversized, or
+ * a name that is not text). Path metadata only — its content is never read. `binary: true` is the
+ * existing FileData idiom for "content empty, do not index/save its text", so MCP content search and
+ * the knowledge index skip it; the search engine still finds it by name / path / ext.
+ */
+export const nameOnlyFile = (path: string, mtime: number, size?: number): FileData => {
+  const f: FileData = { path, content: '', mtime, eol: 'lf', binary: true };
+  if (size !== undefined) f.size = size;
+  return f;
+};
+
 export interface PassHost {
   abs(rel: string): string;
   /** Bytes → indexable text (null: binary); records the file's stamp in the workspace index. */
@@ -20,7 +32,7 @@ export interface PassHost {
   fromCache(rel: string, mtime: number, size: number, cache: TextCache): FileData | null;
 }
 
-type Slot = { file: FileData | null; record?: Buffer; changed: boolean; stamp?: [string, number, number] } | undefined;
+type Slot = { file: FileData | null; record?: Buffer; changed: boolean; stamp?: [path: string, mtime: number, size: number]; nameOnly?: boolean } | undefined;
 
 export class TextPass {
   /** Next list index handed to the pool / taken by the consumer. */
@@ -114,7 +126,7 @@ export class TextPass {
     } catch {
       file = null; // a path Win32 cannot open etc.: skipped like an unreadable file
     }
-    this.slots.set(i, { file, record, changed, stamp: r.kind === 'error' ? undefined : [rel, r.mtime, r.size] });
+    this.slots.set(i, { file, record, changed, stamp: r.kind === 'error' ? undefined : [rel, r.mtime, r.size], nameOnly: file === null && r.kind !== 'error' });
     if (file) this.buffered += file.content.length;
   }
 
@@ -166,6 +178,9 @@ export class TextPass {
         files.push(s.file);
         bytes += s.file.content.length;
         this.buffered -= s.file.content.length;
+      } else if (s?.nameOnly && s.stamp) {
+        // A text-named file that decoded to nothing (binary / NUL) or was oversized: a no-content hit.
+        files.push(nameOnlyFile(s.stamp[0], s.stamp[1], s.stamp[2]));
       }
       this.pump();
     }

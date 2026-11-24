@@ -10,7 +10,7 @@ import type { FileData, TextPage } from '../shared/api';
 import { decode, detectEol, toLf } from './textcodec';
 import { IgnoreStack, globalExcludesPath, isLockfile, isMinified, type IgnoreSet } from './gitignore';
 import { ReadPool, type ReadResult } from './readpool';
-import { TextPass, upperBound } from './textpass';
+import { TextPass, upperBound, nameOnlyFile } from './textpass';
 import { CacheWriter, TextCache } from './indexcache';
 import { isProbablyTextName } from './textnames';
 import { fsDelay } from './fsdelay';
@@ -90,6 +90,7 @@ export class Indexer {
   private opts: Required<IndexOptions>;
   private snap: PathSnapshot = { version: '', files: [], ignoreDirs: [], repoDirs: [] };
   private list: { key: string; paths: string[] } | null = null;
+  private nameList: { key: string; paths: string[] } | null = null;
   private extra: { of: string[]; table: PatternTable<true> } | null = null;
   private ignore: { version: string; stack: IgnoreStack } | null = null;
   private outer: { prefix: string; files: Array<{ text: string; prefix: string }> } | null | undefined;
@@ -124,6 +125,7 @@ export class Indexer {
   setOptions(o: Required<IndexOptions>) {
     this.opts = { ...o };
     this.list = null;
+    this.nameList = null;
     this.dropPass();
   }
 
@@ -131,6 +133,7 @@ export class Indexer {
     if (s.version === this.snap.version) return;
     this.snap = s;
     this.list = null;
+    this.nameList = null;
   }
 
   private abs(rel: string) {
@@ -150,6 +153,32 @@ export class Indexer {
     return paths;
   }
 
+  /**
+   * Files that exist and are not git-ignored, but whose NAME cannot be content-indexed (binary /
+   * unknown extension) — they still get a name-only entry (path metadata, content never read). In
+   * code-unit order, so the page cursor (a text path) can select them by range. Lockfiles and
+   * minified bundles are deliberately skipped entirely (not even by name), so they are excluded here.
+   */
+  nameOnlyPaths(): string[] {
+    const key = `${this.snap.version}|${JSON.stringify(this.opts)}`;
+    if (this.nameList?.key === key) return this.nameList.paths;
+    const ignore = this.opts.respectGitignore ? this.ignoreStack() : null;
+    const paths = this.snap.files.filter((p) => this.nameOnlyName(p) && !ignore?.ignored(p));
+    paths.sort(byCodeUnit);
+    this.nameList = { key, paths };
+    return paths;
+  }
+
+  /** Name-only docs in the page window `(cursor, nextCursor]`; the final page (`nextCursor` null) takes the tail. */
+  private nameOnlyInWindow(cursor: string | null, nextCursor: string | null): FileData[] {
+    const list = this.nameOnlyPaths();
+    if (!list.length) return [];
+    const lo = cursor === null ? 0 : upperBound(list, cursor);
+    const hi = nextCursor === null ? list.length : upperBound(list, nextCursor);
+    if (lo >= hi) return [];
+    return list.slice(lo, hi).map((path) => nameOnlyFile(path, 0)); // mtime from the watcher on the next change; never stat'ed here
+  }
+
   /** The user's extra text names (opts.textPatterns) as a matcher, rebuilt when the options change. */
   private extraText(): PatternTable<true> | null {
     const patterns = this.opts.textPatterns;
@@ -166,6 +195,14 @@ export class Indexer {
     const name = p.slice(p.lastIndexOf('/') + 1);
     if (!isProbablyTextName(name) && !this.extraText()?.match(name.toLowerCase())) return true;
     return (this.opts.skipLockfiles && isLockfile(name)) || (this.opts.skipMinified && isMinified(name));
+  }
+
+  /** A name that cannot be content-indexed (not text, not a user-mapped text name). Lockfiles and
+   *  minified bundles return false: those are skipped entirely, never even as a name-only entry. */
+  private nameOnlyName(p: string): boolean {
+    const name = p.slice(p.lastIndexOf('/') + 1);
+    if (isProbablyTextName(name) || this.extraText()?.match(name.toLowerCase())) return false;
+    return !isLockfile(name) && !isMinified(name);
   }
 
   isSkipped(rel: string): boolean {
@@ -328,11 +365,13 @@ export class Indexer {
     const stamps: Stamp[] = [];
     const files = await pass.page(want, stamps);
     const finished = pass.finished;
+    const next = finished ? null : pass.cursor;
+    files.push(...this.nameOnlyInWindow(cursor, next)); // name-only docs in this page's path range
     if (finished && this.pass === pass) {
       this.pass = null;
       this.lastPass = { ...pass.stats, written: pass.written$ };
     }
-    return { files, nextCursor: finished ? null : pass.cursor, total: pass.list.length, done: pass.head, stamps };
+    return { files, nextCursor: next, total: pass.list.length, done: pass.head, stamps };
   }
 
   /** No threads: read in this thread in short bursts (this thread is the indexer's, not the UI's). */
@@ -351,16 +390,26 @@ export class Indexer {
       stamps.push([rel, r.mtime, r.size]);
       const f = r.kind === 'data' ? this.decodeFile(rel, r.bytes, r.mtime, r.size) : null;
       if (f) files.push(f), (bytes += f.content.length);
+      else files.push(nameOnlyFile(rel, r.mtime, r.size)); // binary / NUL / oversized text-named file: a no-content hit
       if (performance.now() - t0 > SYNC_BURST_MS) await new Promise<void>((res) => setImmediate(res));
     }
-    return { files, nextCursor: i < list.length ? list[i - 1] : null, total: list.length, done: i, stamps };
+    const next = i < list.length ? list[i - 1] : null;
+    files.push(...this.nameOnlyInWindow(cursor, next));
+    return { files, nextCursor: next, total: list.length, done: i, stamps };
   }
 
   /** Incremental update: the current text of a few changed files (filters applied, no full pass). */
   async readFiles(rels: string[]): Promise<ReadFilesResult> {
     const out: ReadFilesResult = { files: [], skipped: [], gone: [], stamps: [] };
     const want: string[] = [];
-    for (const r of rels) (this.isSkipped(r) ? out.skipped : want).push(r);
+    const nameOnly: string[] = [];
+    const ignore = this.opts.respectGitignore ? this.ignoreStack() : null;
+    for (const r of rels) {
+      if (ignore?.ignored(r)) out.skipped.push(r); // git-ignored: never in the index
+      else if (this.skippedName(r) && !this.nameOnlyName(r)) out.skipped.push(r); // lockfile / minified: skipped entirely
+      else if (this.nameOnlyName(r)) nameOnly.push(r); // binary / unknown name: path metadata only
+      else want.push(r); // text name: read + decode (a binary / oversized one becomes name-only below)
+    }
     const res = await this.readMany(want);
     res.forEach((r, i) => {
       const rel = want[i];
@@ -368,9 +417,28 @@ export class Indexer {
       out.stamps.push([rel, r.mtime, r.size]);
       const f = r.kind === 'data' ? this.decodeFile(rel, r.bytes, r.mtime, r.size) : null;
       if (f) out.files.push(f);
-      else out.skipped.push(rel);
+      else out.files.push(nameOnlyFile(rel, r.mtime, r.size)); // binary / NUL / oversized text-named file: a no-content hit
     });
+    for (const rel of nameOnly) {
+      const st = this.probe(rel); // stat only — the content of a name-only file is never read
+      if (!st) out.gone.push(rel);
+      else {
+        out.stamps.push([rel, st.mtime, st.size]);
+        out.files.push(nameOnlyFile(rel, st.mtime, st.size));
+      }
+    }
     return out;
+  }
+
+  /** Cheap existence + mtime/size probe for a name-only file (never reads its bytes). */
+  private probe(rel: string): { mtime: number; size: number } | null {
+    try {
+      fsDelay();
+      const st = fs.statSync(this.abs(rel));
+      return st.isFile() ? { mtime: st.mtimeMs, size: st.size } : null;
+    } catch {
+      return null;
+    }
   }
 
   private armPassTimer() {

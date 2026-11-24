@@ -525,6 +525,7 @@ Narrow it down only when you need to:
 | `case:yes` | Case-sensitive |
 
 - **Negate a filter** with `-`: `-path:archive`.
+- **Files you can't read as text** (PDFs, images, other binary) **are found by name, path and extension** — `ext:pdf`, `file:report` or just `report` list them — but never by a word inside them (no OCR). Git-ignored files, lockfiles and minified bundles aren't searched at all.
 - **Case is smart:** all lowercase ignores case; a capital letter makes it exact.
 - **Typos:** when nothing matches, close matches are shown and marked `≈`.
 - **Chips under the box** show how your query was understood.

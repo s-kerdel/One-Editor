@@ -464,7 +464,8 @@ class SearchClient {
         await Promise.all(
           paths.slice(i, i + 8).map((p) =>
             app.backend.readFile(p).then(
-              (f) => void (f.binary ? gone.push(p) : docs.push({ path: p, content: f.content, mtime: f.mtime })),
+              // A binary file is a no-content hit: keep it findable by name / path / ext, never by content.
+              (f) => void docs.push({ path: p, content: f.binary ? '' : f.content, mtime: f.mtime }),
               () => void gone.push(p),
             ),
           ),

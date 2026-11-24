@@ -14,6 +14,8 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 - **Indexing:** search + knowledge read the same paged text stream, `app/workspace-text.ts`.
   - The backend skips git-ignored files, lockfiles, `*.min.*` / `*.map` and files over `search.maxFileSizeKB` (`Workspace.textPaths()`; the tree still lists them).
+  - **Name-only entries** (`textpass.nameOnlyFile`: `content: ''`, `binary: true`): a file that exists but whose content cannot be indexed gets a path-metadata-only document, so `ext:pdf`, `file:report`, `path:` and a plain filename term find it — never a content term. Two ways it arises: a name that is not text (`isProbablyTextName` false, e.g. `.pdf` / `.png`) is added by `Indexer.nameOnlyPaths()` **without ever reading the bytes**; a text-named file that decodes to null (binary / NUL) or is over `maxFileSizeKB` becomes name-only inside the read pass. The `binary: true` flag is the existing FileData idiom, so MCP content search and the knowledge index skip these docs.
+  - **Never in the index, not even by name:** git-ignored files, lockfiles and `*.min.*` / `*.map` (the tree still lists them). Oversized is *not* in this list — it stays as a name-only entry.
   - It reads in worker threads.
   - It keeps a text cache in the app's data folder (never the workspace).
 - Search is sharded over workers (`src/search/shards.ts`, exact two-phase merge — keep `tests/unit/search/shards.test.ts` green).

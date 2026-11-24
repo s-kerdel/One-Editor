@@ -8,6 +8,7 @@ import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { Workspace } from '../../../src/backend/workspace';
 import { IgnoreStack, isLockfile, isMinified } from '../../../src/backend/gitignore';
+import { SearchEngine } from '../../../src/search/engine';
 import type { FileData } from '../../../src/shared/api';
 
 const TMP = path.resolve(__dirname, '../../../.tmp/unit-index-pass');
@@ -67,8 +68,18 @@ afterEach(async () => {
 describe('index filters', () => {
   it('skips git-ignored, lockfiles, minified bundles and maps; the tree still lists them', async () => {
     const ws = new Workspace(dir, { watchMode: 'poll', index: { maxFileBytes: 32 * 1024 } });
-    const paths = (await all(ws)).map((f) => f.path);
-    for (const p of ['package-lock.json', 'sub/composer.lock', 'public/app.min.js', 'public/app.js.map', 'coverage/index.html', 'debug.log', 'out/gen.js', 'nested/secret.md', 'big.txt', 'binary.json']) expect(paths, p).not.toContain(p);
+    const feed = await all(ws);
+    const paths = feed.map((f) => f.path);
+    // Lockfiles, minified bundles/maps and git-ignored files are never in the index, not even by name.
+    for (const p of ['package-lock.json', 'sub/composer.lock', 'public/app.min.js', 'public/app.js.map', 'coverage/index.html', 'debug.log', 'out/gen.js', 'nested/secret.md']) expect(paths, p).not.toContain(p);
+    // A text-named file whose content can't be indexed (oversized, or binary/NUL) is a name-only entry:
+    // present, findable by name / path / ext, but its content is never read (empty + binary flag).
+    for (const p of ['big.txt', 'binary.json']) {
+      expect(paths, p).toContain(p);
+      const f = feed.find((x) => x.path === p)!;
+      expect(f.content, p).toBe('');
+      expect(f.binary, p).toBe(true);
+    }
     for (const p of ['README.md', 'keep.log', 'nested/out/real.md', 'notes/n0.md', 'src/app.ts']) expect(paths, p).toContain(p);
     const tree = JSON.stringify(await ws.listTree());
     for (const p of ['package-lock.json', 'coverage', 'debug.log', 'app.min.js']) expect(tree).toContain(p);
@@ -136,7 +147,8 @@ describe('parallel reader + persistent cache', () => {
   it('a warm start stats unchanged files and reads only what changed', async () => {
     const cold = new Workspace(dir, { watchMode: 'poll', cacheDir, readThreads: 2 });
     const first = await all(cold);
-    expect(cold.lastPass).toMatchObject({ read: first.length + 1 /* binary.json */, cached: 0 });
+    // binary.json is now a name-only entry (read once to find it unindexable), so reads == feed size.
+    expect(cold.lastPass).toMatchObject({ read: first.length, cached: 0 });
     await cold.lastPass!.written;
     cold.dispose();
     expect(fs.readdirSync(cacheDir).filter((f) => f.endsWith('.bin'))).toHaveLength(1);
@@ -193,5 +205,60 @@ describe('parallel reader + persistent cache', () => {
     await ws.lastPass!.written;
     ws.dispose();
     expect((await fsp.readdir(dir)).sort()).toEqual(before);
+  });
+});
+
+describe('name-only files (binary / unknown name) reach the search engine', () => {
+  // A real PDF / PNG cannot be content-indexed, but must still be findable by name / path / ext.
+  // A git-ignored PDF must never appear at all. Its content is never read.
+  let box: string;
+  const put = (rel: string, data: string | Buffer) => {
+    const abs = path.join(box, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, data);
+  };
+  beforeEach(async () => {
+    await fsp.mkdir(TMP, { recursive: true });
+    box = await fsp.mkdtemp(path.join(TMP, 'nameonly-'));
+    put('report.pdf', Buffer.from('%PDF-1.4\n\u0000\u0001 binary bytes \u0000\n'));
+    put('notes/photo.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0]));
+    put('notes/a.md', '# Alpha\nrelease notes\n');
+    put('.gitignore', 'secret.pdf\n');
+    put('secret.pdf', Buffer.from('%PDF secret\u0000\n'));
+  });
+  afterEach(async () => {
+    await fsp.rm(box, { recursive: true, force: true });
+  });
+
+  it('feed: name-only entries present, ignored absent, content never read', async () => {
+    const ws = new Workspace(box, { watchMode: 'poll' });
+    const feed = await all(ws);
+    const paths = feed.map((f) => f.path);
+    expect(paths).toContain('report.pdf');
+    expect(paths).toContain('notes/photo.png');
+    expect(paths).toContain('notes/a.md');
+    expect(paths).not.toContain('secret.pdf'); // git-ignored: never in the index, not even by name
+    for (const p of ['report.pdf', 'notes/photo.png']) {
+      const f = feed.find((x) => x.path === p)!;
+      expect(f.content).toBe('');
+      expect(f.binary).toBe(true);
+    }
+    ws.dispose();
+  });
+
+  it('engine finds them by ext / file / path / name term, never by content', async () => {
+    const ws = new Workspace(box, { watchMode: 'poll' });
+    const e = new SearchEngine();
+    e.reset((await all(ws)).map((f) => ({ path: f.path, content: f.content, mtime: f.mtime })));
+    const q = (s: string) => e.search(s).results.map((x) => x.path).sort();
+    expect(q('ext:pdf')).toEqual(['report.pdf']);
+    expect(q('file:report')).toEqual(['report.pdf']);
+    expect(q('path:notes')).toEqual(['notes/a.md', 'notes/photo.png']);
+    expect(q('report')).toEqual(['report.pdf']); // plain name term → path match
+    expect(q('photo')).toEqual(['notes/photo.png']);
+    expect(q('binary')).toEqual([]); // the PDF's bytes were never indexed
+    expect(q('release')).toEqual(['notes/a.md']);
+    expect(q('report -ext:pdf')).toEqual([]); // negated filter drops the name-only hit
+    ws.dispose();
   });
 });
