@@ -40,6 +40,31 @@ test('new note via Mod-n: created, opened, named inline, then typing goes into i
   await expect.poll(() => ws.read('Meeting notes.md'), { timeout: 5000 }).toContain('Agenda');
 });
 
+test('context menu → New file …: picker with popular extensions first, creates with the stem pre-selected', async ({ page, ws }) => {
+  await ws.open(page);
+  await row(page, 'README').click({ button: 'right' });
+  await page.locator('.se-menu-item', { hasText: 'New file …' }).click();
+  const picker = page.getByTestId('picker');
+  await expect(picker).toBeVisible();
+  // The fixture's code extensions (.php/.sql/.ts, one file each) are pinned on top with their counts; notes never rank.
+  await expect(picker.locator('.se-picker-item').first()).toContainText('.php');
+  await expect(picker.locator('.se-picker-item').first()).toContainText('1 file in this project');
+  await expect(picker.locator('.se-picker-item', { hasText: '.md' })).toHaveCount(0);
+  await page.keyboard.type('json');
+  await page.keyboard.press('Enter');
+  const input = page.locator('.se-tree-input');
+  await expect(input).toBeFocused();
+  expect(await input.evaluate((el) => {
+    const i = el as HTMLInputElement;
+    return [i.value, i.selectionStart, i.selectionEnd];
+  })).toEqual(['untitled-1.json', 0, 10]);
+  await page.keyboard.type('data');
+  await page.keyboard.press('Enter');
+  await expect.poll(() => exists(ws.root, 'data.json')).toBe(true);
+  expect(exists(ws.root, 'untitled-1.json')).toBe(false);
+  await expect(tab(page, 'data.json')).toBeVisible();
+});
+
 test('create folder + file inline, rename with F2, delete to trash', async ({ page, ws }) => {
   await ws.open(page);
   await page.getByRole('button', { name: 'New folder' }).click();

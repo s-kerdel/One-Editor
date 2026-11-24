@@ -14,13 +14,13 @@ import { prettyKey } from './commands';
 import { closeTabs, openWorkspace, persistSession, refreshTree } from './documents';
 import { runCommand } from './commands';
 import { updateSettings, currentWidth, WIDTHS } from './settings';
-import { LANGUAGES, associatedLanguage, cleanAssociations, languageById } from '@shared/languages';
+import { LANGUAGES, associatedLanguage, cleanAssociations, languageById, languageForPath } from '@shared/languages';
 import { describePattern, patternForName } from '@shared/associations';
 
 // Icons only this lazily loaded chunk draws (see addIcons).
 addIcons({ history: 'M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8|M3 3v5h5|M12 7v5l4 2', trash: 'M3 6h18|M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6|M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2|M10 11v6|M14 11v6', rename: 'M12 20h9|M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z', reveal: 'M15 3h6v6|M10 14 21 3|M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6', exportPdf: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z|M14 3v5h5|M12 11v6|m9 14 3 3 3-3', arrowUp: 'M12 19V5|m5 12 7-7 7 7' });
-import { absolutePath, copyText, deletePaths, duplicate, errText, exists, expandTo, newNote, revealInOs, revealInTree, revealLabel, setTree, startCreate } from './fileops';
-import { moveNode, trashName, validateName } from './file-rules';
+import { absolutePath, copyText, deletePaths, duplicate, errText, exists, expandTo, newFile, newNote, revealInOs, revealInTree, revealLabel, setTree, startCreate } from './fileops';
+import { moveNode, topExtensions, trashName, validateName } from './file-rules';
 import { RpcError } from '../platform';
 import { extname, join, stem } from '@shared/paths';
 import { filesUnder, findNode, insertNode, removeNode } from './tree-model';
@@ -402,7 +402,7 @@ export function rowMenu(node: TreeNode | null, sel: string[] = []): ui.MenuItem[
   if (node && !isDir) items.push({ label: 'Open', icon: 'file', run: () => app.openFile(node.path) });
   if (node && isDir) items.push({ label: 'Open as project', icon: 'folderOpen', run: () => openAsProject(absolutePath(node.path)) });
   if (node) items.push(bookmarkItem([node.path]), { separator: true });
-  items.push({ label: 'New note', icon: 'filePlus', keys: 'Ctrl+N', run: () => newNote(folder) }, { label: 'New folder', icon: 'folderPlus', run: () => startCreate('dir', folder) });
+  items.push({ label: 'New note', icon: 'filePlus', keys: 'Ctrl+N', run: () => newNote(folder) }, { label: 'New file …', icon: 'filePlus', run: () => openNewFilePicker(folder) }, { label: 'New folder', icon: 'folderPlus', run: () => startCreate('dir', folder) });
   if (node) {
     items.push(
       { separator: true },
@@ -727,6 +727,27 @@ export function openWidthPicker() {
   ui.picker.value = {
     title: 'Content width',
     items: WIDTHS.map((w) => ({ label: WIDTH_ITEMS[w][0], detail: WIDTH_ITEMS[w][1], checked: w === cur, run: () => updateSettings({ contentWidth: w }) })),
+  };
+}
+
+// "New file …": the searchable picker stands in for a submenu (MenuItem is flat). Creating always goes
+// through newFile → untitled-N.<ext> + inline rename with the stem selected, like New note.
+const NEW_FILE_EXTS = ['.json', '.jsonc', '.yaml', '.toml', '.ts', '.js', '.html', '.css', '.scss', '.py', '.php', '.sql', '.sh', '.xml', '.env', '.txt'];
+
+// Note extensions never rank in the top-5: "New note" already covers them (mirrors RESERVED in shared/associations.ts).
+const NOTE_EXTS = new Set(['.md', '.markdown', '.mdx']);
+
+/** The "New file …" picker: this project's top-5 extensions (with counts) above a general list. */
+export function openNewFilePicker(folder: string, anchor?: Element | null) {
+  const top = topExtensions(app.files.value, 5, NOTE_EXTS);
+  const general = NEW_FILE_EXTS.filter((ext) => !top.some((t) => t.ext === ext));
+  ui.picker.value = {
+    title: 'New file',
+    anchor,
+    items: [
+      ...top.map((t) => ({ label: t.ext, detail: `${t.count} ${t.count === 1 ? 'file' : 'files'} in this project`, run: () => void newFile(folder, t.ext) })),
+      ...general.map((ext, i) => ({ label: ext, detail: languageForPath(`x${ext}`)?.name, separator: i === 0 && top.length > 0, run: () => void newFile(folder, ext) })),
+    ],
   };
 }
 

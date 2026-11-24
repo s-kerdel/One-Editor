@@ -5,7 +5,7 @@ import { Icon, PanelIcon } from './icons';
 import { persistSession } from './documents';
 import { runCommand, prettyKey } from './commands';
 import { updateSettings } from './settings';
-import { newNote, popups } from './fileops';
+import { currentFolder, newNote, popups } from './fileops';
 import { PANEL_KEYS, menuPanels, openContextMenu, zen } from './ui';
 
 /** Stable hue per name, so a workspace / top-level folder always gets "its" colour. */
@@ -99,7 +99,14 @@ function ShelfFoot() {
   const dark = isDark();
   return (
     <div class="se-shelf-foot">
-      <button class="se-new-note" onClick={() => newNote()} disabled={!app.workspace.value} title={`New note (${prettyKey('Mod-n')})`}>
+      {/* Left-click stays note-only (one-tap path, mirrors Mod-n); right-click opens the "New file …" extension picker. */}
+      <button
+        class="se-new-note"
+        onClick={() => newNote()}
+        onContextMenu={(e) => void popups().then((m) => m.openNewFilePicker(currentFolder(), e.currentTarget))}
+        disabled={!app.workspace.value}
+        title={`New note (${prettyKey('Mod-n')}) · right-click for other file types`}
+      >
         <Icon name="plus" size={15} />
         New note
       </button>

@@ -37,6 +37,7 @@
 | Open a folder | Drag it onto the window, or run `One.exe C:\notes` |
 | Open a file | `Ctrl+P`, type part of the name, `Enter` |
 | New note | `Ctrl+N`, then type its name |
+| **New file of another type** | Right-click in the tree → **New file …** — pick an extension, the ones most used in this project come first. Or right-click the **+ New note** button at the bottom of the sidebar |
 | Rename / delete | `F2` / `Del` in the file tree |
 | Move | Drag the file onto a folder |
 | **Select several** | `Ctrl`+click, `Shift`+click, `Shift+↑/↓`, `Ctrl+A` in the file tree ([below](#select-several-files)) |

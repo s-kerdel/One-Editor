@@ -33,3 +33,24 @@ test('a right-click menu takes focus; ArrowDown selects, Enter runs, Escape clos
   await expect(page.locator('.se-tree-input')).toBeFocused();
   await page.keyboard.press('Escape');
 });
+
+test('"New file …" sits directly below "New note"; Enter opens the extension picker', async ({ page, ws }) => {
+  await ws.open(page);
+  await row(page, 'notes').click({ button: 'right' });
+  const menu = page.locator('.se-menu');
+  await expect(menu).toBeFocused();
+  const selected = menu.locator('.se-menu-item.selected');
+  for (let i = 0; i < 15; i++) {
+    await page.keyboard.press('ArrowDown');
+    await expect(selected).toHaveCount(1);
+    if ((await selected.locator('.se-menu-label').textContent())?.trim() === 'New note') break;
+  }
+  await page.keyboard.press('ArrowDown');
+  await expect(selected.locator('.se-menu-label')).toHaveText('New file …');
+  await page.keyboard.press('Enter');
+  await expect(menu).toHaveCount(0);
+  const picker = page.getByTestId('picker');
+  await expect(picker).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(picker).toHaveCount(0);
+});

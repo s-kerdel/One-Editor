@@ -57,10 +57,11 @@ export function uniqueName(dir: string, base: string, ext: string, sep = '-'): s
   return join(dir, `${base}${sep}${Date.now()}${ext}`);
 }
 
-/** Mod-n: create untitled-N.md, open it, and put its tree row into rename mode so you can type a title. */
-export async function newNote(dir = currentFolder()) {
+/** Create `untitled-N<ext>`, open it, and put its tree row into rename mode so you can type a name
+ *  (the stem is pre-selected). `New note` and the tree's "New file …" picker both land here. */
+export async function newFile(dir = currentFolder(), ext = '.md') {
   if (!app.workspace.value) return app.toast('Open a folder first', 'info');
-  const path = uniqueName(dir, 'untitled', '.md');
+  const path = uniqueName(dir, 'untitled', ext);
   try {
     await app.backend.createFile(path, '');
   } catch (err) {
@@ -75,6 +76,9 @@ export async function newNote(dir = currentFolder()) {
     ui.renaming.value = path;
   } else app.editor?.focus();
 }
+
+/** Mod-n: create untitled-N.md, open it, and put its tree row into rename mode so you can type a title. */
+export const newNote = (dir?: string) => newFile(dir);
 
 /** Shows the inline name input in the tree. */
 export function startCreate(kind: 'file' | 'dir', parent = currentFolder()) {
