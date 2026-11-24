@@ -509,7 +509,7 @@ Narrow it down only when you need to:
 | Type this | Finds |
 |---|---|
 | `"exact phrase"` | The exact phrase |
-| `deploy -staging` | "deploy", skipping files that contain "staging" |
+| `deploy -staging` | "deploy", skipping files that contain **or are named** "staging" |
 | `\-staging` | The literal text `-staging` |
 | `nginx OR apache` | Either word |
 | `/user_\d+/` | Regular expression |
@@ -526,6 +526,7 @@ Narrow it down only when you need to:
 
 - **Negate a filter** with `-`: `-path:archive`.
 - **Files you can't read as text** (PDFs, images, other binary) **are found by name, path and extension** — `ext:pdf`, `file:report` or just `report` list them — but never by a word inside them (no OCR). Git-ignored files, lockfiles and minified bundles aren't searched at all.
+- **Excluding a word:** `deploy -staging` drops files with "staging" — **in their content or their name / path** (`report -"secret"` also hides `secret-report.pdf`). A short `-x` (1–3 letters, a number, or `Key=value`) is read as **literal text**, not an exclusion — so pasted commands like `kubectl get pods -o wide` still match. To exclude a short word, quote it: `notes -"tmp"`.
 - **Case is smart:** all lowercase ignores case; a capital letter makes it exact.
 - **Typos:** when nothing matches, close matches are shown and marked `≈`.
 - **Chips under the box** show how your query was understood.

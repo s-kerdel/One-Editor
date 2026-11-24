@@ -55,6 +55,8 @@ export interface Plan {
   /** null = every context allowed (no classification needed for filtering). */
   ctxFilter: ((e: Entry, c: Classification) => boolean) | null;
   allowPath: boolean;
+  /** An exclusion clause also hides a file whose path / name matches, not only its content. */
+  excludePaths: boolean;
   verbatim?: Compiled;
   /** Per positive clause: required for a file to match, but its hits are not listed (see plan()). */
   quiet?: boolean[];
@@ -471,7 +473,10 @@ export class SearchEngine {
     const inF = pq.filters.filter((f) => f.key === 'in');
     const langF = pq.filters.filter((f) => f.key === 'lang');
     const allowPath = opts.matchPaths !== false && !opts.literal && (!inF.some((f) => !f.negated) || inF.some((f) => !f.negated && f.value.toLowerCase() === 'path'));
-    const plan: Plan = { pq, positive, negative, fileFilter: buildFileFilter(pq.filters), ctxFilter: buildCtxFilter(inF, langF), allowPath };
+    // An exclusion hides a matching file name / path too (not just content). Broader than allowPath:
+    // hiding a file is about which files qualify, orthogonal to an `in:` content-context filter.
+    const excludePaths = opts.matchPaths !== false && !opts.literal;
+    const plan: Plan = { pq, positive, negative, fileFilter: buildFileFilter(pq.filters), ctxFilter: buildCtxFilter(inF, langF), allowPath, excludePaths };
     // A multi-word query that appears verbatim gets a big boost — and is rescued even if operators
     // (e.g. "-name" in `find . -name`) would have excluded it.
     // Bare punctuation from a pasted command (`.`, `|`, `>` in `grep -rn "TODO" . | wc -l`) must be present,
@@ -510,6 +515,8 @@ export class SearchEngine {
       let excluded = false;
       for (const n of plan.negative) {
         n.scan(e, () => ((excluded = true), false));
+        // An exclusion also hides a file whose name / path matches (e.g. `report -"secret"` drops `secret-report.pdf`).
+        if (!excluded && plan.excludePaths && n.pathRanges(e)) excluded = true;
         if (excluded) break;
       }
       if (excluded && !verbatim) continue;

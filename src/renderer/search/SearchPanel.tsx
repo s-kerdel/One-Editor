@@ -241,7 +241,7 @@ async function undoLast() {
 // [shown syntax, text inserted on click, label]
 const HINTS: Array<[string, string, string]> = [
   ['"exact phrase"', '""', 'phrase'],
-  ['-exclude', '-', 'exclude'],
+  ['-"text"', '-', 'exclude by name and content'],
   ['a OR b', 'OR ', 'either'],
   ['/regex/i', '//', 'regex'],
   ['path:notes/', 'path:', 'folder'],
@@ -532,12 +532,19 @@ export function SearchPanel() {
 
       {chips.length > 0 && (
         <div class="se-chips" aria-label="Query interpretation">
-          {chips.map((c) => (
-            <span class={`se-chip se-chip-${c.kind}`} title={c.kind === 'exclude' ? 'Excluded (prefix \\ to search literally)' : c.kind}>
-              {c.kind === 'exclude' ? '−' : c.kind === 'nfilter' ? '−' : ''}
-              {c.label}
-            </span>
-          ))}
+          {chips.map((c) => {
+            // An exclusion is shown in the syntax the user can actually type: a plain word / phrase as
+            // `-"word"`. A regex or OR exclusion keeps the plain − prefix (quoting those would be wrong).
+            const bare = c.label.replace(/^"|"$/g, '');
+            const typable = c.kind === 'exclude' && !c.label.startsWith('/') && !c.label.includes(' OR ');
+            const text = typable ? `-"${bare}"` : c.label;
+            return (
+              <span class={`se-chip se-chip-${c.kind}`} title={c.kind === 'exclude' ? 'Excluded from name and content (prefix \\ to search literally)' : c.kind}>
+                {c.kind === 'exclude' ? (typable ? '' : '−') : c.kind === 'nfilter' ? '−' : ''}
+                {text}
+              </span>
+            );
+          })}
         </div>
       )}
       {pq?.warnings.map((w) => <div class="se-search-warn">{w}</div>)}
