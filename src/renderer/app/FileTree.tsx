@@ -309,6 +309,10 @@ function FileTree() {
       onScroll={(e) => setScrollTop((e.currentTarget as HTMLElement).scrollTop)}
       onFocus={() => void loadSteps()}
       onKeyDown={onTreeKey}
+      onClick={(e) => {
+        // A click in the blank area below the rows positions "new here" at the root (the shelf button and Ctrl+N follow it).
+        if (e.target === e.currentTarget) ui.setTreeSel(null, '');
+      }}
       onContextMenu={(e) => ui.openContextMenu(e, rowMenu(null))}
       onDragOver={(e) => {
         if (!e.dataTransfer?.types.includes(DRAG_MIME)) return;

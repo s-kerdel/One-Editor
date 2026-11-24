@@ -52,6 +52,28 @@ test('new note from the shelf: the tree selection wins over the active file, eve
   await page.locator('.se-tree-input').press('Enter');
 });
 
+test('right-click on the tree blank space: menu targets the root, New note lands there', async ({ page, ws }) => {
+  await ws.open(page);
+  await row(page, 'notes').click(); // a selection must NOT hijack the blank-space menu
+  await page.locator('.se-tree').click({ button: 'right', position: { x: 20, y: 320 } }); // below the rows
+  const menu = page.locator('.se-menu');
+  await expect(menu).toBeVisible();
+  await expect(menu.locator('.se-menu-item', { hasText: 'New file …' })).toBeVisible();
+  await menu.locator('.se-menu-item', { hasText: 'New note' }).click();
+  await expect.poll(() => exists(ws.root, 'untitled-1.md')).toBe(true); // root, not notes/
+  await page.locator('.se-tree-input').press('Enter');
+});
+
+test('left-click in the tree blank space positions the shelf button at the root', async ({ page, ws }) => {
+  await ws.open(page);
+  await row(page, 'notes').click(); // selection: notes/
+  await page.locator('.se-tree').click({ position: { x: 20, y: 320 } }); // left-click the blank area below the rows
+  await expect(page.locator('.se-tree-row.selected')).toHaveCount(0); // the earlier folder selection is gone
+  await page.locator('.se-new-note').click();
+  await expect.poll(() => exists(ws.root, 'untitled-1.md')).toBe(true); // root, not notes/
+  await page.locator('.se-tree-input').press('Enter');
+});
+
 test('context menu → New file …: picker with popular extensions first, creates with the stem pre-selected', async ({ page, ws }) => {
   await ws.open(page);
   await row(page, 'README').click({ button: 'right' });
