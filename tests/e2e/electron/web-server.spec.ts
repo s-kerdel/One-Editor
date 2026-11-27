@@ -7,6 +7,7 @@ import os from 'node:os';
 import { chromium, type ElectronApplication, type Page } from '@playwright/test';
 import { test, expect, fs, path } from './fixture';
 import { lanAddresses } from '../../../src/main/web-server';
+import { rememberPort, rememberedPort } from '../../../src/server/ports';
 
 const ready = (page: Page) => page.waitForFunction(() => !!(window as any).__secEditWebServer, null, { timeout: 15000 });
 const pidOf = (app: ElectronApplication) => app.evaluate(() => (globalThis as any).__secEditWebServer?.pid as number | undefined);
@@ -311,12 +312,20 @@ test('desktop and a browser tab share settings: both changes survive, each sees 
 });
 
 test('the folder keeps its port; when it is taken, the info says browser state starts empty', async ({ el }) => {
+  // This folder's last port: a free one from the OS, outside the automatic range (4317…). Other workers' servers
+  // start in that range and took this folder's port while it was stopped (then "busy" on restart, a clash).
+  const probe = net.createServer();
+  await new Promise<void>((r) => probe.listen(0, '127.0.0.1', () => r()));
+  const port = (probe.address() as net.AddressInfo).port;
+  await new Promise((r) => probe.close(r));
+  fs.mkdirSync(el.userData, { recursive: true });
+  await rememberPort(el.userData, el.ws, port); // what the server itself wrote after its last run
   const { page } = await el.launch([el.ws]);
   await ready(page);
   const info = page.locator('[data-testid="webserver-info"]');
   await runCommand(page, 'start web server', 'webServer.start');
   await expect(info.locator('[data-testid="webserver-state"]')).toHaveText('Running');
-  const port = (await status(page)).port as number;
+  expect((await status(page)).port).toBe(port); // the remembered port is tried first
   await expect(info.locator('[data-testid="webserver-port-busy"]')).toHaveCount(0);
   await info.locator('[data-testid="webserver-stop"]').click();
   await expect(info.locator('[data-testid="webserver-state"]')).toHaveText('Stopped');
@@ -332,7 +341,10 @@ test('the folder keeps its port; when it is taken, the info says browser state s
   try {
     await info.locator('[data-testid="webserver-start"]').click();
     await expect(info.locator('[data-testid="webserver-port-busy"]')).toHaveText(`Port ${port} was busy — browser state for this folder starts empty.`);
-    expect((await status(page)).port).not.toBe(port);
+    const next = (await status(page)).port as number;
+    expect(next).not.toBe(port);
+    // …and the port it got instead is the folder's port from now on.
+    await expect.poll(() => rememberedPort(el.userData, el.ws)).toBe(next);
   } finally {
     blocker.close();
   }

@@ -8,8 +8,16 @@ test('renderer is isolated: no Node, minimal bridge, hardened webPreferences', a
   const g = await page.evaluate(() => ({ require: typeof (window as any).require, process: typeof (window as any).process, module: typeof (window as any).module }));
   expect(g).toEqual({ require: 'undefined', process: 'undefined', module: 'undefined' });
   expect((await page.evaluate(() => Object.keys((window as any).secEditBridge))).sort()).toEqual(
-    ['approveClose', 'frame', 'getPathForFile', 'gpuStatus', 'indexToken', 'invoke', 'mcp', 'on', 'os', 'ready', 'relaunch', 'setTitleBarOverlay', 'setZoom', 'terminal', 'toggleDevTools', 'updates', 'vault', 'webServer', 'zenFullScreen'].sort(),
+    ['approveClose', 'frame', 'getPathForFile', 'gpuStatus', 'indexToken', 'invoke', 'mcp', 'newWindow', 'on', 'openFolderWindow', 'os', 'ready', 'relaunch', 'setTitleBarOverlay', 'setZoom', 'terminal', 'toggleDevTools', 'updates', 'vault', 'webServer', 'wsKey', 'zenFullScreen'].sort(),
   );
+  // Several windows: two fixed app:* calls (main decides where a folder opens, through this window's gate) and this
+  // window's secret key for its own files (app://sec-edit/__ws/<key>/…), not the index token.
+  expect(
+    await page.evaluate(() => {
+      const b = (window as any).secEditBridge;
+      return { newWindow: typeof b.newWindow, openFolderWindow: typeof b.openFolderWindow, key: /^[0-9a-f]{32}$/.test(b.wsKey), own: b.wsKey !== b.indexToken };
+    }),
+  ).toEqual({ newWindow: 'function', openFolderWindow: 'function', key: true, own: true });
   // Settings → MCP server: fixed mcp:* calls only; folders come from main's native dialog, never a path from the page,
   // and every widening step / token action asks natively in main; copySetup puts the token on the clipboard from main
   // (the page never receives it) (src/main/mcp.ts).
@@ -54,7 +62,8 @@ test('the window cannot be navigated away — not even to a workspace file', asy
   await fsp.writeFile(path.join(el.ws, 'evil.html'), '<script>document.title="pwned"</script><h1>evil</h1>');
   const { app, page } = await el.launch([el.ws]);
   const start = page.url();
-  for (const target of ['app://sec-edit/__ws/evil.html', 'app://sec-edit/%5F%5Fws/evil.html', 'file:///etc/passwd', 'https://example.com/', 'javascript:document.title="pwned"']) {
+  const key = await page.evaluate(() => (window as any).secEditBridge.wsKey as string);
+  for (const target of [`app://sec-edit/__ws/${key}/evil.html`, 'app://sec-edit/__ws/evil.html', 'app://sec-edit/%5F%5Fws/evil.html', 'file:///etc/passwd', 'https://example.com/', 'javascript:document.title="pwned"']) {
     await page.evaluate((t) => { try { location.href = t; } catch {} }, target);
     await page.waitForTimeout(250);
     expect(page.url(), target).toBe(start);
@@ -82,13 +91,19 @@ test('app:// serves workspace files sandboxed and never outside the workspace', 
         return { status: -1, body: String(e), csp: null };
       }
     };
+    // This window's folder: its own key names it (several windows each serve their own).
+    const ws = `app://sec-edit/__ws/${(window as any).secEditBridge.wsKey}`;
+    const svg = `img/${encodeURIComponent('a #1 50%.svg')}`;
     return {
-      ok: await get(`app://sec-edit/__ws/img/${encodeURIComponent('a #1 50%.svg')}`),
-      dir: await get('app://sec-edit/__ws/img'),
-      up: await get('app://sec-edit/__ws/..%2Foutside.txt'),
-      up2: await get('app://sec-edit/__ws/%2e%2e/%2e%2e/outside.txt'),
+      ok: await get(`${ws}/${svg}`),
+      dir: await get(`${ws}/img`),
+      up: await get(`${ws}/..%2Foutside.txt`),
+      up2: await get(`${ws}/%2e%2e/%2e%2e/outside.txt`),
       renderer: await get('app://sec-edit/..%2F..%2F..%2Foutside.txt'),
       bad: await get('app://sec-edit/%E0%A4%A'),
+      wrongKey: await get(`app://sec-edit/__ws/${'0'.repeat(32)}/${svg}`),
+      noKey: await get('app://sec-edit/__ws/README.md'),
+      oldForm: await get(`app://sec-edit/__ws/${svg}`), // the key-less URL of one window: "img" is no window
     };
   });
   expect(r.ok.status).toBe(200);
@@ -96,6 +111,8 @@ test('app:// serves workspace files sandboxed and never outside the workspace', 
   expect(r.dir.status).toBe(404); // no directory listing page on our origin
   for (const k of ['up', 'up2', 'renderer', 'bad'] as const) expect(r[k].body, k).not.toContain('SECRET');
   expect(r.bad.status).toBe(400);
+  // No window, no folder: a wrong key or none at all is never "the" folder.
+  expect({ wrongKey: r.wrongKey.status, noKey: r.noKey.status, oldForm: r.oldForm.status }).toEqual({ wrongKey: 404, noKey: 404, oldForm: 404 });
 });
 
 test('permissions an editor never needs are denied', async ({ el }) => {
@@ -163,10 +180,13 @@ test('links out of the folder are not served, read or written — app://, RPC an
     const b = (window as any).__secEdit.backend;
     const code = (p: Promise<unknown>) => p.then(() => 'ok', (e: { code?: string }) => e.code);
     const get = (u: string) => fetch(u).then(async (r) => `${r.status}:${r.ok ? (await r.text()).slice(0, 10) : ''}`, () => 'blocked');
+    const ws = `app://sec-edit/__ws/${(window as any).secEditBridge.wsKey}`; // this window's folder
     return {
-      wsDir: await get('app://sec-edit/__ws/out-dir/secret.md'),
-      wsFile: await get('app://sec-edit/__ws/out-file.md'),
-      wsInside: (await get('app://sec-edit/__ws/in-file.md')).slice(0, 4),
+      wsDir: await get(`${ws}/out-dir/secret.md`),
+      wsFile: await get(`${ws}/out-file.md`),
+      wsInside: (await get(`${ws}/in-file.md`)).slice(0, 4),
+      wsWrongKey: await get(`app://sec-edit/__ws/${'0'.repeat(32)}/in-file.md`),
+      wsNoKey: await get('app://sec-edit/__ws/in-file.md'),
       read: await code(b.readFile('out-dir/secret.md')),
       readLink: await code(b.readFile('out-file.md')),
       write: await code(b.writeFile('out-file.md', 'OVERWRITTEN')),
@@ -175,7 +195,7 @@ test('links out of the folder are not served, read or written — app://, RPC an
       inside: await code(b.readFile('in-file.md')),
     };
   });
-  expect(res).toEqual({ wsDir: '404:', wsFile: '404:', wsInside: '200:', read: 'OUTSIDE_WORKSPACE', readLink: 'OUTSIDE_WORKSPACE', write: 'OUTSIDE_WORKSPACE', create: 'OUTSIDE_WORKSPACE', remove: 'OUTSIDE_WORKSPACE', inside: 'ok' });
+  expect(res).toEqual({ wsDir: '404:', wsFile: '404:', wsInside: '200:', wsWrongKey: '404:', wsNoKey: '404:', read: 'OUTSIDE_WORKSPACE', readLink: 'OUTSIDE_WORKSPACE', write: 'OUTSIDE_WORKSPACE', create: 'OUTSIDE_WORKSPACE', remove: 'OUTSIDE_WORKSPACE', inside: 'ok' });
   expect(await fsp.readFile(path.join(outside, 'secret.md'), 'utf8')).toBe('TOP SECRET');
   expect(await fsp.readdir(outside)).toEqual(['secret.md']);
 });
