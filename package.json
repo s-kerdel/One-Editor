@@ -1,6 +1,6 @@
 {
   "name": "sec-edit",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "description": "Fast, folder-based markdown & code editor",
   "main": "dist/main/main.cjs",
   "scripts": {
