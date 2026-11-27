@@ -511,8 +511,11 @@ export class TerminalService {
       emitFollow: (termId, e) => this.emitFor(termId, CH.follow, e),
       emitChanges: (termId, e) => this.emitFor(termId, CH.changes, e),
     });
+    // The server's environment is a shell's (no app hooks / Electron / npm context, and none of it crosses into WSL
+    // through WSLENV); it needs nothing more: address and port are arguments, it makes and prints its own password.
+    const serverEnv = buildTerminalEnv(env, { platform: this.platform, appVersion: this.o.appVersion });
     // opencode names files by its own working folder, which the OS reports without links: both names of the folder count.
-    return this.opencodeSvc.open(id, { bin: info.path, root, realRoot: wsl ? null : await realRootOf(root, this.o.fs ?? fsp), platform: this.platform, foldCase: f.foldCase(owner), env, wsl }, onFail);
+    return this.opencodeSvc.open(id, { bin: info.path, root, realRoot: wsl ? null : await realRootOf(root, this.o.fs ?? fsp), platform: this.platform, foldCase: f.foldCase(owner), env: serverEnv, wsl }, onFail);
   }
 
   /** A follow callback for terminal `termId`: its window's folder rules; a terminal that is gone gets `none` (nothing is checked). */

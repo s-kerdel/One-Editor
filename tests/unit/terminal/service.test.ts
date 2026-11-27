@@ -502,11 +502,14 @@ describe('TerminalService (real node-pty)', () => {
       const { EventEmitter } = await import('node:events');
       const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), killed: false, kill: () => ((child as any).killed = true) });
       let started = 0;
+      let serverEnv: NodeJS.ProcessEnv = {};
       const follow = { dir: path.join(bin, 'f'), foldCase: () => false, inside: async () => true };
       const r = rig({
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: bin },
+        // The app's own context next to the user's: test hooks, Electron's Node mode, npm's script context, a stale password.
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: bin, SEC_EDIT_SECRET: 'leak', SEC_EDIT_TEST: '1', ELECTRON_RUN_AS_NODE: '1', npm_config_token: 'tok', npm_lifecycle_event: 'test', OPENCODE_SERVER_PASSWORD: 'old', KEEP_ME: 'kept' },
         follow,
-        opencodeSpawn: () => {
+        opencodeSpawn: (_bin, _cwd, env) => {
+          serverEnv = env;
           started++;
           queueMicrotask(() => child.stdout.emit('data', Buffer.from('server listening on http://127.0.0.1:9\nserver password secret-pass-12345\n')));
           return child as never;
@@ -518,6 +521,10 @@ describe('TerminalService (real node-pty)', () => {
       expect(t.shell).toMatchObject({ id: 'opencode', kind: 'opencode' });
       await r.waitFor(t.id, /OC STUB args=--server http:\/\/127\.0\.0\.1:9 pw=secret-pass-12345/);
       expect(started).toBe(1);
+      // The private server gets a shell's environment: none of the app's context, the user's own variables kept.
+      const leaked = Object.keys(serverEnv).filter((k) => /^(SEC_EDIT_|ELECTRON_|npm_|OPENCODE_(SERVER_)?PASSWORD$)/i.test(k));
+      expect(leaked).toEqual([]);
+      expect(serverEnv).toMatchObject({ PATH: `${bin}:${process.env.PATH}`, HOME: bin, KEEP_ME: 'kept', TERM_PROGRAM: 'sec-edit' });
       await r.waitExit(t.id);
       expect(child.killed).toBe(true); // the terminal ended: its server goes with it
       // Follow off (the setting): plain opencode, no server, no password.
@@ -563,6 +570,7 @@ describe('TerminalService (real node-pty)', () => {
     await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
     const url = `http://127.0.0.1:${(srv.address() as { port: number }).port}`;
     const plans: unknown[] = [];
+    const envs: NodeJS.ProcessEnv[] = [];
     const children: Array<{ ended: boolean }> = [];
     let reachable = true;
     /** The child in the distro dies before it says "listening" (the script itself failed there). */
@@ -571,7 +579,7 @@ describe('TerminalService (real node-pty)', () => {
     const r = rig({
       platform: 'win32',
       windowsBuild: 22631,
-      env: { SystemRoot: 'C:\\Windows', WSLENV: 'X/p' },
+      env: { SystemRoot: 'C:\\Windows', WSLENV: 'X/p:SEC_EDIT_TEST/u:npm_config_token/u', SEC_EDIT_TEST: '1', ELECTRON_RUN_AS_NODE: '1', npm_config_token: 'tok' },
       getWorkspaceRoot: () => root,
       loadPty: () => ({ spawn: (file, args, o) => (spawns.push({ file, args, env: o.env as Record<string, string> }), fakePty) }),
       detect: async () => [{ ...SHELLS[0], id: 'pwsh', kind: 'pwsh' }, wsl],
@@ -579,8 +587,9 @@ describe('TerminalService (real node-pty)', () => {
       detectOpencode: async (w) => (w ? { available: true, via: 'wsl', distro: w.distro, path: '/home/me/.opencode/bin/opencode' } : { available: false, hint: 'native hint' }),
       follow: { dir: 'C:\\data\\f', foldCase: () => true, inside: async () => true },
       fs: { stat: async () => ({ isDirectory: () => true }), realpath: async (p: string) => p } as never,
-      opencodeSpawn: (_bin, _cwd, _env, plan) => {
+      opencodeSpawn: (_bin, _cwd, env, plan) => {
         plans.push(plan);
+        envs.push(env);
         const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), stdin: Object.assign(new EventEmitter(), { end: () => void (child.ended = true) }), ended: false, kill() {}, exitCode: null, signalCode: null });
         children.push(child);
         setTimeout(() => child.stdout.emit('data', Buffer.from(`one-cwd /mnt/c/ws\nserver listening on ${reachable ? url : 'http://127.0.0.1:9'}\nserver password secret-pass-12345\n`)), 0);
@@ -593,12 +602,16 @@ describe('TerminalService (real node-pty)', () => {
       expect(t.notice).toBeUndefined();
       // The server: the fixed script inside the distro, in the folder's Linux path.
       expect(plans[0]).toEqual({ file: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', OPENCODE_WSL_SERVE, '/mnt/c/ws', '/home/me/.opencode/bin/opencode'], linuxRoot: '/mnt/c/ws' });
+      // wsl.exe gets a shell's environment: what WSLENV names of the app's context is not there, so nothing of it crosses.
+      expect(envs[0]).toMatchObject({ SystemRoot: 'C:\\Windows', WSLENV: 'X/p:SEC_EDIT_TEST/u:npm_config_token/u' });
+      expect(Object.keys(envs[0]).filter((k) => /^(SEC_EDIT_|ELECTRON_|npm_)/i.test(k))).toEqual([]);
       // The TUI: attached by address (an argument), the password only in its environment, carried over by WSLENV.
       expect(spawns[0].file).toBe('C:\\Windows\\System32\\wsl.exe');
       expect(spawns[0].args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec "$1" --server "$2"', '/mnt/c/ws', '/home/me/.opencode/bin/opencode', url]);
       expect(JSON.stringify(spawns[0].args)).not.toContain('secret-pass-12345');
       expect(spawns[0].env.OPENCODE_PASSWORD).toBe('secret-pass-12345');
-      expect(spawns[0].env.WSLENV).toBe('X/p:OPENCODE_PASSWORD');
+      expect(spawns[0].env.WSLENV).toBe('X/p:SEC_EDIT_TEST/u:npm_config_token/u:OPENCODE_PASSWORD');
+      expect(spawns[0].env).not.toHaveProperty('SEC_EDIT_TEST'); // named in WSLENV, but not there: does not cross
       // The terminal ends: the server is ended through its stdin.
       r.svc.kill(1, t.id);
       r.svc.dispose();
