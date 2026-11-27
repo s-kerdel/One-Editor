@@ -4,7 +4,8 @@
 //  - PreToolUse (Edit / Write / MultiEdit / NotebookEdit): the row appears before the file changes;
 //  - PostToolUse: + / − from the tool's own patch, summed per file — an estimate (`exact: false`);
 //  - Stop: `git diff --numstat` against the last commit replaces the estimates and adds what only git saw
-//    (a shell command's changes). What was already uncommitted when the session started is not listed.
+//    (a shell command's changes). What was already uncommitted when the TURN started is not listed: the snapshot is
+//    taken again at every prompt, so what the user saved between two turns is never the next turn's.
 // Trust: paths arrive mapped into the open folder (terminal-follow.ts); git's paths get the same lexical rule here.
 import type { GitNumstatRow } from '../shared/git';
 import { CHANGES_MAX_FILES } from '../shared/terminal';
@@ -22,7 +23,8 @@ export interface ClaudeChanges {
   busy: boolean;
   /** Prompts seen since the terminal started. */
   turns: number;
-  /** path → "additions,deletions,status" of what was already uncommitted when the session started; null = not known. */
+  /** path → "additions,deletions,status" of what was already uncommitted when the current turn started (before the
+   *  first prompt: when the session started); null = not known. */
   baseline: Map<string, string> | null;
 }
 
@@ -94,18 +96,22 @@ export function cleanNumstat(rows: unknown, win = false): GitNumstatRow[] | null
   return out;
 }
 
-/** What was already uncommitted when the session started (kept once: a later answer would hide the session's own work). */
+/**
+ * What was already uncommitted when the current turn started: replaces the previous turn's (the caller takes it at
+ * each prompt and drops an answer that arrives after the next one). No answer = not known: this turn then lists
+ * nothing only git saw (better missing a shell's change than calling the user's own save Claude's).
+ */
 export function setBaseline(st: ClaudeChanges, rows: unknown, win = false): void {
   const list = cleanNumstat(rows, win);
-  if (!list || st.baseline) return;
-  st.baseline = new Map(list.map((r) => [r.path, sig(r)]));
+  st.baseline = list ? new Map(list.map((r) => [r.path, sig(r)])) : null;
 }
 
 /**
  * The end of a turn. `rows` = git's numstat now (null: no repository, not trusted, git failed — then the estimates
  * stay): rows Claude's tools named get git's numbers; a file only git lists is added when it is not as it was
- * before the session (a shell command changed it); such a row goes again when git no longer lists it. Rows Claude
- * named stay even when git lists them no more (committed, or git-ignored). Announced rows nothing wrote are dropped.
+ * when the turn started (a shell command changed it); such a row moves to this turn only when it changed during it,
+ * and goes again when git no longer lists it. Rows Claude named stay even when git lists them no more (committed,
+ * or git-ignored). Announced rows nothing wrote are dropped.
  */
 export function reconcile(st: ClaudeChanges, rows: unknown, win = false): boolean {
   let changed = false;
@@ -124,7 +130,8 @@ export function reconcile(st: ClaudeChanges, rows: unknown, win = false): boolea
       seen.add(r.path);
       const moved = sig(row) !== sig(r);
       if (moved || !row.exact || row.pending) changed = true;
-      if (moved && row.origin === 'git') row.turn = st.turns;
+      // Changed since this turn started (not only since the last Stop: the user may have saved it in between).
+      if (moved && row.origin === 'git' && st.baseline?.get(r.path) !== sig(r)) row.turn = st.turns;
       Object.assign(row, { additions: r.additions, deletions: r.deletions, status: r.status, exact: true, pending: false });
     }
     for (const [k, v] of st.files) {

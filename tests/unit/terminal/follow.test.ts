@@ -284,7 +284,7 @@ describe('inbox', () => {
       { path: 'new.ts', status: 'added', additions: 4, deletions: 0, turn: 2, exact: false },
       { path: 'src/a.ts', status: 'modified', additions: 2, deletions: 1, turn: 1, exact: true },
     ]);
-    expect(asked).toBe(3); // the baseline + one per Stop: nothing polls git
+    expect(asked).toBe(5); // a snapshot at the start and at each prompt + one per Stop: nothing polls git
 
     // No git (not a repository, not trusted): the estimates simply stay.
     git = null;
@@ -294,6 +294,62 @@ describe('inbox', () => {
     drop({ hook_event_name: 'Stop' });
     await until(() => last()?.busy === false && last()!.turns === 3);
     expect(last()!.files.find((f) => f.path === 'src/a.ts')).toEqual({ path: 'src/a.ts', status: 'modified', additions: 4, deletions: 1, turn: 3, exact: false });
+    follow.dispose();
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  it.skipIf(process.platform === 'win32')('a snapshot per prompt: the user’s save before prompt 2 is not in its list; Claude’s change in prompt 2 is', async () => {
+    const tmp = path.resolve(__dirname, '../../../.tmp/terminal');
+    fs.mkdirSync(tmp, { recursive: true });
+    const base = fs.mkdtempSync(path.join(tmp, 'follow-turns-'));
+    const root = path.join(base, 'ws');
+    const lists: TerminalChangesEvent[] = [];
+    const last = () => lists.at(-1);
+    const n = (p: string, additions: number, status = 'modified') => ({ path: p, additions, deletions: 0, status });
+    let git: unknown = [];
+    let asked = 0;
+    let slow: Promise<void> | null = null; // a git answer that takes its time
+    const numstat = async () => {
+      asked++;
+      const now = git; // git's answer is about the moment it was asked
+      await slow;
+      return now;
+    };
+    const follow = new ClaudeFollow({ dir: path.join(base, 'data'), inside: async () => true, emit: () => {}, emitChanges: (_id, e) => lists.push(e), numstat });
+    made.push(follow);
+    const s = (await follow.open(4, { root, platform: 'linux', foldCase: false }))!;
+    const drop = dropper(s.dir);
+    await until(() => asked === 1);
+
+    drop({ hook_event_name: 'UserPromptSubmit' });
+    await until(() => asked === 2);
+    drop(tool('PostToolUse', 'Edit', path.join(root, 'a.ts'), { tool_response: patchOf('+a') }));
+    await until(() => last()?.files.length === 1);
+    git = [n('a.ts', 1)];
+    drop({ hook_event_name: 'Stop' });
+    await until(() => last()?.busy === false && !!last()?.files[0]?.exact);
+
+    // Between the turns: the user saves notes.md in the editor.
+    git = [n('a.ts', 1), n('notes.md', 2)];
+    // Prompt 2, and a git that answers late: the Stop must still wait for the turn's own snapshot.
+    let release!: () => void;
+    slow = new Promise<void>((r) => (release = r));
+    drop({ hook_event_name: 'UserPromptSubmit' });
+    await until(() => asked === 4);
+    drop(tool('PostToolUse', 'Edit', path.join(root, 'b.ts'), { tool_response: patchOf('+b', '+c') }));
+    await until(() => last()?.files.length === 2);
+    const turn2 = [n('a.ts', 1), n('notes.md', 2), n('b.ts', 2), n('made-by-shell.txt', 3, 'added')];
+    drop({ hook_event_name: 'Stop' });
+    await sleep(100);
+    git = turn2; // what the Stop's own numstat sees (the snapshot was asked for before)
+    slow = null;
+    release();
+    await until(() => last()?.busy === false && last()!.files.length === 3);
+    expect(last()!.files).toEqual([
+      { path: 'a.ts', status: 'modified', additions: 1, deletions: 0, turn: 1, exact: true },
+      { path: 'b.ts', status: 'modified', additions: 2, deletions: 0, turn: 2, exact: true },
+      { path: 'made-by-shell.txt', status: 'added', additions: 3, deletions: 0, turn: 2, exact: true },
+    ]);
     follow.dispose();
     fs.rmSync(base, { recursive: true, force: true });
   });

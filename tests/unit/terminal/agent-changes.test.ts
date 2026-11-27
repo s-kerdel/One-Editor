@@ -101,7 +101,6 @@ describe('Claude Code list model', () => {
   it('git at Stop: exact for Claude\'s files, shell-made changes join, what was there before stays out, hostile rows are dropped', () => {
     const st = emptyClaudeChanges();
     setBaseline(st, [{ path: 'mine.md', additions: 3, deletions: 0, status: 'modified' }, { path: 'both.md', additions: 1, deletions: 1, status: 'modified' }]);
-    setBaseline(st, []); // only the first answer counts
     onClaudeStep(st, { kind: 'prompt' });
     onClaudeStep(st, { kind: 'edit', path: 'a.ts', counts: { additions: 5, deletions: 5 } });
     onClaudeStep(st, { kind: 'edit', path: 'ignored.log', counts: { additions: 1, deletions: 0 } });
@@ -128,6 +127,31 @@ describe('Claude Code list model', () => {
     onClaudeStep(st, { kind: 'stop' });
     expect(reconcile(st, [{ path: 'mine.md', additions: 3, deletions: 0, status: 'modified' }])).toBe(true);
     expect(paths(st)).toEqual(['a.ts +4 -2 t1 exact', 'ignored.log +1 -0 t1']);
+  });
+
+  it('a snapshot per prompt: what the user saved before turn 2 is not turn 2’s; what changed during it is', () => {
+    const st = emptyClaudeChanges();
+    const n = (path: string, additions: number, status = 'modified') => ({ path, additions, deletions: 0, status });
+    onClaudeStep(st, { kind: 'prompt' });
+    setBaseline(st, []); // turn 1 starts on a clean tree
+    onClaudeStep(st, { kind: 'edit', path: 'a.ts', counts: { additions: 1, deletions: 0 } });
+    onClaudeStep(st, { kind: 'stop' });
+    reconcile(st, [n('a.ts', 1), n('gen.txt', 4, 'added'), n('log.txt', 1)]); // two files only a shell command changed
+    expect(paths(st)).toEqual(['a.ts +1 -0 t1 exact', 'gen.txt +4 -0 t1 exact', 'log.txt +1 -0 t1 exact']);
+    // Between the turns the user saves notes.md and edits gen.txt by hand; turn 2's snapshot sees both.
+    onClaudeStep(st, { kind: 'prompt' });
+    setBaseline(st, [n('a.ts', 1), n('gen.txt', 6, 'added'), n('log.txt', 1), n('notes.md', 2)]);
+    onClaudeStep(st, { kind: 'edit', path: 'b.ts', counts: { additions: 3, deletions: 0 } });
+    onClaudeStep(st, { kind: 'stop' });
+    // In turn 2 Claude edited b.ts, and its shell built out.txt and appended to log.txt.
+    expect(reconcile(st, [n('a.ts', 1), n('gen.txt', 6, 'added'), n('log.txt', 3), n('notes.md', 2), n('b.ts', 3), n('out.txt', 5, 'added')])).toBe(true);
+    expect(paths(st)).toEqual(['a.ts +1 -0 t1 exact', 'b.ts +3 -0 t2 exact', 'gen.txt +6 -0 t1 exact', 'log.txt +3 -0 t2 exact', 'out.txt +5 -0 t2 exact']);
+    // Turn 3's snapshot failed (git timed out): nothing only git saw is called Claude's this turn.
+    onClaudeStep(st, { kind: 'prompt' });
+    setBaseline(st, null);
+    onClaudeStep(st, { kind: 'stop' });
+    reconcile(st, [n('a.ts', 1), n('gen.txt', 6, 'added'), n('log.txt', 3), n('notes.md', 2), n('b.ts', 3), n('out.txt', 5, 'added'), n('later.md', 1)]);
+    expect(paths(st)).not.toContainEqual(expect.stringMatching(/^(later|notes)\.md/));
   });
 
   it('without a baseline (git came later) nothing only git saw is listed', () => {

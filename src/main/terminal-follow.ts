@@ -284,6 +284,8 @@ interface Session {
   /** A numstat for this session is running / one more is wanted after it. */
   settling: boolean;
   settleAgain: boolean;
+  /** The current turn's start snapshot while git is asked for it (a Stop waits for it). */
+  baselining: Promise<void> | null;
 }
 
 export interface ClaudeFollowOptions {
@@ -338,7 +340,7 @@ export class ClaudeFollow {
       await fs.promises.writeFile(settings, JSON.stringify(followSettings()), { mode: 0o600, flag: 'wx' });
       const ch = emptyClaudeChanges();
       const sender = new ChangesSender(id, 'claude', () => ch, (e) => this.o.emitChanges?.(id, e));
-      const s: Session = { id, dir, ctx, watcher: null, timer: null, busy: false, again: false, ch, sender, hotUntil: 0, polledAt: Date.now(), winAt: 0, winN: 0, settling: false, settleAgain: false };
+      const s: Session = { id, dir, ctx, watcher: null, timer: null, busy: false, again: false, ch, sender, hotUntil: 0, polledAt: Date.now(), winAt: 0, winN: 0, settling: false, settleAgain: false, baselining: null };
       this.sessions.set(id, s);
       if (this.o.watch !== false) {
         try {
@@ -481,7 +483,7 @@ export class ClaudeFollow {
           this.step(s, { kind: raw.kind });
           this.o.emit(s.id, { id: s.id, agent: 'claude', kind: raw.kind });
           if (raw.kind === 'stop') void this.settle(s);
-          else if (!s.ch.baseline) void this.baseline(s);
+          else void this.baseline(s); // every prompt: what the user changed before it is not this turn's
           continue;
         }
         const rel = raw.filePath ? mapFollowPath(raw.filePath, s.ctx) : null;
@@ -513,11 +515,20 @@ export class ClaudeFollow {
     return s.ctx.platform === 'win32' && !s.ctx.wslDistro;
   }
 
-  /** What was already uncommitted before Claude did anything (asked once at the start, again at a prompt while unknown). */
-  private async baseline(s: Session) {
-    if (!this.o.numstat || s.ch.baseline) return;
-    const rows = await this.o.numstat(s.id).catch(() => null);
-    if (this.sessions.has(s.id)) setBaseline(s.ch, rows, this.win(s));
+  /** What was already uncommitted when the turn started (at the session's start, then at every prompt). */
+  private baseline(s: Session): Promise<void> {
+    const numstat = this.o.numstat;
+    if (!numstat) return Promise.resolve();
+    const turn = s.ch.turns;
+    const p = numstat(s.id)
+      .catch(() => null)
+      .then((rows) => {
+        // Only the newest turn's: an answer that arrives after the next prompt is about the turn before.
+        if (this.sessions.has(s.id) && s.ch.turns === turn) setBaseline(s.ch, rows, this.win(s));
+      });
+    s.baselining = p;
+    void p.finally(() => s.baselining === p && (s.baselining = null));
+    return p;
   }
 
   /** The end of a turn: git's numbers replace the estimates (single flight; a Stop during a run asks for one more). */
@@ -530,6 +541,7 @@ export class ClaudeFollow {
     try {
       do {
         s.settleAgain = false;
+        await s.baselining; // a short turn: its start snapshot first, or the user's earlier saves would count as Claude's
         const rows = this.o.numstat ? await this.o.numstat(s.id).catch(() => null) : null;
         if (!this.sessions.has(s.id)) return;
         if (reconcile(s.ch, rows, this.win(s))) s.sender.schedule();
