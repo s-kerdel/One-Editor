@@ -50,6 +50,10 @@
 
 **A workspace stays inside its folder.** A link in it (symlink, Windows junction) that points **outside** the folder is not shown, opened, searched or written through. Links to places **inside** the folder work as before. Need that other folder? Open it itself.
 
+**One's own data folder** (settings, secrets) **cannot be opened as a folder.**
+
+**What One remembers per folder** (open tabs, values you typed for `{{variables}}`, the environment / target pick, the folder's **Images from the internet** choice, recent files) is kept in One's own data folder with the folder's session: never in your folder, never in the browser's storage. Values from older versions move over the first time you open that folder.
+
 **Go back returns to where you were**: the previous file (reopened if you closed it), or the spot before a big jump (find, go to line, outline, a click far away). PDFs go back to the page before a link or a typed page. Typing and small cursor moves are not steps.
 
 **The ← → buttons** sit at the **far left of the status bar**: `← → │ folder › path…`. Same spot in Shelf and Classic.
@@ -216,7 +220,7 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 | **New window** | `Ctrl+Shift+N` (macOS `Cmd+Shift+N`), or palette → "Window: New window". It opens with the start screen |
 | **Start One again** without a folder (Windows: **`Shift`+click** its taskbar button · Start menu · command line) | A new window with the start screen |
 | **Open a folder** from outside (Explorer, Finder, command line) | Already open in a window → **that window comes to the front**. Else → a new window |
-| **Open a folder in One** (the folder switcher, Open folder…, a recent folder, Open as project, a drop) | **This window switches** to it (unsaved changes are saved or asked about first) |
+| **Open a folder in One** (the folder switcher, Open folder…, a recent folder, Open as project, a drop) | **This window switches** to it (unsaved changes are saved or asked about first). The window reloads for the new folder |
 | Same, with **`Shift`** (`Shift`+click, `Shift`+`Enter` in a menu, a drop with `Shift` held) | A **new window**. An empty window (start screen) still opens it here. The menus' tooltip says so |
 | **Open a file** from outside | A tab in the window whose folder holds it. Else a tab in the window you used last (as a file from outside the folder). No window yet → a new window with a recent folder that holds the file, else the file's own folder |
 
@@ -735,6 +739,8 @@ A note can show images from a web address (`![](https://…)`). Loading one tell
 - **Default for every folder:** Settings → Preview → **Images from the internet**: **Ask** (the bar) · **Always load** · **Never load** (no bar).
 - **Change a folder's choice:** palette → **"Images from the internet: …"** (always load / never load / use the default).
 - Same rule in **live preview**, link previews, embeds and **exports** (HTML / PDF show the dashed box instead).
+- **Mermaid diagrams follow the same choice.** If the note may not load them, a diagram with images (`<img>` labels, `img:` shapes) or styles that load something (`url()`, `@import`) is not drawn: you see its source and the **Load** bar. Once allowed, its images show.
+- Diagram styles never load anything from the internet. `{{variables}}` are not filled in inside diagrams.
 - Images **from your folder** always show.
 
 ### Copy and Run show what you get
@@ -913,11 +919,13 @@ Each profile has a coloured badge: **blue** PowerShell · **grey** Command Promp
 
 1. The status bar shows **Git: not trusted**. Click it (or press `Ctrl+Shift+G`).
 2. The panel asks: *"This folder is a git repository… Trust this folder?"*
-3. Click **Trust**. Git appears. **Not now** leaves it off.
+3. Click **Trust**, then **Trust** again in One's own dialog (it names the folder). Git appears. **Not now** leaves it off.
 
 - **Asked once per folder.** Remembered on this computer, not inside the folder.
 - **Change your mind:** Source control panel → **⋯** → **Stop trusting this folder** (also in the branch menu).
 - **Folders you already used** before this version stay trusted.
+- **Only the desktop app grants trust.** In the browser: trust the folder in the desktop app once.
+- **One never changes files inside `.git`** (its hooks and config stay as git left them).
 
 ### See what changed
 
@@ -1173,15 +1181,15 @@ Settings are **global**, not per folder.
 - **The link holds a secret key.** Without it the server refuses every request. Share it only with people you trust.
 - **What the link opens:** the files of **this folder** (read, change, delete — git included) and the **app settings** you share with the desktop (theme, editor…). **Not** other folders on this computer, not the terminal, not your secrets.
 - **The key stays in that browser tab** (not a cookie, not in image addresses). A new tab needs the link again. **Open** starts the browser with a one-time link.
-- **Network (LAN) is opt-in, and asked every time:** anyone on your network with the link gets the above. It is plain HTTP: trusted networks only, not public Wi-Fi.
+- **Network (LAN) is opt-in, and asked every time** in One's own dialog (it names the folder): anyone on your network with the link gets the above. It is plain HTTP: trusted networks only, not public Wi-Fi.
 - **Windows:** the first network start shows a **firewall prompt** for One. Allow **Private networks** only.
 - **Nothing starts on its own.** It stops once no window has its folder open any more. Quitting One stops it.
 - **Several windows:** one server for the app, for the folder of the window that started it. Every window shows its status and can stop it ([Multiple windows](#multiple-windows)).
 - **Own tabs:** the browser keeps its own open tabs, tree and layout per folder (the first visit starts from the desktop's). The desktop's stay as they were.
 - **Settings are shared:** a change in the browser shows up in the desktop app at once, and the other way round.
-- **Same folder, same port:** the browser remembers things per address (environment pick, recent files). So a folder gets its last port again. If that port is taken, the info box says so: browser state for this folder then starts empty.
-- **In the browser:** no terminal · secrets of `{{variables}}` stay in that tab's memory only · PDF export = the browser's print dialog · one server at a time.
-- **Without the desktop app:** `Start web server.cmd` (Windows) or `start-web.sh` (Linux, macOS) next to the program. Started that way on this computer, the browser can switch folders; with `--host` (another address) it serves that one folder only.
+- **Same folder, same port:** the browser remembers a few view choices per address (like the diff layout). So a folder gets its last port again. If that port is taken, the info box says so: browser state for this folder then starts empty.
+- **In the browser:** no terminal · no **Trust** for git (trust the folder in the desktop app once) · the **Images from the internet** setting is changed in the desktop app · secrets of `{{variables}}` stay in that tab's memory only · PDF export = the browser's print dialog · one server at a time.
+- **Without the desktop app:** `Start web server.cmd` (Windows) or `start-web.sh` (Linux, macOS) next to the program. It runs One's own program without a window. The browser can open only the folder(s) you started it with, and folders inside them. Several folders: `start-web.sh ~/notes ~/work`.
 
 ### MCP server (AI apps)
 
@@ -1201,7 +1209,7 @@ Settings are **global**, not per folder.
 
 - The choice applies to every folder of that step. No further question for them.
 
-- **Skipped, with a reason:** already shared, a whole drive, your home folder itself, One's own data folder, not a folder, over the limit of 32.
+- **Skipped, with a reason:** already shared, a whole drive, your home folder itself, One's own data folder, One's program folder or its search cache (Windows: `%LOCALAPPDATA%\sec-edit\index-cache`), not a folder, over the limit of 32.
 - **Nothing left to add?** You only see the reasons and **OK**.
 - **Same folder name twice** (`a\notes`, `b\notes`): the AI sees `notes` and `notes-2`, numbered in path order.
 - **Later changes** per folder (read-only → read-write, code files on) still ask, one folder at a time.
@@ -1214,7 +1222,7 @@ Settings are **global**, not per folder.
 | **LM Studio** | `~/.lmstudio/mcp.json` (Windows: `%USERPROFILE%\.lmstudio\mcp.json`). In LM Studio: Program → Install → Edit mcp.json |
 | **Codex CLI** | `~/.codex/config.toml` (Windows: `%USERPROFILE%\.codex\config.toml`) |
 | **Claude Desktop** | `%APPDATA%\Claude\claude_desktop_config.json` |
-| **Claude Code** | Run the copied `claude mcp add …` line once in a terminal |
+| **Claude Code** | `~/.claude.json` (Windows: `%USERPROFILE%\.claude.json`): quit Claude Code, then add the copied `"one"` entry to its top-level `"mcpServers"`. There is no `claude mcp add` line: it would leave the token in your shell history |
 
 Example for One in `C:\Apps\One` (Settings shows your real paths):
 
@@ -1223,8 +1231,8 @@ Example for One in `C:\Apps\One` (Settings shows your real paths):
   "mcpServers": {
     "one": {
       "command": "C:\\Apps\\One\\One.exe",
-      "args": ["C:\\Apps\\One\\resources\\app.asar.unpacked\\dist\\mcp\\cli.mjs", "--stdio"],
-      "env": { "ELECTRON_RUN_AS_NODE": "1", "ONE_MCP_TOKEN": "one_…" }
+      "args": ["--mcp-stdio"],
+      "env": { "ONE_MCP_TOKEN": "one_…" }
     }
   }
 }
@@ -1234,14 +1242,26 @@ Example for One in `C:\Apps\One` (Settings shows your real paths):
 # Codex CLI: ~/.codex/config.toml
 [mcp_servers.one]
 command = 'C:\Apps\One\One.exe'
-args = ['C:\Apps\One\resources\app.asar.unpacked\dist\mcp\cli.mjs', '--stdio']
-env = { ELECTRON_RUN_AS_NODE = '1', ONE_MCP_TOKEN = 'one_…' }
+args = ['--mcp-stdio']
+env = { ONE_MCP_TOKEN = 'one_…' }
 ```
 
-- **No Node.js needed:** One's own program runs the server (`ELECTRON_RUN_AS_NODE=1` = "run as a script runner, no window").
+Claude Code: the `"one"` entry goes inside the top-level `"mcpServers"` of `~/.claude.json` (keep the rest of the file):
+
+```json
+"one": {
+  "type": "stdio",
+  "command": "C:\\Apps\\One\\One.exe",
+  "args": ["--mcp-stdio"],
+  "env": { "ONE_MCP_TOKEN": "one_…" }
+}
+```
+
+- **No Node.js needed:** One's own program runs the server, without a window (`--mcp-stdio`). Linux: `"args": ["--ozone-platform=headless", "--mcp-stdio"]`, so it starts without a display too.
+- **Set up before this version?** Setups copied before still work. Copy the setup again once (required on Linux without a display).
 - **Launchers** next to the program do the same: `One MCP.cmd` (Windows), `one-mcp.sh` (Linux, macOS).
-- **Claude Code inside WSL** (One on Windows): `claude mcp add --scope user one -- cmd.exe /c "C:\Apps\One\One MCP.cmd"`
-- **Options** (add after `--stdio`): `--folder <name>` = only that folder · `--read-only` = never writes, whatever Settings say.
+- **Claude Code inside WSL** (One on Windows): the same `"one"` entry in WSL's `~/.claude.json`, with `"command": "cmd.exe"`, `"args": ["/c", "C:\\Apps\\One\\One MCP.cmd"]` and `"WSLENV": "ONE_MCP_TOKEN"` next to the token in `"env"` (hands the token to Windows).
+- **Options** (add after `--mcp-stdio`): `--folder <name>` = only that folder · `--read-only` = never writes, whatever Settings say.
 
 **Access tokens** (one per app)
 
@@ -1324,7 +1344,7 @@ Only in **Read-write** folders:
 
 1. **Your AI app asks you** what will happen, e.g. `Delete folder "old-project" and everything in it? 120 files, 14 folders, 37 MB (including hidden items such as .git, .env). It goes to the Recycle Bin; if the bin is off or too small for it, it is deleted permanently.` or `Replace "v1" with "v2" in 14 files (31 matches): "a.md", "b.md", "c.md" and 11 more?`
 2. **Yes** → it happens, in one step. **No**, closing the question or no answer within 2 minutes → nothing happens.
-3. **Apps that can't ask** show you that summary in the chat first. The AI goes ahead only after **you** agree there (it then sends a one-time code: valid 5 minutes, only for exactly that action on exactly those files).
+3. **Apps that can't ask** are refused these actions: nothing happens and the AI is told to leave it to you (do it in One, or use an app that can ask). Everything in the right-hand column still works.
 
 - **Restore a deleted folder from the Recycle Bin** (Trash on a Mac). It keeps no undo copy, so **Recent activity** lists it as `delete (folder)` without a Revert button.
 - **Windows: no extra Windows prompt.** If the Recycle Bin is off or too small for the folder, Windows deletes it permanently, and the question says so. Elsewhere: not on a fixed local drive → nothing is deleted. Mac: only on the volume with your Trash. Linux: only into your trash.
@@ -1338,7 +1358,8 @@ Only in **Read-write** folders:
 
 - **Read-only is the default** for every folder you add.
 - **Notes only by default:** `.md`, `.markdown`, `.txt`. Code and config files (`.json`, `.yaml`, `.ts`…) only with **Code files** on that folder (One asks; off by default).
-- **Never, whatever you allow:** scripts, programs and shortcuts (`.bat`, `.cmd`, `.ps1`, `.vbs`, `.js`, `.py`, `.exe`, `.lnk`, `.url`, `desktop.ini`…), images, PDFs and other binaries, hidden files, key files and excluded folders. A refused place always gets the same answer ("Cannot change …"), so an AI cannot probe your exclusions.
+- **Agent instructions and build files** count as code: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `SKILL.md`, `*.instructions.md`, `CMakeLists.txt`, `requirements*.txt`. Other tools obey or run them later, so they need **Code files**.
+- **Never, whatever you allow:** scripts, programs and shortcuts (`.bat`, `.cmd`, `.ps1`, `.vbs`, `.js`, `.py`, `.sh`, `.zsh`, `.rb`, `.pl`, `.exe`, `.lnk`, `.url`, `desktop.ini`…), images, PDFs and other binaries, hidden files, key files and excluded folders. A refused place always gets the same answer ("Cannot change …"), so an AI cannot probe your exclusions.
 
 **`{{placeholders}}` stay yours** (they fill in values and secrets when you copy or run a block)
 
@@ -1373,7 +1394,7 @@ Only in **Read-write** folders:
 **What stays private**
 
 - **Only the folders you list.** Never the rest of the computer, your secrets (the `{{variables}}` vault), settings, git or the terminal.
-- **Always invisible:** hidden files and folders (`.git`, `.env`, `.obsidian`…), key files (`*.pem`, `*.key`, `id_rsa`, `*.kdbx`, `*.gpg`, `wallet.dat`, `*.tfstate`…), your **Excluded folders** (also patterns like `**/secrets` or `private/*.md`), and links. The AI gets "not found", the same as for a file that does not exist. Hidden files and key files stay invisible even with an empty exclude list.
+- **Always invisible:** hidden files and folders (`.git`, `.env`, `.obsidian`…), key files (`*.pem`, `*.key`, `id_rsa`, `*.kdbx`, `*.gpg`, `wallet.dat`, `*.tfstate`, `*.asc`, `*.ovpn`, `*.tfvars`, `.netrc`, `*.kubeconfig`…), your **Excluded folders** (also patterns like `**/secrets` or `private/*.md`), and links. The AI gets "not found", the same as for a file that does not exist. Hidden files and key files stay invisible even with an empty exclude list. Short names like `GIT~1` are refused on every system.
 - **A broken settings file never opens things up:** if `settings.json` cannot be read, a starting MCP server refuses to run and a running one keeps your last exclusions.
 - **A secret typed into a normal note *is* readable.** Keep secrets in the vault.
 - **Excluded folders are a normal setting:** removing an entry from **Excluded folders** makes that folder visible to AI apps at once, without a question. Check the list before sharing a folder.

@@ -56,7 +56,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 ## Web server (desktop: Start web server)
 
-- Web server (desktop only, "Start web server"): main runs `dist/server/cli.mjs <root> --ipc` as a **child process** (`process.execPath` + `ELECTRON_RUN_AS_NODE`, allowlisted env, `SEC_EDIT_CONFIG_DIR` = userData; packaged: `app.asar.unpacked/dist/server/cli.mjs`).
+- Web server (desktop only, "Start web server"): main runs `dist/server/cli.mjs <root> --ipc` in a **utilityProcess** (`web-server-child.cjs`, `childOfUtility()`; allowlisted env, `SEC_EDIT_CONFIG_DIR` = userData; no Node mode, the RunAsNode fuse is off). The launchers use the windowless `One --serve`.
 - Handshake = Node IPC message `{ type: 'ready', port, token }` / `{ type: 'error' }`, never a parsed log line; `{ type: 'stop' }` or an IPC disconnect (app quit / crash) ends it.
 - One server for the whole app (all windows show the same status), never auto-started. It serves the folder of the window that started it; a start for another folder is refused (`EBUSY`). Stopped on quit and once no window has its folder open any more (`rootsChanged`).
 - Bridge `secEditBridge.webServer` = `status / start / stop / open / onChange` over `webserver:*` channels (`src/shared/web-server.ts`), re-validated in `src/main/web-server.ts` like the vault; `open` only accepts a link of the running server.
@@ -72,7 +72,7 @@ grep -n "keyword" docs/llm/09-reference*.md
   - ids / names are prefixed `user-content-` (`SANITIZE_NAMED_PROPS`; headings get their slug back from `data-slug`).
 - No popover / map / area / background / poster; `.se-preview` has `contain: paint`.
 - **Copy / Run read the source**: `fenceAt(renderedSource, data-src-line)` (sections, `embedSourceOf(body)` for embeds) — never DOM text.
-- **Remote media**: `preview/remote.ts` decides (Settings `preview.remoteImages` ask / always / never, per folder `sec-edit-remote:<root>`, "Load" per note).
+- **Remote media**: `preview/remote.ts` decides (Settings `preview.remoteImages` ask / always / never, per folder `SessionState.remoteImages` via `folderValue` / `setFolderValue`, never localStorage; "Load" per note).
   - Pass `remote` in `RenderOptions` (`renderOptionsFor` does).
   - Blocked media become `img.se-remote-blocked` placeholders.
   - Event `media:policy` = re-render.

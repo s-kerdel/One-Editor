@@ -73,7 +73,8 @@ SEC_EDIT_CONFIG_DIR=$PWD/.tmp/run/config npm run serve -- $PWD/.tmp/run/ws
 ```
 
 - Prints `sec-edit serving <root>` and a URL **with an access token**. Default port 4317.
-- Flags: `--port N`, `--host H`, `--open` (see `src/server/cli.ts`).
+- Usage: `serve [folder ...] [--port N] [--host H] [--open]` (see `src/server/cli.ts`).
+- **Pinned:** the page opens only the folders given (the first one opens) and folders inside them. Several: `npm run serve -- <folderA> <folderB>`.
 - It runs until stopped. **Stop it when done** (Ctrl+C / kill the process).
 - Needs `dist/` (run `npm run build` first).
 
@@ -87,6 +88,7 @@ DISPLAY=:99 SEC_EDIT_USER_DATA=$PWD/.tmp/run/userData npm run electron -- --disa
 - Under Xvfb you cannot see the window. Use it only to check that it starts and to read stdout.
 - Keep the main log: add `SEC_EDIT_TIMINGS=1 SEC_EDIT_GIT_LOG=1` in front and `2>&1 | tee .tmp/run/main.log` at the end.
 - For real behaviour use an Electron E2E test instead (`05-testing-and-verify.md`).
+- **Windowless servers** (what the packaged launchers run, `src/main/launch-mode.ts`): `npm run electron -- --ozone-platform=headless --serve <folder>` or `... --mcp-stdio`. No display needed.
 
 ### Never
 
@@ -105,6 +107,9 @@ DISPLAY=:99 SEC_EDIT_USER_DATA=$PWD/.tmp/run/userData npm run electron -- --disa
 | `E2E_AREA`, `E2E_REBUILD=1` | folder name under `.tmp/e2e-file/`; force the build | `scripts/e2e-file.mjs` |
 | `SEC_EDIT_ELECTRON_APP`, `SEC_EDIT_SKIP_STAGE`, `SEC_EDIT_KEEP_STAGE` | staged app folder; reuse it; do not delete it (`test:e2e:file` sets them) | `tests/e2e/electron/global-setup.ts` |
 | `SEC_EDIT_TEST=1` | enables `SEC_EDIT_TEST_*` hooks (set by the Electron fixture) | `src/main/main.ts` |
+| `SEC_EDIT_TEST_GIT_TRUST` | `allow` (default) / `deny`: answers main's git-trust box in tests, logged as `[sec-edit:git-trust]` | `src/main/main.ts` |
+| `SEC_EDIT_TEST_WEBSERVER_LAN` | `allow` (default) / `deny`: answers the LAN web-server confirm, logged as `[sec-edit:webserver-confirm]` | `src/main/main.ts` |
+| `SEC_EDIT_PACKAGED_DIR` | folder of a test package (`scripts/package.mjs --out <dir> --test-package`) | `tests/e2e/electron/packaged.spec.ts` |
 | `SEC_EDIT_TIMINGS=1` | print `[sec-edit:timings]` launch timings | `src/main/main.ts` |
 | `SEC_EDIT_GIT_LOG=1` | print every git spawn | `src/backend/git-activity.ts` |
 | `SEC_EDIT_WATCH` | force a file-watcher mode | `src/backend/watcher.ts` |
@@ -137,12 +142,16 @@ Packaged builds drop every `SEC_EDIT_*` variable except four (`PACKAGED_ENV_ALLO
 | Electron exits at once / "cannot open display" | no X server | `~/.local/xvfb/start-xvfb.sh :99` and `DISPLAY=:99` |
 | page shows `Failed to start: ...` | renderer boot threw (`boot().catch` in `src/renderer/main.tsx`) | read the message; usually a bad startup import or a missing token |
 | timeout on `html[data-ready="true"]` | same as above | rerun with `E2E_CONSOLE=1`; read the `[renderer:pageerror]` line |
-| `EACCES ... Untrusted sender` | IPC from a non-app frame | not your bug; do not weaken `trustedSender` |
+| `EACCES ... Untrusted sender` | IPC from a non-app frame, or the old page right after an in-place folder switch (`staleRealm`, until it reloads) | not your bug; do not weaken `trustedSender` / `trustedCtx` |
 | `EACCES: This folder was not chosen in the app` | `openWorkspace` without a vouch | E2E: `app.evaluate(() => globalThis.__secEditVouch(path))` |
+| `EACCES: This web server only serves the folders it was started for` | the page opened a folder outside the server's folder arguments | pass that folder to `serve` |
+| `EACCES: One's own data folder cannot be opened as a folder` | the test folder is inside `SEC_EDIT_CONFIG_DIR` / userData | keep the workspace next to the config folder, not inside it |
+| `EACCES: Git's own folder (.git) cannot be changed from One` | a page write under `.git` (`protectGitDir`) | by design; set up repos from the test (`git-helpers.ts`) |
 | `OUTSIDE_WORKSPACE` | a symlink leads out of the folder, or a bad relative path | fix the path; never bypass `ws.real()` |
 | `ENOTSUP` in browser mode | desktop-only call (terminal, `exportPdf`) | feature-detect in the renderer |
 | `NO_WORKSPACE` | no folder open | call `openWorkspace` first (tests: the harness does) |
-| git UI empty, status `untrusted` | folder not trusted | tests: `trustRepo(root)`; app: Trust in Source control |
+| git UI empty, status `untrusted` | folder not trusted | tests: `trustRepo(root)`; app: Trust in Source control, then **Trust** in the native box |
+| `EACCES: Trust this folder in the desktop app` / `ENOTSUP` on `git('trust')` | no `ServiceHooks.confirmTrust` (unit-test service, MCP) / an HTTP server never grants trust | tests: `trustRepo(root)` |
 | `no Settings control for "x.y"` (vitest) | setting read without a registry row | add the row (`03-playbooks.md` A) |
 | a lazy panel / Settings shows nothing, no error | two files differ only by case, or wrong export name in `import().then((m) => m.X)` | check the export name with grep; never case-only twins |
 | pill shows an empty box | icon name not registered at startup | `addIcons({...})` in the stub or `icons.tsx` |

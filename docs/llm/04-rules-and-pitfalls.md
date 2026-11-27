@@ -156,6 +156,7 @@ Decisions and their reasons: `10-decisions.md`. Check a row first: `grep -n "sym
 | `src/backend/service.ts`: `writeBinary` | Size check before base64 decoding. | An oversized payload allocates its buffer first. |
 | `src/main/terminal.ts`: `getWorkspaceRoot` | Root (of the terminal's window, `owner`) is compared again after the await. | A shell starts in the previous folder. |
 | `src/backend/workspace.ts`: `sameEntry`, `parentStillHere` | Re-checks the entry right before trashing it. | A racer's replacement file gets trashed. |
+| `src/backend/service.ts`: `openWorkspace` (`insideAnyFolder`) | The data-folder refusal comes **before** `dispose` of the open folder. | A refused open leaves the window with no folder. |
 
 **Security and path checks**
 
@@ -167,6 +168,13 @@ Decisions and their reasons: `10-decisions.md`. Check a row first: `grep -n "sym
 | `src/backend/trash.ts`: `WIN_TRASH_SCRIPT` | Refuses a reparse point (junction / symlink) at delete time. | A swapped-in junction is followed. |
 | `src/backend/winsys.ts`: `winSystemExe` | Absolute paths for Windows system programs. | A program planted in the open folder runs. |
 | `src/main/protocol.ts`: `decodeURIComponent` in try/catch | A malformed %-escape answers 400. | An unhandled throw in main. |
+| `src/backend/workspace.ts`: `pageDirBefore` / `pageDirAfter` | Re-checks the real parent of a non-strict page write / move / delete right before and after the disk changes. | A check/use race writes outside the folder. |
+| `src/backend/workspace.ts`: `withInflight(..., wide)` | Link and folder renames, link removals run alone (slot `''`). | A page redirects a write half-way. |
+| `src/backend/indexer.ts` / `readpool.ts`: `ReadJob.v` | The below-link check at read time. | A moved link makes the index read outside. |
+| `src/backend/service.ts`: `grantGitTrust` | Trust only through `ServiceHooks.confirmTrust`; no hook = `EACCES`. | A page grants itself git. |
+| `src/main/terminal-shells.ts`: `SHIM_ENV` | `NoDefaultCurrentDirectoryInExePath=1` for Windows npm shims. | The shim's bare `node` runs a `node.cmd` from the open folder. |
+| `src/backend/processes.ts`: `posixPs`, `safeGroup` | `ps` by absolute path; a group kill only for a terminal's foreground job, never One's own group. | A `ps` from PATH (empty entry = the folder) runs; the page kills One's own process group. |
+| `src/main/main.ts`: `staleRealm`, `STALE_RELOAD_MS` | After an in-place switch the old page is refused, and reloaded by main after 1.5 s. | A taken-over page keeps running against the new folder. |
 
 **Workarounds**
 

@@ -29,6 +29,7 @@ grep -n "key: 'confirmDelete'\|key: 'nav.buttons'" src/renderer/app/settings-reg
 - `section` must be an existing `SectionId`. `control.type` must be an existing `Control` type (`toggle`, `segmented`, `select`, `number`, `text`, `list`, ...).
 - `select` / `segmented` options must contain the default value.
 - Desktop only: add `desktopOnly: true`.
+- **Shown in the browser?** Add the key to `WEB_SETTINGS` (`src/server/server.ts`): a pinned server drops every other key (`tests/unit/webserver/server-pin.test.ts` checks the registry).
 - Terminal settings go in `TERMINAL_SETTING_DEFS` in `src/renderer/terminal/settings.ts` instead.
 - Changes what gets indexed: add the key to **both** `INDEX_KEYS` lists (`src/backend/service.ts`, `src/renderer/app/settings-sync.ts`).
 - Write from code with `updateSettings({ 'area.name': value })` (`src/renderer/app/settings.ts`). Never call `saveSettings` directly from UI code.
@@ -85,7 +86,7 @@ grep -n "bookmarks" src/shared/api.ts src/backend/service.ts
 - Data that is not a note goes in app data (`this.configDir`), never in the open folder. Use `readJson` / `writeJson` / `withFileLock`.
 - **Desktop only?** Add the name to `DESKTOP_ONLY` in `src/server/server.ts` (~line 93), make the `BackendApi` member optional (`myCall?(...)`) and feature-detect in the renderer.
 - **Big request body?** Add a limit to `BODY_LIMITS` in `src/server/server.ts` (~line 88).
-- **Reads machine-wide data?** A pinned web server must refuse it: add an entry to `PINNED` in `src/server/server.ts`. Ask first.
+- **Reads machine-wide data?** A shared web server (desktop or LAN) must refuse it: add an entry to `SHARED` in `src/server/server.ts`. Ask first.
 - **Needs a native dialog, the sender's identity, or a push event?** That is a channel family (`vault:*` style). **STOP AND ASK.**
 
 ---

@@ -92,9 +92,29 @@ npm run serve -- ~/notes --open
 
 - Prints a **URL with an access token** and opens it.
 - Listens on **127.0.0.1 only** by default. Options: `--port 4317`, `--host`, `--open`.
+- **Only the folders you name** (and folders inside them) open in the browser. Several: `npm run serve -- ~/notes ~/work`.
+- **Packaged app, no Node.js:** `Start web server.cmd` (Windows) / `start-web.sh` (Linux, macOS) next to the program run
+  `One --serve <folder> --open`, without a window.
 - **Zoom** uses the browser's own zoom here.
 - **From the desktop app:** Settings → **Browser mode** → **Start web server** (or the palette). It serves the folder of the
   window that started it; every window shows its status. See the [user guide](docs/USER-GUIDE.md#browser-mode-web-server).
+
+---
+
+## MCP server (AI apps)
+
+Settings → **MCP server** → pick the app → its setup (with a fresh access token) is copied. Paste it, restart that app.
+
+```json
+"one": { "command": "C:\\Apps\\One\\One.exe", "args": ["--mcp-stdio"], "env": { "ONE_MCP_TOKEN": "one_…" } }
+```
+
+- **`One --mcp-stdio`** = One's own program, no window, no Node.js. Linux adds `--ozone-platform=headless` (no display needed).
+- **Claude Code:** add the copied `"one"` entry to the top-level `"mcpServers"` of `~/.claude.json`. No `claude mcp add`
+  line: the token would stay in shell history.
+- **Launchers** next to the program do the same: `One MCP.cmd`, `one-mcp.sh`.
+- **Setups copied before still work.** Copy the setup again once (required on Linux without a display).
+- Details: [user guide](docs/USER-GUIDE.md#mcp-server-ai-apps).
 
 ---
 
@@ -230,7 +250,7 @@ see [Find in files](docs/USER-GUIDE.md#find-in-files) and [Quick open prefixes](
 |---|---|
 | `npm run build` | Renderer (Vite) + Electron/server entries (esbuild) |
 | `npm run electron -- <folder>` | Desktop app from the build |
-| `npm run serve -- <folder> --open` | Browser mode |
+| `npm run serve -- <folder ...> --open` | Browser mode (only these folders and folders inside them) |
 | `npm run package:win` / `package:linux` / `package:mac` | Ready-to-run build + zip in `release/` |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run analyze` | What is in the startup JS bundle |

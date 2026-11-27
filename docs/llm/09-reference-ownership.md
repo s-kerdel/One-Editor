@@ -87,7 +87,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 ### mcp: `src/mcp/`
 
-- **MCP server:** a separate Node program, `dist/mcp/cli.mjs`.
+- **MCP server:** `dist/mcp/cli.mjs`, run by One's own program in its windowless `--mcp-stdio` mode (no Node mode: the RunAsNode fuse is off; `src/main/launch-mode.ts`).
   - MCP clients (LM Studio, Codex CLI, Claude) start it over **stdio** with the app's executable in Node mode.
   - One lazy `Workspace` + on-demand search / link indexes per shared folder.
   - Main owns `<app data>/mcp.json`.

@@ -49,11 +49,12 @@ grep -n "keyword" docs/llm/09-reference*.md
 - Backend / main: `registerProcessSource({ id, rows(), shellPids?(), ownPids?() })` (`backend/processes.ts`); renderer: `registerUiProcessSource({ id, rows() })` (`app/process-explorer/sources.ts`) **from your lazy chunk**.
 - Rows (`ProcRow`) are read only while the explorer is open (every 2 s): keep `rows()` cheap, never spawn or wake a stopped thread for it.
 - Child processes (git, terminals, watchers) are found automatically from the OS process tree.
+- `kill(pid, group)`: `group` comes from the page and signals a process group only for `stopForeground` rows (a terminal's foreground job), via `safeGroup(pgid, ownPgid)`: never One's own group.
 
 ## Build info (Settings footer)
 
 - Build info (`src/renderer/app/build-info.tsx`, in the lazy Settings chunk): version from `package.json`, commit + build date from `scripts/stage.mjs` (`VITE_SEC_EDIT_COMMIT` / `VITE_SEC_EDIT_BUILD_DATE`, `dev` for a plain `npm run build`), Electron/Chromium from the UA, CPU arch from Chromium client hints (**desktop only** — in browser mode they describe the viewing machine).
-- The OS version comes from the backend (`osVersion` in `RPC_METHODS` → `BackendService.osVersion()` reads `os.release()` + `SystemVersion.plist` / `/etc/os-release`; parsing and the one-line format are pure in `src/shared/os-version.ts`). A web server that serves one folder only refuses it (`PINNED` in `src/server/server.ts`) → the footer shows the OS name only.
+- The OS version comes from the backend (`osVersion` in `RPC_METHODS` → `BackendService.osVersion()` reads `os.release()` + `SystemVersion.plist` / `/etc/os-release`; parsing and the one-line format are pure in `src/shared/os-version.ts`). A shared web server (desktop "Start web server", or bound beyond loopback) refuses it (`SHARED` in `src/server/server.ts`) → the footer shows the OS name only.
 
 ## Viewer docs (PDF)
 

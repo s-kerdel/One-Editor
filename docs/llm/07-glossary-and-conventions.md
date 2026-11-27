@@ -22,7 +22,7 @@
 | IPC channel | `family:name` | `rpc:readFile`, `term:spawn`, `vault:get`, `fs:events` |
 | error code | upper-case | `ENOENT`, `EINVAL`, `EACCES`, `ENOTSUP`, `OUTSIDE_WORKSPACE`, `NO_WORKSPACE`, `EXTERNAL_CHANGE` |
 | env variable | `SEC_EDIT_*` | `SEC_EDIT_CONFIG_DIR`, `SEC_EDIT_TEST` |
-| localStorage key | `sec-edit-*` | `sec-edit-layout`, `sec-edit-vars:<root>` |
+| localStorage key | `sec-edit-*` | `sec-edit-layout`. Never keyed by folder: per-folder values go in `SessionState` (`folderValue`) |
 | unit test | `tests/unit/<area>/<name>.test.ts(x)` | `tests/unit/app/panel-menu.test.ts` |
 | browser E2E | `tests/e2e/<area>-<name>.spec.ts` | `tests/e2e/nav-buttons.spec.ts` |
 | Electron E2E | `tests/e2e/electron/<name>.spec.ts` | `tests/e2e/electron/terminal.spec.ts` |
@@ -80,7 +80,7 @@ Your part ends at the hand-over report (`00-START-HERE.md` step 10).
 | **backend** | `BackendService`: the same code behind Electron main and the HTTP server. In the renderer: `app.backend`. |
 | **desktop** / **Electron mode** | the Electron app. `app.backend.kind === 'electron'`. |
 | **browser mode** / **web** | the UI served by `src/server/` to a normal browser. `kind === 'web'`. |
-| **pinned server** | a web server limited to one folder (`pinRoot`): started from the desktop app or bound beyond loopback. |
+| **pinned server** | every server `cli.ts` starts (`pinRoot`): only its folder arguments and folders inside them. **`shared`** (desktop or LAN) also hides machine info (`SHARED`). |
 | **bridge** | `window.secEditBridge`, exposed by `src/main/preload.ts`. Exists only on the desktop. |
 | **RPC** | a request/response backend call listed in `RPC_METHODS`. |
 | **shell** | (1) the app frame area: layout, tree, tabs, settings (`src/renderer/app/`). (2) a terminal shell. Context decides. |
@@ -99,7 +99,7 @@ Your part ends at the hand-over report (`00-START-HERE.md` step 10).
 | **index** | the search + link index built from workspace text. May be built on demand. |
 | **shard** | one search worker holding part of the index (`src/search/shards.ts`). |
 | **defs** | the code-symbol index used by Go to definition. |
-| **trust gate** | git runs only in folders the user trusted (`src/backend/git-trust.ts`). |
+| **trust gate** | git runs only in folders the user trusted (`src/backend/git-trust.ts`). Trust is granted only in main's native box (`confirmTrust`). |
 | **monitor** | `GitMonitor`: the only thing that decides when git status runs. |
 | **open gate** / **vouch** | main only opens folders/files it saw itself (`src/main/open-gate.ts`). |
 | **vault** | encrypted secrets store for `{{variables}}` (`src/main/vault.ts`). |
@@ -109,7 +109,9 @@ Your part ends at the hand-over report (`00-START-HERE.md` step 10).
 | **MCP** | Model Context Protocol server (`src/mcp/`): lets AI clients read/write shared folders. |
 | **journal** | undo history of MCP writes (`src/mcp/journal.ts`). |
 | **app data** | the config folder (`defaultConfigDir()`): settings, sessions, bookmarks, mcp.json. Never the open folder. |
-| **session** | per-folder UI state (open tabs, layout): `SessionState`. |
+| **session** | per-folder UI state (open tabs, layout, `{{variable}}` values, remote-images choice, recent files): `SessionState`. |
+| **windowless launch** | `One --mcp-stdio` / `One --serve`: the MCP or web server in One's own process, no window (`src/main/launch-mode.ts`). |
+| **stale realm** | the old page of a window after an in-place folder switch: refused by main until it reloads (`staleRealm`). |
 | **lead** | the human or main agent that integrates, runs the full suite and commits. |
 | **iteration** | one release cycle: features -> one combined test run -> tag. |
 | **Mod** | Ctrl on Windows/Linux, Cmd on macOS. |

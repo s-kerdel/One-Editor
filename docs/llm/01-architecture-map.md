@@ -47,7 +47,7 @@
                                  the open folder
 
 +------------------------------------------------------------------------------+
-| MCP SERVER (src/mcp) - separate Node program, dist/mcp/cli.mjs, over stdio.  |
+| MCP SERVER (src/mcp) - dist/mcp/cli.mjs, run by `One --mcp-stdio`, stdio.    |
 | Started by AI clients. Has its own Workspace per shared folder. No UI.       |
 | Its settings/tokens are owned by main (src/main/mcp.ts, <app data>/mcp.json).|
 +------------------------------------------------------------------------------+
@@ -128,7 +128,7 @@ They need the sender's identity or native dialogs. Each has: channels in `src/sh
 | `src/search/` | renderer workers + mcp | search engine, symbols, go to definition (pure) |
 | `src/format/` | renderer + worker | Prettier glue, format on save |
 | `src/knowledge/` | renderer + worker + mcp | wikilinks, backlinks, tags, graph (pure) |
-| `src/mcp/` | separate Node program | MCP protocol, tools, write guard, journal |
+| `src/mcp/` | windowless `One --mcp-stdio` (no Node mode) | MCP protocol, tools, write guard, journal |
 | `scripts/` | dev machine | build, stage, package, release |
 | `tests/unit/<area>/` | vitest | unit tests |
 | `tests/e2e/` | Playwright | browser-mode E2E (`harness.ts`) |
