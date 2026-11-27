@@ -15,12 +15,14 @@ const SHORTCUTS: Array<[string, string]> = [
   ['Mod-p', 'Quick open'],
   ['Mod-Shift-p', 'Command palette'],
   ['Mod-n', 'New note'],
+  ['Mod-Shift-n', 'New window'], // desktop only (shortcuts() below)
   ['Mod-Shift-f', 'Search in files'],
   ['Mod-e', 'Toggle reading view'],
   ['Mod-\\', 'Split editor / preview'],
   ['Mod-Shift-b', 'Toggle sidebar'],
   ['Mod-,', 'Settings'],
 ];
+const shortcuts = () => (app.backend.newWindow ? SHORTCUTS : SHORTCUTS.filter(([k]) => k !== 'Mod-Shift-n'));
 
 function folderName(p: string) {
   const parts = p.split(/[\\/]+/).filter(Boolean);
@@ -125,7 +127,7 @@ export function Welcome() {
               <Icon name="keyboard" size={14} /> Shortcuts
             </h2>
             <ul class="se-shortcuts">
-              {SHORTCUTS.map(([k, label]) => (
+              {shortcuts().map(([k, label]) => (
                 <li>
                   <span>{label}</span>
                   <Keys k={k} />

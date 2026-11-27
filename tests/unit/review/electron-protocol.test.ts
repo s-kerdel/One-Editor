@@ -31,14 +31,27 @@ describe('routeAppUrl', () => {
 
   it('workspace URLs decode names with # % ? and spaces; traversal is clamped by the workspace', () => {
     const name = 'a #1 50% ?.png';
-    const url = `app://sec-edit/__ws/sub/${encodeURIComponent(name)}`;
-    expect(routeAppUrl(url, R, path.posix)).toEqual({ kind: 'workspace', rel: `sub/${name}` });
-    const evil = routeAppUrl('app://sec-edit/__ws/..%2F..%2F..%2FWindows%2Fwin.ini', R, path.posix);
-    expect(evil.kind).toBe('workspace');
+    const url = `app://sec-edit/__ws/k1/sub/${encodeURIComponent(name)}`;
+    expect(routeAppUrl(url, R, path.posix)).toEqual({ kind: 'workspace', key: 'k1', rel: `sub/${name}` });
+    const evil = routeAppUrl('app://sec-edit/__ws/k1/..%2F..%2F..%2FWindows%2Fwin.ini', R, path.posix);
+    expect(evil).toMatchObject({ kind: 'workspace', key: 'k1' });
     const rel = (evil as { rel: string }).rel;
     expect(resolveInside('C:\\notes', rel, path.win32, true)).toBe('C:\\notes\\Windows\\win.ini');
-    const drive = routeAppUrl('app://sec-edit/__ws/C:%5CWindows%5Cwin.ini', R, path.posix) as { rel: string };
+    const drive = routeAppUrl('app://sec-edit/__ws/k1/C:%5CWindows%5Cwin.ini', R, path.posix) as { rel: string };
     expect(() => resolveInside('C:\\notes', drive.rel, path.win32, true)).toThrow(/Invalid file name/);
+  });
+
+  // Several windows: the first segment is the window's key; main serves only that window's folder.
+  it('workspace URLs need a window key segment', () => {
+    expect(routeAppUrl('app://sec-edit/__ws/0123abcd/notes/a.png', R, path.posix)).toEqual({ kind: 'workspace', key: '0123abcd', rel: 'notes/a.png' });
+    expect(routeAppUrl('app://sec-edit/__ws/0123abcd/', R, path.posix)).toEqual({ kind: 'workspace', key: '0123abcd', rel: '' });
+    // The old key-less form (and an empty key) names no window: not found, never "the" folder.
+    for (const u of ['app://sec-edit/__ws/pixel.png', 'app://sec-edit/__ws/', 'app://sec-edit/__ws//pixel.png', 'app://sec-edit/__ws']) {
+      expect(routeAppUrl(u, R, path.posix), u).toMatchObject(u === 'app://sec-edit/__ws' ? { kind: 'renderer' } : { kind: 'error', status: 404 });
+    }
+    // An encoded slash in the key is decoded first: the key is then the part before it (and unknown to main).
+    expect(routeAppUrl('app://sec-edit/__ws/ab%2Fcd/x.png', R, path.posix)).toEqual({ kind: 'workspace', key: 'ab', rel: 'cd/x.png' });
+    expect(routeAppUrl('app://sec-edit/__ws/k1/%E0%A4%A', R, path.posix)).toMatchObject({ kind: 'error', status: 400 });
   });
 });
 
@@ -46,6 +59,8 @@ describe('isAppNavigation', () => {
   it('allows only the app itself', () => {
     expect(isAppNavigation('app://sec-edit/index.html')).toBe(true);
     expect(isAppNavigation('app://sec-edit/__ws/evil.html')).toBe(false);
+    expect(isAppNavigation('app://sec-edit/__ws/0123abcd/evil.html')).toBe(false);
+    expect(isAppNavigation('app://sec-edit/__ws%2F0123abcd%2Fevil.html')).toBe(false);
     expect(isAppNavigation('app://sec-edit/%5F%5Fws/evil.html')).toBe(false);
     expect(isAppNavigation('app://sec-edit.evil.com/')).toBe(false);
     expect(isAppNavigation('file:///C:/notes/a.html')).toBe(false);

@@ -89,6 +89,7 @@ export const APP_KEYS_IN_TERMINAL = new Set([
   'Mod-s', // save (in a shell ^S would freeze output via XOFF — a classic trap)
   'Mod-,', // settings
   'Mod-Shift-b', // sidebar
+  'Mod-Shift-n', // new window (Windows Terminal's key too; xterm.js sends nothing for Ctrl+Shift+letter)
   'Mod-Alt-z', // zen mode (readline binds no Ctrl+Alt+Z)
   'Mod-Alt-a', // AI changes panel (no readline binding either)
   'Ctrl-Tab',

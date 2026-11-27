@@ -26,6 +26,9 @@ type Bridge = {
   relaunch?(): Promise<unknown>;
   zenFullScreen?(on: boolean): void;
   gpuStatus?(): Promise<unknown>;
+  wsKey?: string;
+  newWindow?(): Promise<unknown>;
+  openFolderWindow?(abs: string): Promise<unknown>;
 };
 
 /** Shared with ./web. */
@@ -62,6 +65,15 @@ function electronBackend(bridge: Bridge): BackendApi {
       zenFullScreen: bridge.zenFullScreen && ((on) => bridge.zenFullScreen!(on)),
       // Older main processes have no handler: invoke rejects → null (the dialog still shows the renderer's view).
       gpuStatus: bridge.gpuStatus && (() => bridge.gpuStatus!().then((r) => (r as GpuStatus | null) ?? null, () => null)),
+      // Multiple windows: main passes the key together with the app:newWindow / app:openFolderWindow handlers.
+      // No key = a main without them: one window, folders open in place, as before.
+      ...(bridge.wsKey
+        ? {
+            wsKey: bridge.wsKey,
+            newWindow: bridge.newWindow && (async () => void (await bridge.newWindow!())),
+            openFolderWindow: bridge.openFolderWindow && ((abs: string) => bridge.openFolderWindow!(abs) as Promise<'here' | 'focused' | 'new'>),
+          }
+        : {}),
     },
   );
 }
@@ -84,10 +96,14 @@ export const webToken = (): string => web?.webToken() ?? '';
 export const eventsUrl = (query = ''): string => web?.eventsUrl(query) ?? '';
 
 /** URL for a workspace file (images in preview). Browser mode: its capability names `rootAbs` + the path
- *  (server: mediaSubject), so a URL kept from another folder opens nothing. */
+ *  (server: mediaSubject), so a URL kept from another folder opens nothing. Desktop with several windows:
+ *  the window's key picks its folder (main/protocol.ts). */
 export function fileUrl(backend: BackendApi, rootAbs: string, rel: string): string {
   const clean = rel.replace(/\\/g, '/').replace(/^\/+/, '');
-  if (backend.kind === 'electron') return `app://sec-edit/__ws/${clean.split('/').map(encodeURIComponent).join('/')}`;
+  if (backend.kind === 'electron') {
+    const parts = clean.split('/').map(encodeURIComponent).join('/');
+    return backend.wsKey ? `app://sec-edit/__ws/${encodeURIComponent(backend.wsKey)}/${parts}` : `app://sec-edit/__ws/${parts}`;
+  }
   return web?.mediaUrl(rootAbs, clean) ?? '';
 }
 

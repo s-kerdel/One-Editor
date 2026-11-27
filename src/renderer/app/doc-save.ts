@@ -175,6 +175,9 @@ export function replaceFromDisk(path: string, next: string) {
 }
 
 export async function openWorkspace(absPath: string) {
+  // Multiple windows: main decides. Only an empty window opens the folder in place; else another window
+  // shows it ('focused' / 'new') and this one keeps its folder. Every in-app folder open comes through here.
+  if (app.backend.openFolderWindow && (await app.backend.openFolderWindow(absPath)) !== 'here') return;
   const openTabs = app.tabs.value.map((t) => t.path);
   if (!(await confirmUnsaved(openTabs))) return;
   const ws = await app.backend.openWorkspace(absPath);

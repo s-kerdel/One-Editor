@@ -74,8 +74,8 @@ export function frameWindowOptions(frame: WindowFrame, platform: string, overlay
 
 /**
  * "Restart now" (the frame can only be chosen when the window is created). The restart goes through the
- * normal close flow — flush autosaves, "Save changes?" — so it can never lose edits; a Cancel there
- * cancels the restart too.
+ * normal close flow of every window — flush autosaves, "Save changes?" — so it can never lose edits; a
+ * Cancel in any of them cancels the restart too.
  */
 export function createRelaunch(hooks: { close: () => void; relaunch: () => void; exit: (code: number) => void }) {
   let requested = false;
@@ -83,7 +83,7 @@ export function createRelaunch(hooks: { close: () => void; relaunch: () => void;
     get requested() {
       return requested;
     },
-    /** Renderer asked for a restart: close the window the normal way. */
+    /** Renderer asked for a restart: close every window the normal way (`hooks.close`). */
     request() {
       requested = true;
       hooks.close();

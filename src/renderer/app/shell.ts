@@ -109,6 +109,10 @@ export function installShell() {
     { id: 'tabs.next', title: 'Tabs: Next (recently used)', keys: ['Ctrl-Tab', 'Mod-Tab'], run: () => cycleTabs(1) },
     { id: 'tabs.prev', title: 'Tabs: Previous (recently used)', keys: ['Ctrl-Shift-Tab', 'Mod-Shift-Tab'], run: () => cycleTabs(-1) },
     { id: 'file.newNote', title: 'File: New note', keys: ['Mod-n'], keywords: ['create', 'untitled'], when: () => !!app.workspace.value, run: () => void newNote() },
+    // Desktop with several windows only: browser mode keeps Ctrl+Shift+N for the browser itself.
+    ...(app.backend.newWindow
+      ? [{ id: 'window.new', title: 'Window: New window', keys: ['Mod-Shift-n'], keywords: ['open', 'another'], run: () => void app.backend.newWindow?.().catch((err) => app.toast(String(err?.message || err), 'error')) }]
+      : []),
     {
       id: 'view.toggleSidebar',
       title: 'View: Toggle sidebar',

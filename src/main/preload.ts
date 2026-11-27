@@ -12,11 +12,15 @@ const CHANNELS = new Set(['fs:events', 'app:openRequest', 'app:closeRequest', 'g
 const frame = process.argv.includes('--sec-edit-frame=integrated') ? 'integrated' : 'native';
 // Per-launch secret for app://sec-edit/__index/ (the search workers fetch text pages with it).
 const indexToken = process.argv.find((a) => a.startsWith('--sec-edit-index-token='))?.slice('--sec-edit-index-token='.length) ?? '';
+// Per-window key (multiple windows): app://sec-edit/__ws/<key>/… serves this window's folder, not another's.
+// '' = a main without windows support: the renderer then uses neither the key nor newWindow / openFolderWindow.
+const wsKey = process.argv.find((a) => a.startsWith('--sec-edit-ws-key='))?.slice('--sec-edit-ws-key='.length) ?? '';
 
 contextBridge.exposeInMainWorld('secEditBridge', {
   os: process.platform,
   frame,
   indexToken,
+  wsKey,
   invoke: (method: string, args: unknown[]) => ipcRenderer.invoke(`rpc:${method}`, ...args),
   on: (channel: string, cb: (payload: unknown) => void) => {
     if (!CHANNELS.has(channel)) throw new Error(`Unknown channel ${channel}`);
@@ -50,6 +54,9 @@ contextBridge.exposeInMainWorld('secEditBridge', {
   zenFullScreen: (on: boolean) => ipcRenderer.send('app:zenFullScreen', on === true),
   relaunch: () => ipcRenderer.invoke('app:relaunch'),
   gpuStatus: () => ipcRenderer.invoke('app:gpuStatus'),
+  // Multiple windows: main opens one with the start screen / decides where a folder opens ('here' | 'focused' | 'new').
+  newWindow: () => ipcRenderer.invoke('app:newWindow'),
+  openFolderWindow: (abs: string) => ipcRenderer.invoke('app:openFolderWindow', String(abs)),
   // Integrated terminal (term:* channels, validated in main/terminal.ts).
   terminal: terminalBridge(ipcRenderer),
   // Secrets vault for {{variables}} (vault:* channels, validated in main/vault.ts).

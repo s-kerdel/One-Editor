@@ -7,7 +7,7 @@ export { isExternalUrl } from '../shared/api';
 export const SCHEME = 'app';
 export const HOST = 'sec-edit';
 export const APP_ORIGIN = `${SCHEME}://${HOST}`;
-/** Workspace files for the preview live under this prefix (served sandboxed). */
+/** Workspace files for the preview live under this prefix (served sandboxed): /__ws/<window key>/<rel>. */
 export const WS_PREFIX = '/__ws/';
 /** Text pages for the search workers (they fetch them directly: never through the UI thread). */
 export const INDEX_PREFIX = '/__index/';
@@ -28,7 +28,8 @@ export function isPdfWindowRequestAllowed(url: string, resourceType: string): bo
 }
 
 export type AppRoute =
-  | { kind: 'workspace'; rel: string }
+  /** `key`: the window's ws key (several windows: each serves its own folder, main/main.ts). */
+  | { kind: 'workspace'; key: string; rel: string }
   | { kind: 'index'; op: 'page' | 'files'; params: URLSearchParams }
   | { kind: 'renderer'; file: string }
   | { kind: 'error'; status: number; message: string };
@@ -48,7 +49,13 @@ export function routeAppUrl(rawUrl: string, rendererDir: string, p: PlatformPath
   } catch {
     return { kind: 'error', status: 400, message: 'bad url' };
   }
-  if (pathname.startsWith(WS_PREFIX)) return { kind: 'workspace', rel: pathname.slice(WS_PREFIX.length) };
+  if (pathname.startsWith(WS_PREFIX)) {
+    // The first segment names the window; no key segment = no window (never "the" folder).
+    const rest = pathname.slice(WS_PREFIX.length);
+    const cut = rest.indexOf('/');
+    if (cut <= 0) return { kind: 'error', status: 404, message: 'not found' };
+    return { kind: 'workspace', key: rest.slice(0, cut), rel: rest.slice(cut + 1) };
+  }
   if (pathname.startsWith(INDEX_PREFIX)) {
     const op = pathname.slice(INDEX_PREFIX.length);
     return op === 'page' || op === 'files' ? { kind: 'index', op, params: u.searchParams } : { kind: 'error', status: 404, message: 'not found' };

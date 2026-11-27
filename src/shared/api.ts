@@ -299,6 +299,13 @@ export interface BackendApi {
   zenFullScreen?(on: boolean): void;
   /** Restart the app through the normal close flow (unsaved changes are flushed / asked about first). */
   relaunch?(): Promise<void>;
+  /** Multiple windows (desktop): this window's key in app://sec-edit/__ws/<key>/… (platform fileUrl). */
+  readonly wsKey?: string;
+  /** Multiple windows (desktop): open a new window with the start screen. */
+  newWindow?(): Promise<void>;
+  /** Multiple windows (desktop): main decides where a folder opens — 'here' (this window is empty: open it in
+   *  place), 'focused' (another window has it: brought to front) or 'new' (opened in a new window). */
+  openFolderWindow?(abs: string): Promise<'here' | 'focused' | 'new'>;
   /** How Chromium uses the GPU in this window ("Developer: Show GPU status"); null if unavailable. */
   gpuStatus?(): Promise<GpuStatus | null>;
   /** Git status + source control: one entry point, every operation validated by the backend (shared/git.ts). */

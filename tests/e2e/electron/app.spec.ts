@@ -100,7 +100,8 @@ test('workspace images are served over app:// (preview/image viewer)', async ({ 
   const img = page.locator('.se-viewer-img');
   await expect(img).toBeVisible();
   await expect.poll(() => img.evaluate((i: HTMLImageElement) => i.naturalWidth)).toBe(1);
-  expect(await img.getAttribute('src')).toBe('app://sec-edit/__ws/pixel.png');
+  // The window's own key names its folder (several windows: each serves its own).
+  expect(await img.getAttribute('src')).toMatch(/^app:\/\/sec-edit\/__ws\/[0-9a-f]{32}\/pixel\.png$/);
 });
 
 test('second launch hands its file to the running window (single instance)', async ({ el }) => {
