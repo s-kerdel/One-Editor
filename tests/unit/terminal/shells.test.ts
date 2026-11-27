@@ -397,10 +397,10 @@ describe('opencode detection + start plan', () => {
     expect(await detectOpencode(win, { wsl })).toMatchObject({ available: true, via: 'native', path: 'C:\\Users\\me\\.opencode\\bin\\opencode.exe' });
     // Nowhere: the hint names the distro and gives the Linux command, not PowerShell / npm.
     const none = await detectOpencode(machine({ platform: 'win32', env: WIN_ENV, files: [], wsl: 'throw' }), { wsl });
-    expect(none).toEqual({ available: false, hint: 'Opencode is not installed. In a terminal (WSL · Ubuntu): curl -fsSL https://opencode.ai/install | bash — then refresh.', install: 'curl -fsSL https://opencode.ai/install | bash' });
+    expect(none).toEqual({ available: false, hint: 'Opencode is not installed. In a terminal (WSL · Ubuntu): curl -fsSL https://opencode.ai/install | bash. Then refresh.', install: 'curl -fsSL https://opencode.ai/install | bash' });
     // Native Windows (no WSL default shell) keeps the PowerShell text and never starts wsl.exe.
     const native = machine({ platform: 'win32', env: WIN_ENV, files: [] });
-    expect(await detectOpencode(native)).toEqual({ available: false, hint: 'Opencode is not installed. In PowerShell: npm i -g opencode-ai — then refresh.', install: 'npm i -g opencode-ai' });
+    expect(await detectOpencode(native)).toEqual({ available: false, hint: 'Opencode is not installed. In PowerShell: npm i -g opencode-ai. Then refresh.', install: 'npm i -g opencode-ai' });
     expect(native.runs).toEqual([]);
   });
 

@@ -340,7 +340,7 @@ test('the folder keeps its port; when it is taken, the info says browser state s
   await new Promise<void>((r) => blocker.once('error', () => r()).listen(port, '127.0.0.1', () => r())); // EADDRINUSE: taken anyway
   try {
     await info.locator('[data-testid="webserver-start"]').click();
-    await expect(info.locator('[data-testid="webserver-port-busy"]')).toHaveText(`Port ${port} was busy — browser state for this folder starts empty.`);
+    await expect(info.locator('[data-testid="webserver-port-busy"]')).toHaveText(`Port ${port} was busy: browser state for this folder starts empty.`);
     const next = (await status(page)).port as number;
     expect(next).not.toBe(port);
     // …and the port it got instead is the folder's port from now on.

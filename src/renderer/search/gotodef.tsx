@@ -141,13 +141,13 @@ export async function goToDefinition(req: GotoRequest): Promise<void> {
     // The index is still being built: say so (never "not found"), then try once more when it is done.
     const { searchClient } = await loadSearch();
     const p = searchClient.progress.value;
-    const toast = app.toast(`Indexing${p?.total ? ` ${p.done.toLocaleString()} / ${p.total.toLocaleString()} files` : '…'} — looking for ${short(r.ident.name)}`, 'info', INDEX_WAIT_MS);
+    const toast = app.toast(`Indexing${p?.total ? ` ${p.done.toLocaleString()} / ${p.total.toLocaleString()} files` : '…'} (looking for ${short(r.ident.name)})`, 'info', INDEX_WAIT_MS);
     await Promise.race([searchClient.whenReady(), new Promise((res) => setTimeout(res, INDEX_WAIT_MS))]);
     app.dismissToast(toast);
     if (stale()) return;
     r = await resolveDefinition(req, env);
     if (stale()) return;
-    if (r.pending && !r.hits.length) return void app.toast(`Still indexing — try ${short(r.ident!.name)} again in a moment`, 'info', 3500);
+    if (r.pending && !r.hits.length) return void app.toast(`Still indexing. Try ${short(r.ident!.name)} again in a moment`, 'info', 3500);
   }
   show(r, req);
 }

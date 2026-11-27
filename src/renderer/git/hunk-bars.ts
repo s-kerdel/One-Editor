@@ -54,7 +54,7 @@ class HunkBar extends WidgetType {
     bar.dataset.index = String(this.index);
     bar.dataset.state = h.state;
     const [box, label, size] = Array.from(bar.children) as HTMLElement[];
-    const where = h.b1 > h.b0 ? (h.b1 - h.b0 > 1 ? `lines ${h.b0 + 1}–${h.b1}` : `line ${h.b0 + 1}`) : `the lines removed at line ${h.b0 + 1}`;
+    const where = h.b1 > h.b0 ? (h.b1 - h.b0 > 1 ? `lines ${h.b0 + 1}-${h.b1}` : `line ${h.b0 + 1}`) : `the lines removed at line ${h.b0 + 1}`;
     box.setAttribute('aria-checked', CHECKED[h.state]);
     box.setAttribute('aria-label', `Include ${where} in the commit`);
     label.textContent = h.state === 'mixed' ? 'Include in commit (partly staged)' : 'Include in commit';

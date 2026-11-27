@@ -220,7 +220,7 @@ export function StatusDocEnd({ path }: { path: string }) {
         </span>
       )}
       {doc && !doc.binary && (
-        <button class="se-status-item se-status-btn" data-testid="eol" title="Line endings — click to switch" onClick={() => setDocEol(path, doc.eol === 'crlf' ? 'lf' : 'crlf')}>
+        <button class="se-status-item se-status-btn" data-testid="eol" title="Line endings. Click to switch" onClick={() => setDocEol(path, doc.eol === 'crlf' ? 'lf' : 'crlf')}>
           {doc.eol === 'crlf' ? 'CRLF' : 'LF'}
         </button>
       )}
@@ -234,7 +234,7 @@ export function StatusDocEnd({ path }: { path: string }) {
         <button
           class="se-status-item se-status-btn"
           data-testid="language"
-          title={viewer ? 'File type' : 'Language mode — click to change'}
+          title={viewer ? 'File type' : 'Language mode. Click to change'}
           aria-haspopup="listbox"
           aria-expanded={ui.picker.value?.anchor ? 'true' : undefined}
           disabled={!doc || viewer}
@@ -248,7 +248,7 @@ export function StatusDocEnd({ path }: { path: string }) {
         </button>
       )}
       {md && (
-        <button class="se-status-item se-status-btn" data-testid="view-mode" title="View mode — click to cycle" onClick={() => setViewMode(NEXT_MODE[app.settings.value.viewMode])}>
+        <button class="se-status-item se-status-btn" data-testid="view-mode" title="View mode. Click to cycle" onClick={() => setViewMode(NEXT_MODE[app.settings.value.viewMode])}>
           {MODE_LABEL[app.settings.value.viewMode]}
         </button>
       )}
@@ -291,7 +291,7 @@ const WIDTH_LABEL = { readable: 'Readable', wide: 'Wide', full: 'Full width' } a
 function WidthToggle() {
   const w = currentWidth();
   return (
-    <button class="se-width-btn" data-testid="content-width" data-width={w} aria-label={`Content width: ${WIDTH_LABEL[w]}`} title={`Content width: ${WIDTH_LABEL[w]} — click to change`} onClick={cycleContentWidth}>
+    <button class="se-width-btn" data-testid="content-width" data-width={w} aria-label={`Content width: ${WIDTH_LABEL[w]}`} title={`Content width: ${WIDTH_LABEL[w]}. Click to change`} onClick={cycleContentWidth}>
       <Icon name={`w${w}`} size={16} />
     </button>
   );

@@ -627,7 +627,7 @@ export function createPreview(el: HTMLElement): PreviewController {
   function codeAction(btn: HTMLElement): void {
     const block = btn.closest<HTMLElement>('.se-code');
     const src = block && blockSource(block);
-    if (!block || !src) return void app.toast('This code block is not in the note any more — try again', 'error');
+    if (!block || !src) return void app.toast('This code block is not in the note any more. Try again', 'error');
     // {{variables}} (data-vars): copy / run resolve placeholders (real secret values, missing ones asked for).
     const vars = block.hasAttribute('data-vars') ? app.variables : undefined;
     const ctx = { path: src.path, info: src.info };

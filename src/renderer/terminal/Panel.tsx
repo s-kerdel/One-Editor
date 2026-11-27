@@ -300,7 +300,7 @@ export function LauncherCard({ anchor, rows, onClose, onRefresh }: { anchor: HTM
               </button>
             )}
             {r.missing && r.install && (
-              <button type="button" class="se-term-copy" title="Copy the install command" onClick={() => void writeClipboard(r.install!).then((ok) => app.toast(ok ? 'Install command copied — run it in a terminal' : 'Could not copy', ok ? 'success' : 'error'))}>
+              <button type="button" class="se-term-copy" title="Copy the install command" onClick={() => void writeClipboard(r.install!).then((ok) => app.toast(ok ? 'Install command copied. Run it in a terminal' : 'Could not copy', ok ? 'success' : 'error'))}>
                 Copy
               </button>
             )}
@@ -547,7 +547,7 @@ export function TerminalPanel({ manager: m, backend, hasWorkspace, folderName, o
               }}>
               <Icon name={max ? 'termRestore' : 'termMax'} size={14} />
             </button>
-            <button type="button" class="se-term-gbtn" data-testid="terminal-hide" aria-label="Hide terminal panel" title={`Hide panel — terminals keep running (${prettyKey(TOGGLE_KEY)})`} onClick={onHide}>
+            <button type="button" class="se-term-gbtn" data-testid="terminal-hide" aria-label="Hide terminal panel" title={`Hide panel: terminals keep running (${prettyKey(TOGGLE_KEY)})`} onClick={onHide}>
               <Icon name="chevronDown" size={15} />
             </button>
           </div>

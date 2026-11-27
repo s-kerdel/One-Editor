@@ -133,7 +133,7 @@ export class WebServerService {
     if (this.child || this.stopping) {
       // One server for the app: another window's folder is not silently swapped in.
       const other = this.s.root && !sameRoot(root, this.s.root) ? this.s.root : null;
-      return Promise.reject(new WebServerError('EBUSY', other ? `The web server is already serving ${other} — stop it first` : 'A web server is already running — stop it first'));
+      return Promise.reject(new WebServerError('EBUSY', other ? `The web server is already serving ${other}. Stop it first` : 'A web server is already running. Stop it first'));
     }
     if (!root) return Promise.reject(new WebServerError('NO_WORKSPACE', 'Open a folder first'));
     const args = [root, '--host', o.access === 'lan' ? '0.0.0.0' : '127.0.0.1', '--ipc'];

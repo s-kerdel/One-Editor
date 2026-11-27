@@ -298,6 +298,6 @@ export function detectPaste(text: string, o: { vscodeData?: string | null } = {}
   const rows = !json && !isCurl(text) ? delimitedRows(text) : null;
   if (rows) out.push({ id: 'table', label: 'Markdown table', text: toMarkdownTable(rows) });
   const secret = !isCurl(text) && !text.includes('\n') ? secretKind(text) : null;
-  if (secret) out.push({ id: 'secret', label: `Looks like a secret — replace with {{${secret}}}`, text: `{{${secret}}}`, values: [{ name: secret, value: secretValue(text), secret: true }], warn: true });
+  if (secret) out.push({ id: 'secret', label: `Looks like a secret: replace with {{${secret}}}`, text: `{{${secret}}}`, values: [{ name: secret, value: secretValue(text), secret: true }], warn: true });
   return out;
 }

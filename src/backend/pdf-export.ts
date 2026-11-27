@@ -46,7 +46,7 @@ export async function writeFileAtomic(target: string, data: Uint8Array, retry: <
   } catch (err: any) {
     await fsp.rm(tmp, { force: true }).catch(() => {});
     // Windows: a PDF that is open in a viewer (Acrobat, Edge) is locked.
-    if (['EPERM', 'EBUSY', 'EACCES'].includes(err?.code)) throw new BackendFailure('EACCES', `Cannot write ${path.basename(target)} — close it in other apps (or pick another name) and try again`);
+    if (['EPERM', 'EBUSY', 'EACCES'].includes(err?.code)) throw new BackendFailure('EACCES', `Cannot write ${path.basename(target)}. Close it in other apps (or pick another name) and try again`);
     throw err;
   }
 }

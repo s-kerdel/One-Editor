@@ -310,7 +310,7 @@ export function docStats(content: string): DocStats {
 }
 
 export function readingTimeLabel(words: number): string {
-  if (!words) return '—';
+  if (!words) return '-';
   const m = words / 230;
   return m < 1 ? '< 1 min' : `${Math.round(m)} min`;
 }

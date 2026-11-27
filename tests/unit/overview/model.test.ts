@@ -159,7 +159,7 @@ describe('stats + formatting', () => {
     const m = md('# Title\n\nOne two three.\n');
     expect(m.stats).toMatchObject({ words: 4, lines: 4 });
     expect(m.lines).toBe(4);
-    expect(readingTimeLabel(0)).toBe('—');
+    expect(readingTimeLabel(0)).toBe('-');
     expect(readingTimeLabel(100)).toBe('< 1 min');
     expect(readingTimeLabel(1200)).toBe('5 min');
   });

@@ -162,7 +162,7 @@ test('format on save: explicit save formats, autosave does not; .prettierrc is r
   await page.keyboard.type('\nconst = ;');
   await page.keyboard.press('Control+s');
   await expect.poll(() => ws.read('code/save-me.ts'), { timeout: 20000 }).toContain('const = ;');
-  await expect.poll(() => toasts(page)).toContainEqual(expect.stringMatching(/^Saved without formatting — TypeScript syntax error at \d+:\d+/));
+  await expect.poll(() => toasts(page)).toContainEqual(expect.stringMatching(/^Saved without formatting: TypeScript syntax error at \d+:\d+/));
 });
 
 test('formatting keeps the cursor on the same token and is a single undo step', async ({ page, ws }) => {

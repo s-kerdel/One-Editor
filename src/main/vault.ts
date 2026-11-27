@@ -174,7 +174,7 @@ export class VaultService {
       return this.crypto.decrypt(Buffer.from(c, 'base64'));
     } catch {
       // Encrypted by another user / machine (copied profile): unreadable, treat as unset.
-      throw new VaultError('EIO', 'This secret can’t be decrypted on this computer — set it again');
+      throw new VaultError('EIO', 'This secret can’t be decrypted on this computer. Set it again');
     }
   }
 
@@ -224,7 +224,7 @@ export function sharedKeyMessage(q: VaultSharedKeyRequest): { message: string; d
   const from = q.owner ? `saved from “${name(q.owner)}”` : 'saved earlier, from another folder';
   return {
     message: `This folder wants to ${q.action === 'read' ? 'use' : 'change'} the secret “${one(q.key, 80)}” (${from}). Allow?`,
-    detail: `Folder: ${one(q.root, 200)}\n\nA note or variables.md in this folder refers to that secret by name. Allow it only if you trust this folder — the secret’s value becomes available to it. Your answer is remembered for this folder.`,
+    detail: `Folder: ${one(q.root, 200)}\n\nA note or variables.md in this folder refers to that secret by name. Allow it only if you trust this folder: the secret’s value becomes available to it. Your answer is remembered for this folder.`,
   };
 }
 

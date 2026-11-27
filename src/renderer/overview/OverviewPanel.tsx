@@ -178,7 +178,7 @@ function OutlineSection({ path, model }: { path: string; model: DocModel }) {
             data-i={i}
             data-line={e.line}
             style={{ '--d': e.depth }}
-            title={`${e.text} — line ${e.line + 1}`}
+            title={`${e.text} · line ${e.line + 1}`}
             onClick={() => jumpTo(path, e.line)}
           >
             {e.hasChildren ? (
@@ -201,7 +201,7 @@ function OutlineSection({ path, model }: { path: string; model: DocModel }) {
           </div>
         );
       })}
-      {rows.length > MAX_ROWS && <Hint>{(rows.length - MAX_ROWS).toLocaleString()} more — use Ctrl+Shift+O to search them.</Hint>}
+      {rows.length > MAX_ROWS && <Hint>{(rows.length - MAX_ROWS).toLocaleString()} more. Use Ctrl+Shift+O to search them.</Hint>}
     </>
   ));
   return (
@@ -409,7 +409,7 @@ function ConnectionsSlot({ path, model }: { path: string; model: DocModel }) {
 
 function propValue(v: unknown): string {
   if (Array.isArray(v)) return v.map(propValue).join(', ');
-  if (v == null) return '—';
+  if (v == null) return '-';
   return String(v);
 }
 
@@ -557,7 +557,7 @@ export function OverviewPanel() {
   } else if (binary) {
     body = (
       <>
-        <Hint>{isImagePath(path) ? 'Images have no outline.' : 'Binary file — nothing to outline.'}</Hint>
+        <Hint>{isImagePath(path) ? 'Images have no outline.' : 'Binary file: nothing to outline.'}</Hint>
         <InfoSection path={path} model={null} />
       </>
     );

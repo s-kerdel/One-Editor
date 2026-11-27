@@ -456,7 +456,7 @@ export function BacklinksPanel({ onOpenGraph }: { onOpenGraph?: () => void }) {
               <div
                 key={o.path ?? `?${o.target}`}
                 class={`se-kn-out${o.path ? '' : ' unresolved'}`}
-                title={o.path ?? `Not created yet — click to create "${o.target}"`}
+                title={o.path ?? `Not created yet. Click to create "${o.target}"`}
                 onClick={() => (o.path ? void app.openFile(o.path) : void openLink(o.target, path))}
               >
                 <span class="se-kn-ico">{o.path ? <IconFile /> : <IconFilePlus />}</span>
@@ -559,7 +559,7 @@ export function TagsPanel() {
       <PanelHead title="Tags">
         {indexBusy.value && <span class="se-kn-busy" title="Indexing notes…" />}
         <button class="se-kn-btn text" title="Toggle sort order" onClick={() => setSort(sort === 'name' ? 'count' : 'name')}>
-          {sort === 'name' ? 'A–Z' : 'Count'}
+          {sort === 'name' ? 'A-Z' : 'Count'}
         </button>
       </PanelHead>
       {tree.length > 6 && <input class="se-kn-filter" type="search" placeholder="Filter tags…" value={filter} onInput={(e) => setFilter((e.target as HTMLInputElement).value)} />}

@@ -348,7 +348,7 @@ describe('overview panel', () => {
     setDoc('data/blob.bin', '', { binary: true });
     app.activePath.value = 'data/blob.bin';
     mount();
-    expect(el.textContent).toContain('Binary file — nothing to outline');
+    expect(el.textContent).toContain('Binary file: nothing to outline');
     expect($$('[data-section]').map((s) => s.dataset.section)).toEqual(['info']);
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0));

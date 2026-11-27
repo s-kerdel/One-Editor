@@ -392,7 +392,7 @@ export async function linkMention(target: string, m: Mention): Promise<boolean> 
     if (found !== m.text) return [];
     return [{ from, to: from + m.length, insert: found === name ? `[[${name}]]` : `[[${name}|${found}]]` }];
   });
-  if (!ok) app.toast('That mention has changed — try again', 'info');
+  if (!ok) app.toast('That mention has changed. Try again', 'info');
   return ok;
 }
 
@@ -421,7 +421,7 @@ export async function linkMentions(target: string, ms: readonly Mention[]): Prom
       console.warn('[knowledge] could not link mentions in', from, err);
     }
   }
-  if (linked < ms.length) app.toast(`Linked ${linked} of ${ms.length} mentions — the others changed meanwhile`, 'info');
+  if (linked < ms.length) app.toast(`Linked ${linked} of ${ms.length} mentions: the others changed meanwhile`, 'info');
   return linked;
 }
 

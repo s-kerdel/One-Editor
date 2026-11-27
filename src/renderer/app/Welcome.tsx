@@ -60,7 +60,7 @@ export function Welcome() {
           {/* Same artwork as the app / taskbar icon (build/icon.svg → npm run icons). */}
           <img class="se-logo" src="./icon.png" alt="" width={56} height={56} draggable={false} />
           <div class="se-welcome-head">
-            <h1 class="se-brand-lockup" aria-label={ws ? `${BRAND} — ${ws.name}` : BRAND}>
+            <h1 class="se-brand-lockup" aria-label={ws ? `${BRAND} - ${ws.name}` : BRAND}>
               <span class="se-brand-name">{BRAND}</span>
               {ws && (
                 <>

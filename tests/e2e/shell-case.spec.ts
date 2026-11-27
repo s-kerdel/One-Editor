@@ -126,7 +126,7 @@ test('case-insensitive folder (NTFS; simulated in the renderer): "note" next to 
   await page.locator('.se-menu-item', { hasText: 'New folder' }).click();
   await page.locator('.se-tree-input').fill('note.md');
   await page.keyboard.press('Enter');
-  await expect(page.locator('.se-tree-error')).toContainText('“Note.md” already exists — names that differ only in case are the same file in this folder');
+  await expect(page.locator('.se-tree-error')).toContainText('“Note.md” already exists: names that differ only in case are the same file in this folder');
   await page.keyboard.press('Escape');
   expect(onDisk(ws.root, 'cases')).toEqual(['Note.md']);
   await expect(page.locator('.se-tree-row[data-path^="cases/"]')).toHaveCount(1); // no phantom second entry

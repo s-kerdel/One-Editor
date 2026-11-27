@@ -61,7 +61,7 @@ function uiRows(snap: ProcSnapshot, longTaskMs: number, intervalMs: number, rend
 
   const ports = (searchClient as unknown as { ports?: unknown[] }).ports?.length ?? 0;
   const status = searchClient.status.value;
-  const idleWhy = indexOnDemand() ? 'index built on demand — not asked for yet' : 'starts once the app is idle after launch';
+  const idleWhy = indexOnDemand() ? 'index built on demand, not asked for yet' : 'starts once the app is idle after launch';
   rows.push({
     id: 'search',
     parent: 'renderer',
@@ -96,7 +96,7 @@ function uiRows(snap: ProcSnapshot, longTaskMs: number, intervalMs: number, rend
 }
 
 function cell(v: number | null | undefined, digits = 1) {
-  return v == null || !Number.isFinite(v) ? '—' : v.toFixed(digits);
+  return v == null || !Number.isFinite(v) ? '-' : v.toFixed(digits);
 }
 
 function Row({ r, depth, doing, act }: { r: ProcRow; depth: number; doing: string; act: (r: ProcRow, a: ProcAction) => void }) {
@@ -109,7 +109,7 @@ function Row({ r, depth, doing, act }: { r: ProcRow; depth: number; doing: strin
       <td class="n">{cell(r.cpu)}</td>
       <td class="n">{cell(r.busy, 0)}</td>
       <td class="n" title={r.memKind}>
-        {r.mem == null ? '—' : `${cell(r.mem)} MB`}
+        {r.mem == null ? '-' : `${cell(r.mem)} MB`}
       </td>
       <td class="se-procx-state" title={r.detail}>
         {[r.state, r.detail].filter(Boolean).join(' · ')}
@@ -251,13 +251,13 @@ export function ProcessDock() {
     if (a === 'restartIndexer') {
       await backend.processes?.({ op: 'restartIndexer' });
       if (searchClient.status.value !== 'idle') void searchClient.reindex();
-      app.toast('Indexer restarted — the index rebuilds from the cache', 'info');
+      app.toast('Indexer restarted: the index rebuilds from the cache', 'info');
       return;
     }
     const title = a === 'stopGit' ? `Stop “${r.name}”?` : a === 'stopForeground' ? `Stop “${r.name}” in the terminal?` : `End “${r.name}” (PID ${r.pid})?`;
     const msg =
       a === 'stopGit'
-        ? 'git stops mid-way. A write (commit, checkout, rebase) can leave .git/index.lock behind — delete it if git then refuses to run.'
+        ? 'git stops mid-way. A write (commit, checkout, rebase) can leave .git/index.lock behind. Delete it if git then refuses to run.'
         : a === 'stopForeground'
           ? 'It and what it started get a terminate signal (firmer than Ctrl+C). The shell keeps running.'
           : 'It gets a terminate signal. Unsaved work in it is lost.';
@@ -311,7 +311,7 @@ export function ProcessDock() {
           <Icon name="close" size={13} />
         </button>
       </header>
-      <div class="se-procx-list" tabIndex={0} aria-label="Processes — arrow keys move between rows" onKeyDown={(e) => moveRow(e.currentTarget, e.key) && e.preventDefault()}>
+      <div class="se-procx-list" tabIndex={0} aria-label="Processes: arrow keys move between rows" onKeyDown={(e) => moveRow(e.currentTarget, e.key) && e.preventDefault()}>
         {!snap ? (
           <p class="se-procx-msg">Measuring…</p>
         ) : (

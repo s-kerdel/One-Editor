@@ -262,7 +262,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
         }
         if (m && req.method === 'POST' && DESKTOP_ONLY.has(m[1])) {
           req.resume(); // discard the body
-          throw new BackendFailure('ENOTSUP', 'PDF export needs the desktop app — in the browser use Print and pick "Save as PDF"');
+          throw new BackendFailure('ENOTSUP', 'PDF export needs the desktop app. In the browser use Print and pick "Save as PDF"');
         }
         if (m && req.method === 'POST' && allowed.has(m[1])) {
           const body = await readBody(req, BODY_LIMITS[m[1]] ?? DEFAULT_LIMIT);

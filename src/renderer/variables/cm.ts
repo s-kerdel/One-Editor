@@ -144,7 +144,7 @@ class ChipWidget extends WidgetType {
     el.textContent = this.view.text;
     el.dataset.var = this.name;
     el.setAttribute('role', 'button');
-    el.setAttribute('aria-label', `${this.name}: ${this.view.tip[0] ?? ''} — click to edit`);
+    el.setAttribute('aria-label', `${this.name}: ${this.view.tip[0] ?? ''}. Click to edit`);
     const secret = this.view.cls === 'secret';
     let revealed = false;
     const reveal = (on: boolean) => {
@@ -347,7 +347,7 @@ function buildLogLinks(view: EditorView): DecorationSet {
           if (line.to < from || line.from > to) continue;
           for (const c of findPathCandidates(line.text)) {
             const file = workspaceFile(c.path);
-            if (file) out.push(Decoration.mark({ class: 'se-log-link', attributes: { 'data-file': file, 'data-at': `${c.line ?? 1}:${c.col ?? 1}`, title: `${file}${c.line ? `:${c.line}` : ''} — Ctrl+click to open` } }).range(line.from + c.start, line.from + c.end));
+            if (file) out.push(Decoration.mark({ class: 'se-log-link', attributes: { 'data-file': file, 'data-at': `${c.line ?? 1}:${c.col ?? 1}`, title: `${file}${c.line ? `:${c.line}` : ''} (Ctrl+click to open)` } }).range(line.from + c.start, line.from + c.end));
           }
         }
         return false;

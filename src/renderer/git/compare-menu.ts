@@ -32,7 +32,7 @@ export function editorSource(view?: EditorView): CompareSource | null {
   const lastRange = ranges[ranges.length - 1];
   let last = st.doc.lineAt(lastRange.to);
   if (lastRange.to === last.from && last.number > first) last = st.doc.line(last.number - 1); // ends at a line start
-  const lines = first === last.number ? `line ${first}` : `lines ${first}–${last.number}`;
+  const lines = first === last.number ? `line ${first}` : `lines ${first}-${last.number}`;
   return { text: ranges.map((r) => st.sliceDoc(r.from, r.to)).join('\n'), label: `${path} · ${lines}`, path };
 }
 

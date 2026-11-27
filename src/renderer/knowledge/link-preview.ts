@@ -198,7 +198,7 @@ async function show(my: number, link: HoverLink, from: string, key: string) {
   if (r.missing) {
     const note = el.appendChild(document.createElement('div'));
     note.className = 'se-linkpv-note';
-    note.textContent = `“${link.fragment}” isn’t in this note — showing its start.`;
+    note.textContent = `“${link.fragment}” isn’t in this note. Showing its start.`;
   }
   const body = el.appendChild(document.createElement('div'));
   body.className = `se-linkpv-body se-preview${r.truncated ? ' is-cut' : ''}`;

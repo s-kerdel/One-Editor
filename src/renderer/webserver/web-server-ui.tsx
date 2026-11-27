@@ -167,7 +167,7 @@ function Links({ s }: { s: WebServerStatus }) {
       {s.access === 'lan' && !s.urls.some((u) => u.kind === 'lan') && <p class="se-wsrv-note">No network address found: other devices cannot reach this computer right now.</p>}
       {s.portBusy && (
         <p class="se-wsrv-warn" data-testid="webserver-port-busy">
-          Port {s.portBusy} was busy — browser state for this folder starts empty.
+          Port {s.portBusy} was busy: browser state for this folder starts empty.
         </p>
       )}
       <p class="se-wsrv-note">The link holds a secret key. Without it the server refuses every request.</p>
@@ -181,7 +181,7 @@ function Limits() {
       <li>No terminal in the browser.</li>
       <li>Secrets of {'{{variables}}'} stay in that browser tab’s memory only (never saved, never sent).</li>
       <li>PDF export uses the browser’s print dialog.</li>
-      <li>One web server at a time. It serves the folder that is open now — and only that folder: the link cannot open other folders on this computer.</li>
+      <li>One web server at a time. It serves the folder that is open now, and only that folder: the link cannot open other folders on this computer.</li>
     </ul>
   );
 }
@@ -288,7 +288,7 @@ function Pill() {
       class="se-status-item se-status-btn se-wsrv-pill"
       data-testid="webserver-pill"
       data-access={s.access}
-      title={`Web server running${s.access === 'lan' ? ' on your network' : ''} — click for the link and how to stop it`}
+      title={`Web server running${s.access === 'lan' ? ' on your network' : ''}. Click for the link and how to stop it`}
       onClick={openInfo}
     >
       <Icon name="globe" size={12} />:{s.port}

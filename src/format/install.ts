@@ -70,12 +70,12 @@ function applyToEditor(path: string, before: string, after: string, cursor: numb
   return true;
 }
 
-const STALE = 'Document changed while formatting — nothing applied';
+const STALE = 'Document changed while formatting: nothing applied';
 
 function reportSkipped(r: FormatResult) {
   const w = r.warnings;
   if (!w?.length) return;
-  app.toast(w.length === 1 ? `Skipped 1 code block — ${w[0].message}` : `Skipped ${w.length} code blocks — first: ${w[0].message}`, 'error', 7000);
+  app.toast(w.length === 1 ? `Skipped 1 code block: ${w[0].message}` : `Skipped ${w.length} code blocks. First: ${w[0].message}`, 'error', 7000);
 }
 
 function active(): { path: string; text: string } | null {
@@ -123,7 +123,7 @@ export async function formatCodeBlocksInNote(): Promise<boolean> {
   const doc = active();
   if (!doc) return false;
   if (languageForPath(doc.path)?.id !== 'markdown') {
-    app.toast('Format code blocks works in Markdown notes — use Format document here', 'info');
+    app.toast('Format code blocks works in Markdown notes. Use Format document here', 'info');
     return false;
   }
   const sel = currentSelection(doc.text);
@@ -192,7 +192,7 @@ export async function formatSelection(): Promise<boolean> {
         return false;
       }
       // A partial construct (half a class, one array entry) can't be parsed alone.
-      app.toast('Selection is not valid on its own — formatting the whole document', 'info');
+      app.toast('Selection is not valid on its own. Formatting the whole document', 'info');
       return formatDocument();
     }
     after = r.text;
@@ -212,7 +212,7 @@ async function formatForSave(path: string, content: string): Promise<string> {
   const head = app.activePath.value === path ? currentSelection(content).head : undefined;
   const r = await run(path, content, { cursorOffset: head }, 5000);
   if (r.error) {
-    app.toast(`Saved without formatting — ${r.error.message}`, 'error', 6000);
+    app.toast(`Saved without formatting: ${r.error.message}`, 'error', 6000);
     return content;
   }
   if (r.warnings?.length) reportSkipped(r);

@@ -79,7 +79,7 @@ describe('(b) case-insensitive NTFS root', () => {
 
   it('creating note.md / docs/ next to Note.md / Docs/ says so and never reaches the backend', async () => {
     expect(foldsCase()).toBe(true);
-    expect(await commitCreateNow('', 'file', 'note')).toMatch(/“Note\.md” already exists — names that differ only in case/);
+    expect(await commitCreateNow('', 'file', 'note')).toMatch(/“Note\.md” already exists: names that differ only in case/);
     expect(await commitCreateNow('', 'dir', 'docs')).toMatch(/“Docs” already exists/);
     expect(await renameToNow('other.md', 'NOTE.md')).toMatch(/“Note\.md” already exists/);
     expect(calls).toEqual([]);

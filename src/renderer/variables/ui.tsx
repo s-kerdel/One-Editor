@@ -89,7 +89,7 @@ export function VarsStatus() {
   const targets = targetNames(c.file, c.env);
   if (!envs.length && !targets.length && !c.env && !c.target) return null;
   const danger = isDangerEnv(c.env, dangerPattern());
-  const fromNote = (k: 'env' | 'target') => (c.meta?.[k] ? ' — set by this note’s frontmatter' : '');
+  const fromNote = (k: 'env' | 'target') => (c.meta?.[k] ? ', set by this note’s frontmatter' : '');
   return (
     <>
       {(envs.length > 0 || c.env) && (
@@ -97,7 +97,7 @@ export function VarsStatus() {
           class={`se-status-item se-status-btn se-vars-pill${danger ? ' is-danger' : ''}${c.meta?.env ? ' is-note' : ''}`}
           data-testid="vars-env"
           aria-haspopup="listbox"
-          title={`Environment: ${c.env ?? 'none'}${fromNote('env')}${danger ? ' (production!)' : ''} — click to switch`}
+          title={`Environment: ${c.env ?? 'none'}${fromNote('env')}${danger ? ' (production!)' : ''}. Click to switch`}
           onClick={(e) => openEnvPicker(e.currentTarget)}
         >
           env: {c.env ?? 'none'}
@@ -109,7 +109,7 @@ export function VarsStatus() {
           class={`se-status-item se-status-btn se-vars-pill${c.meta?.target ? ' is-note' : ''}`}
           data-testid="vars-target"
           aria-haspopup="listbox"
-          title={`Target: ${c.target ?? 'none'}${c.target ? ` (${targetSummary(c.file, c.env, c.target) || 'not defined here'})` : ''}${fromNote('target')} — click to switch`}
+          title={`Target: ${c.target ?? 'none'}${c.target ? ` (${targetSummary(c.file, c.env, c.target) || 'not defined here'})` : ''}${fromNote('target')}. Click to switch`}
           onClick={(e) => openTargetPicker(e.currentTarget)}
         >
           <Crosshair />
@@ -194,7 +194,7 @@ function ChipEditor({ rect, spec, close }: { rect: DOMRect; spec: ChipEditSpec; 
           class="se-input"
           aria-label="Value"
           type={(secret ? 'password' : 'text') as 'text'}
-          placeholder={secret ? (spec.hasVaultValue ? '•••• (set — type to replace)' : 'Secret value') : 'Value'}
+          placeholder={secret ? (spec.hasVaultValue ? '•••• (set, type to replace)' : 'Secret value') : 'Value'}
           spellcheck={false}
           autoComplete="off"
           value={value}
@@ -216,7 +216,7 @@ function ChipEditor({ rect, spec, close }: { rect: DOMRect; spec: ChipEditSpec; 
         {spec.canMakeSecret && (
           <label class="se-var-editor-check">
             <input type="checkbox" checked={secret} onChange={(e) => setSecret((e.currentTarget as HTMLInputElement).checked)} />
-            Secret — keep the value in the {app.backend.kind === 'electron' ? 'encrypted vault' : 'session (desktop app: encrypted vault)'}
+            Secret: keep the value in the {app.backend.kind === 'electron' ? 'encrypted vault' : 'session (desktop app: encrypted vault)'}
           </label>
         )}
         <div class="se-dialog-buttons">

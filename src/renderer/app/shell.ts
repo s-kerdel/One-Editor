@@ -91,7 +91,7 @@ function syncTitle() {
   const ws = app.workspace.value;
   const p = app.activePath.value;
   // "notes.md — One :: folder": the file first, so taskbar entries stay tellable apart.
-  document.title = [p?.split('/').pop(), brandTitle(ws?.name)].filter(Boolean).join(' — ');
+  document.title = [p?.split('/').pop(), brandTitle(ws?.name)].filter(Boolean).join(' - ');
 }
 
 export function installShell() {

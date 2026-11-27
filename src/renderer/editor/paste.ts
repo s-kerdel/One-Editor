@@ -138,7 +138,7 @@ export async function pastePlainText(view: EditorView): Promise<boolean> {
     view.focus();
     return true;
   } catch {
-    app.toast('Clipboard is not accessible — use Ctrl+Shift+V', 'info');
+    app.toast('Clipboard is not accessible. Use Ctrl+Shift+V', 'info');
     return false;
   }
 }

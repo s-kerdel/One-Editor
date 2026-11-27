@@ -42,16 +42,16 @@ function chipFor(path: string, fm: string, info: string | null, name: string, df
     return {
       text: set ? MASK : `🔒 ${name}`,
       cls: set ? ('secret' as const) : ('secret-missing' as const),
-      tip: [`${name} = ${set ? `${MASK} (secret)` : 'secret not set — click to set it'}`, where, set ? 'Hold Alt to reveal · click to change' : `vault key ${l.vaultKey}`],
+      tip: [`${name} = ${set ? `${MASK} (secret)` : 'secret not set. Click to set it'}`, where, set ? 'Hold Alt to reveal · click to change' : `vault key ${l.vaultKey}`],
     };
   }
   if (l.value === null || l.kind === 'default') {
     const rem = S.remembered().get(name);
-    if (rem !== undefined) return { text: short(rem), cls: 'ok' as const, tip: [`${name} = ${short(rem, 200)}`, 'remembered value (typed when copying) — click to save it'] };
+    if (rem !== undefined) return { text: short(rem), cls: 'ok' as const, tip: [`${name} = ${short(rem, 200)}`, 'remembered value (typed when copying). Click to save it'] };
   }
   if (l.value === null) {
     const file = S.nearestFile(path);
-    return { text: `{{${name}}}?`, cls: 'missing' as const, tip: [`${name} is not defined`, file ? `not in ${file} or this note — click to add it` : `no ${S.fileName()} found — click to create one`] };
+    return { text: `{{${name}}}?`, cls: 'missing' as const, tip: [`${name} is not defined`, file ? `not in ${file} or this note. Click to add it` : `no ${S.fileName()} found. Click to create one`] };
   }
   const value = l.value.includes('{{') ? resolveText(l.value, s, { mode: 'display' }).text : l.value;
   const tip = [`${name} = ${short(value, 200)}`, where];
@@ -118,7 +118,7 @@ async function writeValue(place: ReturnType<typeof placesFor>[number], name: str
 async function editChip(anchor: HTMLElement, path: string, fm: string, info: string | null, name: string) {
   const s = S.scopeFor(path, fm, info);
   const l = lookup(s, name);
-  if (l.kind === 'fence') return void app.toast(`${name} comes from the code block’s {…} attribute — edit it there`, 'info');
+  if (l.kind === 'fence') return void app.toast(`${name} comes from the code block’s {…} attribute. Edit it there`, 'info');
   const places = placesFor(path, s, l);
   const isNew = !(l.def && l.kind !== 'builtin' && l.kind !== 'default');
   const has = l.vaultKey ? S.vault.has(l.vaultKey) === true : false;

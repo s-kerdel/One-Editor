@@ -127,7 +127,7 @@ export class NoteEmbedWidget extends WidgetType {
       view.requestMeasure();
     };
     const host = getEditorHost();
-    if (!this.path) return done('is-unresolved', `“${this.target.split('#')[0]}” doesn’t exist yet — click the title to create it.`);
+    if (!this.path) return done('is-unresolved', `“${this.target.split('#')[0]}” doesn’t exist yet. Click the title to create it.`);
     if (this.path === this.host && !this.fragment) return done('is-cycle', 'A note can’t embed itself.');
     if (AUDIO_RE.test(this.path) || VIDEO_RE.test(this.path)) {
       const src = host?.imageUrl(this.path, this.host, true) ?? null;
@@ -138,7 +138,7 @@ export class NoteEmbedWidget extends WidgetType {
       body.replaceChildren(media);
       return done();
     }
-    if (BINARY_RE.test(this.path)) return done('is-binary', `${basename(this.path)} — open it to view`);
+    if (BINARY_RE.test(this.path)) return done('is-binary', `${basename(this.path)}: open it to view`);
     try {
       const [pv, emb, enh] = await loadPreview();
       const src = this.path === this.host ? view.state.doc.toString() : await host?.readNote?.(this.path);

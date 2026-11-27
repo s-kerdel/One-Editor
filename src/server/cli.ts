@@ -75,7 +75,7 @@ void rememberPort(configDir, root, srv.port).catch(() => {});
 if (ipc) process.send!({ type: 'ready', port: srv.port, token: srv.token, ...(busy ? { busy } : {}) });
 else {
   console.log(`sec-edit serving ${root}\n  → ${srv.url}`);
-  if (busy) console.log(`  Port ${busy} (this folder's last one) was busy — browser state for this folder starts empty.`);
+  if (busy) console.log(`  Port ${busy} (this folder's last one) was busy: browser state for this folder starts empty.`);
 }
 if (shouldOpen) {
   // A one-time launch code, not the token: the browser's command line is visible to other processes.

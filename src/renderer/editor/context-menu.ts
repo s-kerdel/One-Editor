@@ -105,7 +105,7 @@ async function copyOrCut(view: EditorView, cut: boolean) {
     await navigator.clipboard.writeText(text);
     if (cut) view.dispatch(view.state.replaceSelection(''), { userEvent: 'delete.cut', scrollIntoView: true });
   } catch {
-    app.toast(`Clipboard is not accessible — press ${keys(cut ? 'Mod-x' : 'Mod-c')}`, 'info');
+    app.toast(`Clipboard is not accessible. Press ${keys(cut ? 'Mod-x' : 'Mod-c')}`, 'info');
   }
 }
 
@@ -128,7 +128,7 @@ export async function pasteFromClipboard(view: EditorView): Promise<boolean> {
     try {
       dt.setData('text/plain', await navigator.clipboard.readText());
     } catch {
-      app.toast(`The browser blocked clipboard access — press ${keys('Mod-v')} to paste`, 'info', 5000);
+      app.toast(`The browser blocked clipboard access. Press ${keys('Mod-v')} to paste`, 'info', 5000);
       return false;
     }
   }

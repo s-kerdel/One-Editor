@@ -252,7 +252,7 @@ export const claudeInstall = (platform: string, wsl = false) => (platform === 'w
 
 /** One-line install hint. */
 export function claudeHint(platform: string, wsl = false): string {
-  return `Claude Code is not installed. In ${platform === 'win32' && !wsl ? 'PowerShell' : 'a terminal'}: ${claudeInstall(platform, wsl)} — then refresh.`;
+  return `Claude Code is not installed. In ${platform === 'win32' && !wsl ? 'PowerShell' : 'a terminal'}: ${claudeInstall(platform, wsl)}. Then refresh.`;
 }
 
 /**
@@ -339,7 +339,7 @@ export const opencodeInstall = (platform: string, wsl = false) => (platform === 
 /** One-line install hint; `distro` = the WSL distro it was looked up in (the command must be run there, not in PowerShell). */
 export function opencodeHint(platform: string, distro?: string): string {
   const where = platform !== 'win32' ? 'a terminal' : distro ? `a terminal (WSL · ${distro})` : 'PowerShell';
-  return `Opencode is not installed. In ${where}: ${opencodeInstall(platform, !!distro)} — then refresh.`;
+  return `Opencode is not installed. In ${where}: ${opencodeInstall(platform, !!distro)}. Then refresh.`;
 }
 
 /**
@@ -351,7 +351,7 @@ export type WslFollowFail = 'folder' | 'spawn' | 'answer' | 'reach';
 
 /** Started there, never said "listening" there. */
 export const OPENCODE_WSL_NO_FOLLOW =
-  'Opencode runs inside WSL here, but its private server there did not report itself: its edits are not followed and not listed under AI changes. The first start of a distro takes a while — try again.';
+  'Opencode runs inside WSL here, but its private server there did not report itself: its edits are not followed and not listed under AI changes. The first start of a distro takes a while. Try again.';
 /** Answers there; WSL does not forward that port to Windows. */
 export const OPENCODE_WSL_NO_REACH =
   'Opencode runs inside WSL here and its private server answers there, but One cannot reach it from Windows: WSL does not forward its localhost here. Its edits are not followed and not listed under AI changes.';

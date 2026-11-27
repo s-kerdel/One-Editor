@@ -245,7 +245,7 @@ export function parseQuery(raw: string, opts: ParseOptions = {}): ParsedQuery {
         if (c === undefined) warnings.push(`case: expects yes/no (got "${f.value}")`);
         else if (opts.caseSensitive === undefined || opts.caseSensitive === 'smart') forcedCase = c;
       } else if (f.key === 'in' && !(VALID_IN as readonly string[]).includes(f.value.toLowerCase())) {
-        warnings.push(`Unknown in:${f.value} — use in:code, in:text, in:heading, in:frontmatter, in:link`);
+        warnings.push(`Unknown in:${f.value}. Use in:code, in:text, in:heading, in:frontmatter, in:link`);
       }
     }
     pq.forcedCase = forcedCase;

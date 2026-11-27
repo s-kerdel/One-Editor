@@ -141,7 +141,7 @@ export function caseTwin(path: string): string | null {
   return findNode(app.tree.value, dirname(path))?.children?.find((c) => c.name !== name && c.name.toLowerCase() === l)?.path ?? null;
 }
 
-const caseTwinText = (twin: string) => `“${basename(twin)}” already exists — names that differ only in case are the same file in this folder`;
+const caseTwinText = (twin: string) => `“${basename(twin)}” already exists: names that differ only in case are the same file in this folder`;
 
 export async function commitCreateNow(parent: string, kind: 'file' | 'dir', rawName: string): Promise<string | null> {
   let name = rawName.trim();

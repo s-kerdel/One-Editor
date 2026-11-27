@@ -295,7 +295,7 @@ export class TerminalManager {
         },
         openPath: (t) => this.openPath(t),
         onFind: () => this.d.onFind?.(),
-        onClipboardError: (what) => this.d.toast(what === 'copy' ? 'Could not copy to the clipboard' : 'The clipboard could not be read — try Ctrl+Shift+V', 'error'),
+        onClipboardError: (what) => this.d.toast(what === 'copy' ? 'Could not copy to the clipboard' : 'The clipboard could not be read. Try Ctrl+Shift+V', 'error'),
       });
       if (visible) {
         this.mount(view);
@@ -635,7 +635,7 @@ export class TerminalManager {
     s.exitCode.value = code;
     // `exit` / Ctrl+D: the tab goes, like in other editors. A failure stays readable until a key is pressed.
     if (code === 0) return void this.close(id);
-    s.view.write(`\r\n\x1b[2m[process exited with code ${code} — press any key to close]\x1b[0m\r\n`);
+    s.view.write(`\r\n\x1b[2m[process exited with code ${code}, press any key to close]\x1b[0m\r\n`);
   }
 
   private mount(view: TerminalView) {

@@ -224,7 +224,7 @@ export async function formatText(input: string, req: FormatRequest = {}): Promis
     else out = await runPrettier(text, fmt, prettierOptions(lang, req.options, fmt.parser), req.cursorOffset);
     if (out.text.includes('\r')) out = { text: out.text.replace(/\r\n?/g, '\n') };
     // A formatter must never eat the document.
-    if (out.text.trim() === '') return fail({ kind: 'internal', language: lang.id, message: `${lang.name} formatter produced no output — left unchanged` });
+    if (out.text.trim() === '') return fail({ kind: 'internal', language: lang.id, message: `${lang.name} formatter produced no output (left unchanged)` });
     return done(out);
   } catch (err) {
     return fail(issueFrom(err, lang));
@@ -245,7 +245,7 @@ async function formatMarkdown(
     const shield = protectObsidian(text);
     const pretty = await runPrettier(shield.text, fmt, prettierOptions(lang, req.options), undefined);
     const restored = shield.restore(pretty.text);
-    if (restored === null) return fail({ kind: 'internal', language: lang.id, message: 'Markdown formatter could not preserve Obsidian syntax — left unchanged' });
+    if (restored === null) return fail({ kind: 'internal', language: lang.id, message: 'Markdown formatter could not preserve Obsidian syntax (left unchanged)' });
     current = restored;
   }
   if (mode === 'document' && req.options?.markdownCodeBlocks === false) return done({ text: current });

@@ -168,7 +168,7 @@ function OutgoingRows({ path, rows }: { path: string; rows: OutRow[] }) {
           tabIndex={-1}
           data-row
           data-key={`o${o.key}`}
-          title={o.path ? `${o.path}${o.count > 1 ? ` · linked ${o.count}×` : ''}` : o.wiki ? `“${o.label}” doesn’t exist yet — click to create it` : `${o.label} not found — click to show the link`}
+          title={o.path ? `${o.path}${o.count > 1 ? ` · linked ${o.count}×` : ''}` : o.wiki ? `“${o.label}” doesn’t exist yet. Click to create it` : `${o.label} not found. Click to show the link`}
           onClick={() => follow(o)}
         >
           <span class="se-ov-ico">{o.path ? <FileIcon path={o.path} size={14} /> : <Icon name="filePlus" size={14} />}</span>
@@ -201,7 +201,7 @@ function OutgoingRows({ path, rows }: { path: string; rows: OutRow[] }) {
           </button>
         </div>
       ))}
-      {rows.length > MAX_OUT && <Hint>{(rows.length - MAX_OUT).toLocaleString()} more links — the graph shows them all.</Hint>}
+      {rows.length > MAX_OUT && <Hint>{(rows.length - MAX_OUT).toLocaleString()} more links: the graph shows them all.</Hint>}
     </List>
   );
 }
@@ -273,7 +273,7 @@ function MentionRows({ path, list, drop }: { path: string; list: Mention[]; drop
           tabIndex={-1}
           data-row
           data-key={`m${m.from}:${m.line}:${m.col}`}
-          title={`${m.from} — line ${m.line + 1}\n${m.context.text}`}
+          title={`${m.from} · line ${m.line + 1}\n${m.context.text}`}
           onClick={() => void app.openFile(m.from, { line: m.line, col: m.col, length: m.length })}
         >
           <span class="se-ov-ico">
@@ -298,7 +298,7 @@ function MentionRows({ path, list, drop }: { path: string; list: Mention[]; drop
           </button>
         </div>
       ))}
-      {list.length > MAX_MENTIONS && <Hint>{(list.length - MAX_MENTIONS).toLocaleString()} more — the Backlinks panel lists them all.</Hint>}
+      {list.length > MAX_MENTIONS && <Hint>{(list.length - MAX_MENTIONS).toLocaleString()} more: the Backlinks panel lists them all.</Hint>}
     </List>
   );
 }
@@ -496,7 +496,7 @@ export function Connections({ path, live }: ConnectionsProps) {
                   tabIndex={-1}
                   data-row
                   data-key={`b${from}:${b.line}:${b.col}`}
-                  title={`${from} — line ${b.line + 1}\n${b.context.text}`}
+                  title={`${from} · line ${b.line + 1}\n${b.context.text}`}
                   onClick={() => void app.openFile(from, { line: b.line, col: b.col, length: b.length })}
                 >
                   <span class="se-ov-ico">{j === 0 ? <FileIcon path={from} size={14} /> : null}</span>
@@ -505,7 +505,7 @@ export function Connections({ path, live }: ConnectionsProps) {
                 </div>
               )),
             )}
-            {back.length > MAX_BACK && <Hint>{(back.length - MAX_BACK).toLocaleString()} more notes link here — the Backlinks panel lists them all.</Hint>}
+            {back.length > MAX_BACK && <Hint>{(back.length - MAX_BACK).toLocaleString()} more notes link here: the Backlinks panel lists them all.</Hint>}
           </List>
         )}
       </Sub>
@@ -542,7 +542,7 @@ export function Connections({ path, live }: ConnectionsProps) {
       {tagsSub('Shared tags', true)}
       <Sub id="cn-related" title="Related" count={related.length} countTitle="Notes that link to the same notes, are linked from the same notes or share tags">
         {related.length === 0 ? (
-          <Hint>{isBuilding ? indexingText() : 'Nothing related yet — notes that cite the same notes or share tags show up here.'}</Hint>
+          <Hint>{isBuilding ? indexingText() : 'Nothing related yet. Notes that cite the same notes or share tags show up here.'}</Hint>
         ) : (
           <List label="Related notes">
             {related.map((r) => (

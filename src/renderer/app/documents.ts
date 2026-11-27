@@ -33,7 +33,7 @@ export async function refreshTree() {
   const tree = await app.backend.listTree();
   app.tree.value = tree;
   app.events.emit('tree:changed', tree);
-  if (tree.truncated) app.toast('This folder is huge — only the first 200,000 entries are shown. Exclude big folders in Settings.', 'info', 8000);
+  if (tree.truncated) app.toast('This folder is huge: only the first 200,000 entries are shown. Exclude big folders in Settings.', 'info', 8000);
 }
 
 // ---- session --------------------------------------------------------------------------------

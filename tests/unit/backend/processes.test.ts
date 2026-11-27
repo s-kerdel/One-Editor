@@ -88,7 +88,7 @@ describe('child classification and tree', () => {
     const text = procText(t, 'sec-edit 0.0.0');
     expect(text.split('\n')[0]).toBe('sec-edit 0.0.0');
     expect(text).toContain('    Reader threads');
-    expect(text).toMatch(/Main process\s+1\s+—\s+—\s+120\.5 MB RSS/);
+    expect(text).toMatch(/Main process\s+1\s+-\s+-\s+120\.5 MB RSS/);
   });
 });
 

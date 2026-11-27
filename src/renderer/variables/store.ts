@@ -95,7 +95,7 @@ export function ingest(path: string, text: string): void {
     const key = `${path}:${e?.message}`;
     if (!warned.has(key)) {
       warned.add(key);
-      app.toast(`${path}: YAML error on line ${e ? lineOf(text, e.from) : '?'} — using the last good version`, 'error', 6000);
+      app.toast(`${path}: YAML error on line ${e ? lineOf(text, e.from) : '?'}. Using the last good version`, 'error', 6000);
     }
   } else warned.forEach((k) => k.startsWith(`${path}:`) && warned.delete(k));
   bump();

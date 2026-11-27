@@ -359,7 +359,7 @@ export function Palette({ initial = '' }: { initial?: string }) {
             </>
           ))}
           {empty && <li class="se-pal-empty">{emptyText(mode, q)}</li>}
-          {indexDeferred.value && mode === 'files' && q.trim().length >= 3 && <li class="se-pal-empty">File contents are indexed on demand — Ctrl+Shift+F searches them.</li>}
+          {indexDeferred.value && mode === 'files' && q.trim().length >= 3 && <li class="se-pal-empty">File contents are indexed on demand. Ctrl+Shift+F searches them.</li>}
           {asyncItems.loading && !flat.length && <li class="se-pal-empty">{indexingNote() ?? 'Searching…'}</li>}
         </ul>
         <div class="se-pal-foot">
@@ -392,7 +392,7 @@ function emptyText(mode: ReturnType<typeof modeOf>, q: string) {
   if (mode === 'commands') return 'No matching commands';
   if (mode === 'outline') return app.activePath.value ? 'No headings or symbols in this file' : 'No file open';
   if (mode === 'line') return app.activePath.value ? 'Type a line number' : 'No file open';
-  if (mode === 'wsHeadings') return q.trim().length > 1 ? 'No matching headings or symbols' : 'No headings — type to find code symbols too';
+  if (mode === 'wsHeadings') return q.trim().length > 1 ? 'No matching headings or symbols' : 'No headings. Type to find code symbols too';
   return q.trim() ? 'No matching files' : 'No files';
 }
 

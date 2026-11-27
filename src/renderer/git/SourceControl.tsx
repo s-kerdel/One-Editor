@@ -398,7 +398,7 @@ export function ErrorBox({ s }: { s: GitStore }) {
     <div class="se-scm-error" role="alert">
       <pre class="se-scm-error-msg">{e.message}</pre>
       <div class="se-scm-error-row">
-        {e.auth && <span class="se-scm-error-hint">Sign in or unlock your key in a terminal — git there can ask you.</span>}
+        {e.auth && <span class="se-scm-error-hint">Sign in or unlock your key in a terminal: git there can ask you.</span>}
         {e.timeout && (
           <button class="se-btn small" data-testid="git-retry" disabled={s.retrying.value} aria-busy={s.retrying.value} title="Read the repository again (the action itself is not run again)" onClick={() => void retryRead(s, e)}>
             {s.retrying.value ? 'Trying again…' : 'Retry'}
@@ -568,7 +568,7 @@ function Branches({ s, st }: { s: GitStore; st: GitStatus }) {
                 </div>
               );
             })}
-            {res && !res.error && matches.length > BRANCH_ROWS && <div class="se-scm-more">{matches.length - BRANCH_ROWS} more — type to filter</div>}
+            {res && !res.error && matches.length > BRANCH_ROWS && <div class="se-scm-more">{matches.length - BRANCH_ROWS} more. Type to filter</div>}
             {res && !res.error && !matches.length && <div class="se-scm-more">{q ? 'No branch matches' : 'No branches yet'}</div>}
           </div>
           {pending && <div class="se-scm-more se-scm-pending">Still loading dates…</div>}

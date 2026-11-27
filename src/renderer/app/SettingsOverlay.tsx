@@ -343,7 +343,7 @@ function SettingRow({ def, s }: { def: SettingDef; s: Values }) {
           {def.label}
           {changed && <span class="se-set-dot" aria-label="Changed from default" />}
         </span>
-        <span class="se-set-hint">{desktopOff ? (def.key === 'zoom' ? 'Desktop app only — use the browser zoom here.' : 'Desktop app only.') : def.description}</span>
+        <span class="se-set-hint">{desktopOff ? (def.key === 'zoom' ? 'Desktop app only. Use the browser zoom here.' : 'Desktop app only.') : def.description}</span>
       </label>
       <div class="se-set-control">
         <Control def={def} s={s} disabled={disabled} />

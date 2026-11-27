@@ -137,7 +137,7 @@ function pairs(ctx: Ctx, map: YAMLMap, where: string): Array<{ key: string; pair
       continue;
     }
     if (seen.has(k)) {
-      diag(ctx, pair, 'warning', `Duplicate “${k}” in ${where} — the first one is used`);
+      diag(ctx, pair, 'warning', `Duplicate “${k}” in ${where}: the first one is used`);
       continue;
     }
     seen.add(k);
@@ -218,7 +218,7 @@ function readSecrets(ctx: Ctx, node: unknown, pair: Pair): string[] {
 
 function markSecret(ctx: Ctx, d: VarDef) {
   // A plain-text value still works (masked everywhere), but the file is the wrong place for it.
-  if (d.value !== null && !d.secret && d.loc) ctx.diags.push({ ...d.loc, severity: 'warning', message: `“${d.name}” is a secret but its value is written here — replace it with “vault” and set it from the app` });
+  if (d.value !== null && !d.secret && d.loc) ctx.diags.push({ ...d.loc, severity: 'warning', message: `“${d.name}” is a secret but its value is written here. Replace it with “vault” and set it from the app` });
   d.secret = true;
 }
 

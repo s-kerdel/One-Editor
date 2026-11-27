@@ -240,13 +240,13 @@ export function treeOrder(rows: readonly ProcRow[]): Array<{ row: ProcRow; depth
   return out;
 }
 
-const fmt = (v: number | null | undefined, digits = 1) => (v == null || !Number.isFinite(v) ? '—' : v.toFixed(digits));
+const fmt = (v: number | null | undefined, digits = 1) => (v == null || !Number.isFinite(v) ? '-' : v.toFixed(digits));
 
 /** "Copy as text" (bug reports): aligned columns, tree by indentation. */
 export function procText(rows: ReadonlyArray<{ row: ProcRow; depth: number; doing?: string }>, head: string): string {
   const table = [['Name', 'PID', 'CPU %', 'Busy %', 'Memory', 'State', 'Doing now']];
   for (const { row: r, depth, doing } of rows) {
-    table.push(['  '.repeat(depth) + r.name, r.pid ? String(r.pid) : '', fmt(r.cpu), fmt(r.busy, 0), r.mem == null ? '—' : `${fmt(r.mem)} MB${r.memKind ? ` ${r.memKind}` : ''}`, [r.state, r.detail].filter(Boolean).join(' · '), doing ?? r.doing ?? '']);
+    table.push(['  '.repeat(depth) + r.name, r.pid ? String(r.pid) : '', fmt(r.cpu), fmt(r.busy, 0), r.mem == null ? '-' : `${fmt(r.mem)} MB${r.memKind ? ` ${r.memKind}` : ''}`, [r.state, r.detail].filter(Boolean).join(' · '), doing ?? r.doing ?? '']);
   }
   const widths = table[0].map((_, i) => Math.min(60, Math.max(...table.map((t) => t[i].length))));
   return [head, ...table.map((t) => t.map((c, i) => (i === t.length - 1 ? c : c.slice(0, 60).padEnd(widths[i]))).join('  ').trimEnd())].join('\n');

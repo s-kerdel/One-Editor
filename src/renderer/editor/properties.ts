@@ -164,7 +164,7 @@ export class PropertiesWidget extends WidgetType {
       row.dataset.key = p.key;
       const keyBtn = el('button', 'se-prop-key');
       keyBtn.type = 'button';
-      keyBtn.title = `${p.key} (${p.type === 'empty' ? 'text' : p.type}) — click to rename`;
+      keyBtn.title = `${p.key} (${p.type === 'empty' ? 'text' : p.type}). Click to rename`;
       keyBtn.append(icon(TYPE_ICON[p.type]), el('span', 'se-prop-key-text', p.key));
       const val = el('div', 'se-prop-value');
       const del = el('button', 'se-prop-del');
@@ -313,7 +313,7 @@ export class PropertiesWidget extends WidgetType {
           }
           case 'complex': {
             const raw = el('span', 'se-prop-raw', p.raw.trim().split('\n').slice(0, 3).join(' ⏎ ') || '…');
-            raw.title = 'Nested YAML — click to edit as YAML';
+            raw.title = 'Nested YAML. Click to edit as YAML';
             raw.addEventListener('click', () => revealYaml(view, p.start));
             val.appendChild(raw);
             break;

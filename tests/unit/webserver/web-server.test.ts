@@ -243,13 +243,13 @@ describe('WebServerService', () => {
     const t = setup({ root: null }); // getRoot() is not what start uses when the caller's folder is given
     const p = t.svc.start({ port: null, access: 'local' }, '/home/me/a');
     expect(t.spawned[0][0]).toBe('/home/me/a');
-    const refused = { code: 'EBUSY', message: 'The web server is already serving /home/me/a — stop it first' };
+    const refused = { code: 'EBUSY', message: 'The web server is already serving /home/me/a. Stop it first' };
     await expect(t.svc.start({ port: null, access: 'local' }, '/home/me/b')).rejects.toMatchObject(refused); // while starting
     t.children[0].ready();
     expect(await p).toMatchObject({ state: 'running', root: '/home/me/a' });
     await expect(t.svc.start({ port: null, access: 'local' }, '/home/me/b')).rejects.toMatchObject(refused);
     await expect(t.svc.start({ port: null, access: 'local' }, null)).rejects.toMatchObject(refused); // a window without a folder
-    await expect(t.svc.start({ port: null, access: 'local' }, '/home/me/a')).rejects.toMatchObject({ code: 'EBUSY', message: 'A web server is already running — stop it first' });
+    await expect(t.svc.start({ port: null, access: 'local' }, '/home/me/a')).rejects.toMatchObject({ code: 'EBUSY', message: 'A web server is already running. Stop it first' });
     expect(t.spawned).toHaveLength(1);
     expect(t.children[0].sent).toEqual([]);
     // Stopped (from any window): another folder may start it.

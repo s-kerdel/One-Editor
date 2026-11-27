@@ -570,7 +570,7 @@ export function SearchPanel() {
 
       {res?.fuzzy && res.corrections?.length ? (
         <div class="se-search-fuzzy">
-          No exact matches — showing results for{' '}
+          No exact matches. Showing results for{' '}
           {res.corrections.map((c, i) => (
             <span>
               {i > 0 && ', '}
@@ -609,7 +609,7 @@ export function SearchPanel() {
 
       {!query.value.trim() && (
         <div class="se-search-hints">
-          <div class="se-hints-title">Search exactly — punctuation included</div>
+          <div class="se-hints-title">Search exactly (punctuation included)</div>
           <div class="se-hints-examples">
             <code>--force-with-lease</code> <code>User::query()</code> <code>C:\Users</code>
           </div>
@@ -745,7 +745,7 @@ export function SearchPanel() {
             Show more ({(rows.length - rowsShown.length).toLocaleString()} rows)
           </button>
         )}
-        {res && res.results.some((r) => r.totalMatches > r.matches.length) && <div class="se-faint se-sr-capped">Some files have more hits than shown — open the file to see all.</div>}
+        {res && res.results.some((r) => r.totalMatches > r.matches.length) && <div class="se-faint se-sr-capped">Some files have more hits than shown. Open the file to see all.</div>}
       </div>
     </div>
   );

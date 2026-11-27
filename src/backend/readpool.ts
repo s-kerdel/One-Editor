@@ -24,7 +24,7 @@ const WORKER_SRC = `
 const { parentPort } = require('node:worker_threads');
 const fs = require('node:fs');
 const O = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0);
-// Tests: latency injection on every stat / open (9P bridge to WSL, antivirus scanning) — fsdelay.ts.
+// Tests: latency injection on every stat / open (9P bridge to WSL, antivirus scanning), see fsdelay.ts.
 const DELAY = Number(process.env.SEC_EDIT_TEST_FS_LATENCY_MS || process.env.SEC_EDIT_TEST_OPEN_DELAY_MS) || 0;
 const nap = DELAY ? new Int32Array(new SharedArrayBuffer(4)) : null;
 parentPort.on('message', (m) => {

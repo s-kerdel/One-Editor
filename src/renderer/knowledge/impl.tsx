@@ -106,7 +106,7 @@ export function openTemplatePicker() {
   }
   if (!templateFiles().length) {
     const folder = (app.settings.value['templates.folder'] as string) || 'templates';
-    app.toast(`No templates found — put Markdown files in a "${folder}/" folder`, 'info', 5000);
+    app.toast(`No templates found. Put Markdown files in a "${folder}/" folder`, 'info', 5000);
     return;
   }
   app.overlay.value = TemplatePicker;

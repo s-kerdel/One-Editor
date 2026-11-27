@@ -468,7 +468,7 @@ export class BackendService {
     const ws = this.ws();
     const { path: rel, noteAbs, html, layout } = await checkPdfRequest(req, (p) => ws.abs(p));
     const { renderPdf, pickSavePath } = this.hooks;
-    if (!renderPdf || !pickSavePath) throw new BackendFailure('ENOTSUP', 'PDF export needs the desktop app — in the browser use Print and pick "Save as PDF"');
+    if (!renderPdf || !pickSavePath) throw new BackendFailure('ENOTSUP', 'PDF export needs the desktop app. In the browser use Print and pick "Save as PDF"');
     const key = rootId(ws.root);
     const saved = this.exportDirs.get(key) ?? exportDirsOf(await readJson<unknown>(this.exportDirsFile, {}))[key];
     const last = typeof saved === 'string' ? saved : null;

@@ -188,7 +188,7 @@ const defs: Draft[] = [
     key: 'cornerStyle',
     section: 'appearance',
     label: 'Corners',
-    description: 'Rounded cards, buttons and pills — or crisp square edges everywhere.',
+    description: 'Rounded cards, buttons and pills, or crisp square edges everywhere.',
     keywords: ['radius', 'rounded', 'square', 'sharp', 'border'],
     default: D.cornerStyle ?? 'rounded',
     control: {

@@ -235,7 +235,7 @@ function Shield() {
       class="se-status-item se-status-btn se-upd-shield"
       data-testid="updates-shield"
       data-level={high ? 'high' : 'warn'}
-      title={`${alerts.length} security finding${alerts.length === 1 ? '' : 's'} for this build — click for details`}
+      title={`${alerts.length} security finding${alerts.length === 1 ? '' : 's'} for this build. Click for details`}
       aria-label={`${alerts.length} security findings`}
       onClick={openFindings}
     >

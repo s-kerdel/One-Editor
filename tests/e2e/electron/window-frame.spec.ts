@@ -127,7 +127,7 @@ test('integrated by default: frameless window, controls overlay, the tab strip i
   expect(await mainOverlay(app)).toEqual(look);
   expect(w.rect!.height).toBe(look.height);
   // The window title still says what is open (taskbar / Alt-Tab).
-  await expect(page).toHaveTitle(/Daily notes\.md — One :: workspace/);
+  await expect(page).toHaveTitle(/Daily notes\.md - One :: workspace/);
 });
 
 test('real pointer input: tabs and buttons click, empty strip space drags, drops still land', async ({ el }) => {
