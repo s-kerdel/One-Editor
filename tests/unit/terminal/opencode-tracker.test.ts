@@ -334,10 +334,43 @@ describe('tracker', () => {
     dead.emit('exit', 0);
   });
 
+  // The password goes only to the address the server printed, or to [::1] when 127.0.0.1 refused the connection
+  // outright (WSL forwarding on the IPv6 loopback alone) AND [::1] asked for a password before it got one.
+  it('WSL: the password never goes to an [::1] listener that did not ask for one, or while 127.0.0.1 answers', async () => {
+    const f = await fake();
+    const leaked: string[] = [];
+    const tryIt = async (v4: 'refused' | 'locked', v6: (init?: RequestInit) => Response) => {
+      const fetchFake: typeof fetch = async (input, init) => {
+        const u = String(input);
+        if (u.startsWith('http://[::1]:')) {
+          const auth = new Headers(init?.headers).get('authorization');
+          if (auth) leaked.push(u);
+          return v6(init);
+        }
+        if (v4 === 'refused') throw new TypeError('fetch failed');
+        return new Response('', { status: 401 });
+      };
+      const child = fakeChild();
+      const why: string[] = [];
+      const tr = new OpencodeTracker({ inside: async () => true, emitFollow: () => {}, emitChanges: () => {}, spawnServer: () => child as never, fetch: fetchFake });
+      const p = tr.open(1, { ...winFolder, wsl: wslPlan }, (w) => void why.push(w));
+      child.stdout.emit('data', Buffer.from(`server listening on ${f.url}\nserver password ${PASS}\n`));
+      const r = await p;
+      child.emit('exit', 0);
+      tr.dispose();
+      return { r, why };
+    };
+    // A listener on [::1] that answers anything (not an auth wall like the server's): never gets the password.
+    expect(await tryIt('refused', () => new Response('{}', { status: 200 }))).toEqual({ r: null, why: ['reach'] });
+    // 127.0.0.1 answers (with a refusal of its own): [::1] is never asked at all.
+    expect(await tryIt('locked', () => new Response('', { status: 401 }))).toEqual({ r: null, why: ['reach'] });
+    expect(leaked).toEqual([]);
+  });
+
   it.skipIf(process.platform === 'win32')('WSL serve script (real bash): reports the link-free folder; closing stdin ends the server AND what it started', async () => {
     const f = await fake();
     const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'oc-wsl-')));
-    const link = dir + '-link';
+    const link = dir + "-link it's $(touch pwned)"; // the folder reaches the script as ONE_CWD only
     fs.symlinkSync(dir, link);
     const bin = path.join(dir, 'opencode');
     // Stands in for `opencode serve`: checks its arguments + environment, starts a child, says the handshake, stays.
@@ -356,13 +389,14 @@ describe('tracker', () => {
       emitFollow: () => {},
       emitChanges: () => {},
       backoffMs: [5000],
-      // wsl.exe … -e bash -lic SCRIPT <folder> <path>, minus wsl.exe and the user's rc files.
-      spawnServer: (b, _c, env) => spawn('bash', ['-c', OPENCODE_WSL_SERVE, link, b], { env: { ...env, OPENCODE_PASSWORD: 'leak', OPENCODE_SERVER_PASSWORD: 'leak2' }, stdio: ['pipe', 'pipe', 'pipe'] }),
+      // wsl.exe … -e bash -lic SCRIPT opencode <path> (folder in ONE_CWD), minus wsl.exe and the user's rc files.
+      spawnServer: (b, _c, env) => spawn('bash', ['-c', OPENCODE_WSL_SERVE, 'opencode', b], { cwd: os.tmpdir(), env: { ...env, OPENCODE_PASSWORD: 'leak', OPENCODE_SERVER_PASSWORD: 'leak2' }, stdio: ['pipe', 'pipe', 'pipe'] }),
       fetch: (input, init) => (seenDirs.push(new URL(String(input)).searchParams.get('directory') ?? ''), fetch(input, init)),
     });
     let pids: number[] = [];
     try {
-      expect(await tr.open(1, { ...winFolder, bin, env: { PATH: process.env.PATH }, wsl: { ...wslPlan, linuxRoot: link } })).toEqual({ url: f.url, password: PASS });
+      expect(await tr.open(1, { ...winFolder, bin, env: { PATH: process.env.PATH }, wsl: { ...wslPlan, linuxRoot: link, env: { ONE_CWD: link } } })).toEqual({ url: f.url, password: PASS });
+      expect(fs.existsSync(path.join(os.tmpdir(), 'pwned')) || fs.existsSync(path.join(dir, 'pwned'))).toBe(false);
       expect(seenDirs[0]).toBe(dir); // `pwd -P`: the name opencode itself uses, not the link
       pids = ['server.pid', 'child.pid'].map((n) => Number(fs.readFileSync(path.join(dir, n), 'utf8')));
       expect(pids.every((x) => x > 1 && alive(x))).toBe(true);

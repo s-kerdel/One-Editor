@@ -601,16 +601,18 @@ describe('TerminalService (real node-pty)', () => {
       expect(t.shell).toMatchObject({ id: 'opencode', kind: 'opencode', detail: 'AI assistant · in Ubuntu (WSL)' });
       expect(t.notice).toBeUndefined();
       // The server: the fixed script inside the distro, in the folder's Linux path.
-      expect(plans[0]).toEqual({ file: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', OPENCODE_WSL_SERVE, '/mnt/c/ws', '/home/me/.opencode/bin/opencode'], linuxRoot: '/mnt/c/ws' });
+      // The folder is an env var (ONE_CWD through WSLENV), never an argument the script reads.
+      expect(plans[0]).toEqual({ file: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', OPENCODE_WSL_SERVE, 'opencode', '/home/me/.opencode/bin/opencode'], linuxRoot: '/mnt/c/ws', env: { ONE_CWD: '/mnt/c/ws', WSLENV: 'X/p:SEC_EDIT_TEST/u:npm_config_token/u:ONE_CWD' } });
       // wsl.exe gets a shell's environment: what WSLENV names of the app's context is not there, so nothing of it crosses.
-      expect(envs[0]).toMatchObject({ SystemRoot: 'C:\\Windows', WSLENV: 'X/p:SEC_EDIT_TEST/u:npm_config_token/u' });
+      expect(envs[0]).toMatchObject({ SystemRoot: 'C:\\Windows', ONE_CWD: '/mnt/c/ws', WSLENV: 'X/p:SEC_EDIT_TEST/u:npm_config_token/u:ONE_CWD' });
       expect(Object.keys(envs[0]).filter((k) => /^(SEC_EDIT_|ELECTRON_|npm_)/i.test(k))).toEqual([]);
       // The TUI: attached by address (an argument), the password only in its environment, carried over by WSLENV.
       expect(spawns[0].file).toBe('C:\\Windows\\System32\\wsl.exe');
-      expect(spawns[0].args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec "$1" --server "$2"', '/mnt/c/ws', '/home/me/.opencode/bin/opencode', url]);
+      expect(spawns[0].args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', 'cd -- "${ONE_CWD:-.}" 2>/dev/null; exec "$1" --server "$2"', 'opencode', '/home/me/.opencode/bin/opencode', url]);
       expect(JSON.stringify(spawns[0].args)).not.toContain('secret-pass-12345');
       expect(spawns[0].env.OPENCODE_PASSWORD).toBe('secret-pass-12345');
-      expect(spawns[0].env.WSLENV).toBe('X/p:SEC_EDIT_TEST/u:npm_config_token/u:OPENCODE_PASSWORD');
+      expect(spawns[0].env.WSLENV).toBe('X/p:SEC_EDIT_TEST/u:npm_config_token/u:ONE_CWD:OPENCODE_PASSWORD');
+      expect(spawns[0].env.ONE_CWD).toBe('/mnt/c/ws');
       expect(spawns[0].env).not.toHaveProperty('SEC_EDIT_TEST'); // named in WSLENV, but not there: does not cross
       // The terminal ends: the server is ended through its stdin.
       r.svc.kill(1, t.id);
@@ -654,8 +656,9 @@ describe('TerminalService (real node-pty)', () => {
     // It answers inside the distro; only the reach from Windows failed — that is what the toast has to say.
     expect(t2.notice).toMatch(/inside WSL.*answers there.*cannot reach it from Windows.*not followed/s);
     expect(children[1].ended).toBe(true);
-    expect(spawns[0].args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec "$1"', '/mnt/c/ws', '/home/me/.opencode/bin/opencode']);
-    expect(Object.keys(spawns[0].env).filter((k) => /OPENCODE|WSLENV/i.test(k))).toEqual([]);
+    expect(spawns[0].args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', 'cd -- "${ONE_CWD:-.}" 2>/dev/null; exec "$1"', 'opencode', '/home/me/.opencode/bin/opencode']);
+    expect(Object.keys(spawns[0].env).filter((k) => /OPENCODE/i.test(k))).toEqual([]);
+    expect(spawns[0].env).toMatchObject({ ONE_CWD: '/mnt/c/ws', WSLENV: 'ONE_CWD' });
     // Follow off: the same start, no server, nothing to say.
     const before = plans.length;
     expect((await r2.svc.spawn(1, { preset: 'opencode', prefer: 'wsl:Ubuntu' })).notice).toBeUndefined();

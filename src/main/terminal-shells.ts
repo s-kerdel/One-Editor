@@ -222,6 +222,26 @@ export function cmdQuote(p: string): string {
 /** `/S /C "<command>"` tail: with /S cmd strips exactly the outer quotes, whatever the command contains. */
 const cmdTail = (sw: '/K' | '/C', command: string) => `/S ${sw} "${command}"`;
 
+/**
+ * Environment for an npm shim (claude.cmd, opencode.cmd) run by cmd.exe in the open folder: the shim starts a bare
+ * `node`, and cmd.exe looks for that in its current folder (the untrusted one) before PATH — a planted node.exe /
+ * node.cmd there would run. With this variable set cmd.exe skips the current folder.
+ */
+export const SHIM_ENV = { NoDefaultCurrentDirectoryInExePath: '1' } as const;
+
+/**
+ * The folder reaches the scripts inside WSL as the environment variable ONE_CWD (passed through WSLENV unchanged),
+ * never as script text or a positional argument: a folder name with a quote or `$(…)` stays one value however
+ * wsl.exe hands its arguments over. `$0` is a fixed placeholder.
+ */
+const WSL_CWD = 'ONE_CWD';
+function wslCwdEnv(linux: string | null, env: Record<string, string | undefined>, more: string[] = []): Record<string, string> {
+  const names = [...(linux ? [WSL_CWD] : []), ...more];
+  const out: Record<string, string> = linux ? { [WSL_CWD]: linux } : {};
+  if (names.length) out.WSLENV = [envGet(env, 'WSLENV', true), ...names].filter(Boolean).join(':');
+  return out;
+}
+
 export function planSpawn(shell: ShellInfo, cwd: string, o: { platform: string; env: Record<string, string | undefined> }): SpawnPlan {
   const args = [...shell.args];
   const plan: SpawnPlan = { file: shell.path, args, cwd, env: {} };
@@ -311,9 +331,11 @@ export function planClaude(info: ClaudeInfo, cwd: string, o: { platform: string;
     const inside = wslPathFor(cwd, info.distro);
     // Follow: the session folder reaches the distro as an env var only (WSLENV's /p turns the Windows path
     // into /mnt/…); the script stays a fixed string and adds --settings only when the variable arrived.
-    const script = follow ? 'cd -- "$0" 2>/dev/null; exec claude ${ONE_FOLLOW_DIR:+--settings "$ONE_FOLLOW_DIR/settings.json"}' : 'cd -- "$0" 2>/dev/null; exec claude';
-    const args = ['-d', info.distro, '--cd', inside ?? cwd, '-e', 'bash', '-lic', script, inside ?? '.'];
-    const env: Record<string, string> = follow ? { ONE_FOLLOW_DIR: follow.dir, WSLENV: [envGet(o.env, 'WSLENV', true), 'ONE_FOLLOW_DIR/p'].filter(Boolean).join(':') } : {};
+    // The folder, too, is an env var (ONE_CWD, wslCwdEnv), never an argument the script reads.
+    const cd = 'cd -- "${ONE_CWD:-.}" 2>/dev/null; exec claude';
+    const script = follow ? `${cd} \${ONE_FOLLOW_DIR:+--settings "$ONE_FOLLOW_DIR/settings.json"}` : cd;
+    const args = ['-d', info.distro, '--cd', inside ?? cwd, '-e', 'bash', '-lic', script, 'claude'];
+    const env: Record<string, string> = follow ? { ONE_FOLLOW_DIR: follow.dir, ...wslCwdEnv(inside, o.env, ['ONE_FOLLOW_DIR/p']) } : wslCwdEnv(inside, o.env);
     return { file: o.wslExe, args, cwd, env };
   }
   const exe = info.path!;
@@ -323,6 +345,7 @@ export function planClaude(info: ClaudeInfo, cwd: string, o: { platform: string;
   // Git Bash (which runs the hook on Windows) takes C:/… paths; backslashes would need care in sh.
   if (follow) env.ONE_FOLLOW_DIR = win ? follow.dir.replace(/\\/g, '/') : follow.dir;
   if (win && /\.(cmd|bat)$/i.test(exe)) {
+    Object.assign(env, SHIM_ENV);
     const comspec = envGet(o.env, 'ComSpec', true) || P.join(envGet(o.env, 'SystemRoot', true) || 'C:\\Windows', 'System32', 'cmd.exe');
     const run = cmdQuote(exe) + (follow ? ` --settings ${cmdQuote(follow.settings)}` : '');
     if (isUncPath(cwd)) return { file: comspec, args: `/D ${cmdTail('/C', `pushd ${cmdQuote(cwd)} && ${run}`)}`, cwd: envGet(o.env, 'USERPROFILE', true) || 'C:\\', env };
@@ -403,18 +426,18 @@ export async function detectOpencode(d: DetectEnv, o: { wsl?: { exe: string; dis
  * choice. An npm shim (opencode.cmd) cannot be started directly on Windows (Node refuses .cmd / .bat without a
  * shell): it goes through cmd.exe like the TUI below, as one verbatim command line.
  */
-export function planOpencodeServe(bin: string, o: { platform: string; env: Record<string, string | undefined> }): { file: string; args: string[]; verbatim: boolean } {
+export function planOpencodeServe(bin: string, o: { platform: string; env: Record<string, string | undefined> }): { file: string; args: string[]; verbatim: boolean; env: Record<string, string> } {
   const args = ['serve', '--hostname', '127.0.0.1', '--port', '0'];
-  if (o.platform !== 'win32' || !/\.(cmd|bat)$/i.test(bin)) return { file: bin, args, verbatim: false };
+  if (o.platform !== 'win32' || !/\.(cmd|bat)$/i.test(bin)) return { file: bin, args, verbatim: false, env: {} };
   const comspec = envGet(o.env, 'ComSpec', true) || path.win32.join(envGet(o.env, 'SystemRoot', true) || 'C:\\Windows', 'System32', 'cmd.exe');
-  return { file: comspec, args: ['/D', cmdTail('/C', `${cmdQuote(bin)} ${args.join(' ')}`)], verbatim: true };
+  return { file: comspec, args: ['/D', cmdTail('/C', `${cmdQuote(bin)} ${args.join(' ')}`)], verbatim: true, env: { ...SHIM_ENV } };
 }
 
 /** The line the WSL serve script prints first: the folder without links, as opencode will name it. */
 export const OPENCODE_WSL_CWD = /^one-cwd (\/[^\r\n]{0,4095})\r?$/m;
 
 /**
- * Fixed script (nothing is built into it; "$0" = the folder, "$1" = the path the lookup found) that runs One's
+ * Fixed script (nothing is built into it; $ONE_CWD = the folder, "$1" = the path the lookup found) that runs One's
  * private server INSIDE a WSL distro:
  *  - no server in another folder (`cd` must work) and no password of the user's in its environment;
  *  - the server gets a session of its own (`setsid`, job control off so `$!` is the server), so its whole
@@ -425,7 +448,7 @@ export const OPENCODE_WSL_CWD = /^one-cwd (\/[^\r\n]{0,4095})\r?$/m;
  *    script ends that quote there — bash waits for the rest of it and the server is never started.
  */
 export const OPENCODE_WSL_SERVE =
-  'cd -- "$0" 2>/dev/null || exit 1; set +m; unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD; printf "one-cwd %s\\n" "$(pwd -P)"; ' +
+  'cd -- "${ONE_CWD:-.}" 2>/dev/null || exit 1; set +m; unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD; printf "one-cwd %s\\n" "$(pwd -P)"; ' +
   'if command -v setsid >/dev/null 2>&1; then setsid "$1" serve --hostname 127.0.0.1 --port 0 </dev/null & g=-$!; ' +
   'else "$1" serve --hostname 127.0.0.1 --port 0 </dev/null & g=$!; fi; ' +
   'trap "kill -- \\$g 2>/dev/null" EXIT; trap "exit 0" HUP INT TERM; cat >/dev/null';
@@ -434,11 +457,11 @@ export const OPENCODE_WSL_SERVE =
  * How main starts its private server inside the WSL distro opencode was found in (an interactive login bash like
  * the TUI: the user's PATH). null: the folder has no path inside that distro (another distro's, a network share).
  */
-export function planOpencodeServeWsl(info: OpencodeInfo, root: string, wslExe: string): { file: string; args: string[]; linuxRoot: string } | null {
+export function planOpencodeServeWsl(info: OpencodeInfo, root: string, wslExe: string, env: Record<string, string | undefined> = {}): { file: string; args: string[]; linuxRoot: string; env: Record<string, string> } | null {
   if (info.via !== 'wsl' || !info.distro || !info.path) return null;
   const linuxRoot = wslPathFor(root, info.distro);
   if (!linuxRoot) return null;
-  return { file: wslExe, args: ['-d', info.distro, '--cd', linuxRoot, '-e', 'bash', '-lic', OPENCODE_WSL_SERVE, linuxRoot, info.path], linuxRoot };
+  return { file: wslExe, args: ['-d', info.distro, '--cd', linuxRoot, '-e', 'bash', '-lic', OPENCODE_WSL_SERVE, 'opencode', info.path], linuxRoot, env: wslCwdEnv(linuxRoot, env) };
 }
 
 /**
@@ -455,10 +478,9 @@ export function planOpencode(info: OpencodeInfo, cwd: string, o: { platform: str
   if (info.via === 'wsl' && info.distro && o.wslExe) {
     const inside = wslPathFor(cwd, info.distro);
     const head = ['-d', info.distro, '--cd', inside ?? cwd, '-e', 'bash', '-lic'];
-    const tail = [inside ?? '.', info.path ?? 'opencode'];
-    if (!o.server) return { file: o.wslExe, args: [...head, 'cd -- "$0" 2>/dev/null; exec "$1"', ...tail], cwd, env: {} };
-    const wslenv = [envGet(o.env, 'WSLENV', true), 'OPENCODE_PASSWORD'].filter(Boolean).join(':');
-    return { file: o.wslExe, args: [...head, 'cd -- "$0" 2>/dev/null; exec "$1" --server "$2"', ...tail, o.server.url], cwd, env: { OPENCODE_PASSWORD: o.server.password, WSLENV: wslenv } };
+    const tail = ['opencode', info.path ?? 'opencode'];
+    if (!o.server) return { file: o.wslExe, args: [...head, 'cd -- "${ONE_CWD:-.}" 2>/dev/null; exec "$1"', ...tail], cwd, env: wslCwdEnv(inside, o.env) };
+    return { file: o.wslExe, args: [...head, 'cd -- "${ONE_CWD:-.}" 2>/dev/null; exec "$1" --server "$2"', ...tail, o.server.url], cwd, env: { OPENCODE_PASSWORD: o.server.password, ...wslCwdEnv(inside, o.env, ['OPENCODE_PASSWORD']) } };
   }
   const exe = info.path!;
   const P = pathFor(o.platform);
@@ -467,6 +489,7 @@ export function planOpencode(info: OpencodeInfo, cwd: string, o: { platform: str
   if (o.server) env.OPENCODE_PASSWORD = o.server.password;
   const args = o.server ? ['--server', o.server.url] : [];
   if (win && /\.(cmd|bat)$/i.test(exe)) {
+    Object.assign(env, SHIM_ENV);
     const comspec = envGet(o.env, 'ComSpec', true) || P.join(envGet(o.env, 'SystemRoot', true) || 'C:\\Windows', 'System32', 'cmd.exe');
     const run = [cmdQuote(exe), ...args.map(cmdQuote)].join(' ');
     if (isUncPath(cwd)) return { file: comspec, args: `/D ${cmdTail('/C', `pushd ${cmdQuote(cwd)} && ${run}`)}`, cwd: envGet(o.env, 'USERPROFILE', true) || 'C:\\', env };

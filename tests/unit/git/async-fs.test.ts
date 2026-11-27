@@ -1,5 +1,5 @@
 // No blocking file calls on the main thread (one main process serves every window): locating git, the
-// working-copy read of hunks() and the .git watcher's signatures use fs.promises, with the same results.
+// working-copy read of hunks() (a file handle: readWork) and the .git watcher's signatures use fs.promises.
 // The watcher's checks never overlap, and a check that outlives its watchers reports nothing.
 // Marker files (rebase / merge / … state, index.lock) and the `.git`-above walk: fs.promises, one check
 // at a time, same order, first hit wins.
@@ -80,36 +80,48 @@ describe('hunks(): the working copy', () => {
   async function changed() {
     const dir = await makeRepo('async-hunks', { 'f.txt': 'one\ntwo\nthree\n' });
     write(dir, 'f.txt', 'one\nTWO\nthree\n');
-    return { g: svc(dir), abs: path.join(dir, 'f.txt') };
+    return { g: svc(dir), abs: path.join(dir, 'f.txt'), real: fs.realpathSync(path.join(dir, 'f.txt')) };
   }
+  const realOpen = fs.promises.open.bind(fs.promises) as typeof fs.promises.open;
 
+  // Read through a handle (readWork: real path inside the folder, no link followed, size from the open file).
   it('is read with fs.promises, never statSync / readFileSync', async () => {
-    const { g, abs } = await changed();
-    const sync = [vi.spyOn(fs, 'statSync'), vi.spyOn(fs, 'readFileSync')];
-    const read = vi.spyOn(fs.promises, 'readFile');
+    const { g, abs, real } = await changed();
+    const sync = [vi.spyOn(fs, 'statSync'), vi.spyOn(fs, 'readFileSync'), vi.spyOn(fs, 'openSync'), vi.spyOn(fs, 'realpathSync')];
+    const open = vi.spyOn(fs.promises, 'open');
     expect(await g.hunks('f.txt')).toMatchObject({ mode: 'hunks', head: 'one\ntwo\nthree\n', work: 'one\nTWO\nthree\n' });
-    expect(pathsOf(read)).toContain(abs);
-    for (const s of sync) expect(pathsOf(s)).not.toContain(abs);
+    expect(pathsOf(open)).toContain(real);
+    for (const s of sync) expect(pathsOf(s).filter((x) => x === abs || x === real)).toEqual([]);
   });
 
   it('over the size cap: "too-large", checked before any read', async () => {
-    const { g, abs } = await changed();
-    vi.spyOn(fs.promises, 'stat').mockImplementation((async (p: fs.PathLike) => {
-      const st = await realStat(p);
-      return p === abs ? Object.assign(st, { size: GIT_MAX_BLOB_BYTES + 1 }) : st;
+    const { g, real } = await changed();
+    let reads = 0;
+    vi.spyOn(fs.promises, 'open').mockImplementation((async (p: fs.PathLike, flags?: number) => {
+      const fh = await realOpen(p, flags);
+      if (p !== real) return fh;
+      const stat = fh.stat.bind(fh);
+      const read = fh.read.bind(fh);
+      return Object.assign(fh, { stat: async () => Object.assign(await stat(), { size: GIT_MAX_BLOB_BYTES + 1 }), read: (...a: unknown[]) => (reads++, (read as (...x: unknown[]) => unknown)(...a)) });
     }) as never);
-    const read = vi.spyOn(fs.promises, 'readFile');
     expect(await g.hunks('f.txt')).toEqual({ mode: 'file', reason: 'too-large' });
-    expect(pathsOf(read)).not.toContain(abs);
+    expect(reads).toBe(0);
   });
 
-  it('a stat or read that fails: "unavailable"', async () => {
-    const { g, abs } = await changed();
+  it('a realpath, open or read that fails: "unavailable"', async () => {
+    const { g, abs, real } = await changed();
     const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-    const stat = vi.spyOn(fs.promises, 'stat').mockImplementation((async (p: fs.PathLike) => (p === abs ? Promise.reject(enoent) : realStat(p))) as never);
+    const realRealpath = fs.promises.realpath.bind(fs.promises) as (p: fs.PathLike) => Promise<string>;
+    const rp = vi.spyOn(fs.promises, 'realpath').mockImplementation((async (p: fs.PathLike) => (p === abs ? Promise.reject(enoent) : realRealpath(p))) as never);
     expect(await g.hunks('f.txt')).toEqual({ mode: 'file', reason: 'unavailable' });
-    stat.mockRestore();
-    vi.spyOn(fs.promises, 'readFile').mockRejectedValue(Object.assign(new Error('EIO'), { code: 'EIO' }));
+    rp.mockRestore();
+    const op = vi.spyOn(fs.promises, 'open').mockImplementation((async (p: fs.PathLike, flags?: number) => (p === real ? Promise.reject(Object.assign(new Error('EIO'), { code: 'EIO' })) : realOpen(p, flags))) as never);
+    expect(await g.hunks('f.txt')).toEqual({ mode: 'file', reason: 'unavailable' });
+    op.mockRestore();
+    vi.spyOn(fs.promises, 'open').mockImplementation((async (p: fs.PathLike, flags?: number) => {
+      const fh = await realOpen(p, flags);
+      return p === real ? Object.assign(fh, { read: async () => Promise.reject(Object.assign(new Error('EIO'), { code: 'EIO' })) }) : fh;
+    }) as never);
     expect(await g.hunks('f.txt')).toEqual({ mode: 'file', reason: 'unavailable' });
   });
 });

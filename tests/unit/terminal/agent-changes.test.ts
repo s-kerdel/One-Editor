@@ -167,7 +167,7 @@ describe('git numstat (backend)', () => {
   const services: BackendService[] = [];
   afterEach(() => services.splice(0).forEach((s) => s.dispose()));
   const open = async (dir: string, trust = true) => {
-    const s = new BackendService(await tmpDir('cfg'), {}, { cacheDir: '' }, { env: testEnv() });
+    const s = new BackendService(await tmpDir('cfg'), { confirmTrust: async () => true }, { cacheDir: '' }, { env: testEnv() });
     services.push(s);
     await s.openWorkspace(dir);
     if (trust) await s.git('trust');
@@ -237,10 +237,11 @@ describe('git numstat (backend)', () => {
 
 describe('Opencode start plans and service regressions', () => {
   it('the private server: the binary itself, or an npm shim through cmd.exe as one verbatim command line', () => {
-    expect(planOpencodeServe('/h/.opencode/bin/opencode', { platform: 'linux', env: {} })).toEqual({ file: '/h/.opencode/bin/opencode', args: ['serve', '--hostname', '127.0.0.1', '--port', '0'], verbatim: false });
+    expect(planOpencodeServe('/h/.opencode/bin/opencode', { platform: 'linux', env: {} })).toEqual({ file: '/h/.opencode/bin/opencode', args: ['serve', '--hostname', '127.0.0.1', '--port', '0'], verbatim: false, env: {} });
     expect(planOpencodeServe('C:\\x\\opencode.exe', { platform: 'win32', env: {} }).verbatim).toBe(false);
     const shim = planOpencodeServe('C:\\Users\\R&D me\\npm\\opencode.cmd', { platform: 'win32', env: { ComSpec: 'C:\\Windows\\System32\\cmd.exe' } });
-    expect(shim).toEqual({ file: 'C:\\Windows\\System32\\cmd.exe', args: ['/D', '/S /C ""C:\\Users\\R&D me\\npm\\opencode.cmd" serve --hostname 127.0.0.1 --port 0"'], verbatim: true });
+    // The shim runs a bare `node`: cmd.exe must not look for it in the open folder (the server's cwd) first.
+    expect(shim).toEqual({ file: 'C:\\Windows\\System32\\cmd.exe', args: ['/D', '/S /C ""C:\\Users\\R&D me\\npm\\opencode.cmd" serve --hostname 127.0.0.1 --port 0"'], verbatim: true, env: { NoDefaultCurrentDirectoryInExePath: '1' } });
     expect(() => planOpencodeServe('C:\\100%\\opencode.cmd', { platform: 'win32', env: {} })).toThrow(/%/);
     // Follow off: plain opencode, no server address, no password.
     expect(planOpencode({ available: true, path: '/x/opencode' }, '/ws', { platform: 'linux', env: { PATH: '/bin' } })).toMatchObject({ file: '/x/opencode', args: [], env: { PATH: '/x:/bin' } });

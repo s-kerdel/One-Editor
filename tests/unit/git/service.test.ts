@@ -339,6 +339,48 @@ describe('filter drivers a folder brings along never run on a read', () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
+  // `-c filter.a=b.clean=` would set `filter.a` to `b.clean=`: such a driver cannot be switched off → no git at all.
+  it('a driver whose name contains "=" cannot be switched off: no git for that folder', async () => {
+    const { dir, marker } = await filtered('eq-name', 'a=b');
+    git(dir, 'config', 'filter.a=b.clean', `touch '${marker}'; cat`);
+    git(dir, 'config', 'filter.a=b.required', 'true');
+    const g = svc(dir);
+    expect(await g.status()).toMatchObject({ ok: false, reason: 'error' });
+    await g.diff('a.txt');
+    await g.hunks('a.txt', null);
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('an included file that changes later: the switch-offs are worked out again before the next read', async () => {
+    const { dir, marker } = await filtered('include-later', 'evil');
+    git(dir, 'config', 'include.path', '../shared.gitconfig'); // a work-tree file, not there yet
+    const g = svc(dir);
+    expect(ok(await g.status()).entries).toEqual([]);
+    fs.writeFileSync(path.join(dir, 'shared.gitconfig'), `[filter "evil"]\n\tclean = "touch '${marker}'; cat"\n\trequired = true\n`);
+    const later = new Date(Date.now() + 10_000);
+    fs.utimesSync(path.join(dir, 'a.txt'), later, later);
+    expect(ok(await g.status()).entries.map((e) => e.path)).toEqual(['shared.gitconfig']);
+    await g.diff('a.txt');
+    await g.hunks('a.txt', null);
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('a branch switch that turns on an onbranch include: worked out again too', async () => {
+    const { dir, marker } = await filtered('onbranch', 'evil');
+    fs.writeFileSync(path.join(dir, '.git', 'evil.cfg'), `[filter "evil"]\n\tclean = "touch '${marker}'; cat"\n\trequired = true\n`);
+    git(dir, 'config', 'includeIf.onbranch:evil.path', 'evil.cfg');
+    const g = svc(dir);
+    expect(ok(await g.status()).entries).toEqual([]);
+    git(dir, 'branch', 'evil');
+    git(dir, 'symbolic-ref', 'HEAD', 'refs/heads/evil'); // HEAD moves without git touching the index
+    const later = new Date(Date.now() + 10_000);
+    fs.utimesSync(path.join(dir, 'a.txt'), later, later);
+    expect(ok(await g.status()).branch.head).toBe('evil');
+    await g.diff('a.txt');
+    await g.hunks('a.txt', null);
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
   it('canonical Git LFS stays configured: without git-lfs installed the file simply passes unfiltered', async () => {
     const { dir } = await filtered('lfs-canonical', 'lfs');
     git(dir, 'config', 'filter.lfs.clean', 'git-lfs clean -- %f');

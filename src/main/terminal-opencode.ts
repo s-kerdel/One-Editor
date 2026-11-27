@@ -82,6 +82,18 @@ export interface OpencodeWslPlan {
   file: string;
   args: string[];
   linuxRoot: string;
+  /** Added to the server's environment (the folder as ONE_CWD + the WSLENV entry that carries it). */
+  env?: Record<string, string>;
+}
+
+/** `base` + `extra`; on Windows a name of `extra` replaces every spelling of it in `base` (env names ignore case there). */
+function withEnv(base: NodeJS.ProcessEnv, extra: Record<string, string> | undefined, win: boolean): NodeJS.ProcessEnv {
+  const out = { ...base };
+  for (const [k, v] of Object.entries(extra ?? {})) {
+    if (win) for (const x of Object.keys(out)) if (x !== k && x.toLowerCase() === k.toLowerCase()) delete out[x];
+    out[k] = v;
+  }
+  return out;
 }
 
 /**
@@ -138,13 +150,14 @@ export class OpencodeTracker {
     const win = a.platform === 'win32';
     let child: ChildProcess;
     try {
-      if (this.o.spawnServer) child = this.o.spawnServer(a.bin, a.root, env, a.wsl ?? undefined);
+      if (this.o.spawnServer) child = this.o.spawnServer(a.bin, a.root, a.wsl ? withEnv(env, a.wsl.env, win) : env, a.wsl ?? undefined);
       // No cwd: wsl.exe gets the folder as --cd (a \\wsl.localhost folder need not be a valid Windows working folder).
-      else if (a.wsl) child = nodeSpawn(a.wsl.file, a.wsl.args, { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      else if (a.wsl) child = nodeSpawn(a.wsl.file, a.wsl.args, { env: withEnv(env, a.wsl.env, win), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       else {
         // POSIX: a process group of its own, so the commands the agent started go with the server.
+        // Windows npm shim: cmd.exe must not look for `node` in the open folder (plan.env).
         const plan = planOpencodeServe(a.bin, { platform: a.platform, env });
-        child = nodeSpawn(plan.file, plan.args, { cwd: a.root, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, windowsVerbatimArguments: plan.verbatim, detached: !win });
+        child = nodeSpawn(plan.file, plan.args, { cwd: a.root, env: withEnv(env, plan.env, win), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, windowsVerbatimArguments: plan.verbatim, detached: !win });
       }
     } catch {
       onFail?.('spawn');
@@ -212,10 +225,14 @@ export class OpencodeTracker {
   /**
    * WSL: the address main reaches the server at — the one it printed, else the IPv6 loopback with the same port —
    * proven by an authenticated request it answers (so it is the server that knows our password), or null.
+   * The server never printed [::1]: the password goes there only when 127.0.0.1 refused the connection outright (WSL
+   * forwarding on the IPv6 loopback alone) and [::1] first asked for a password, as the server does. Basic auth cannot
+   * prove more before the password is sent (residual: a local process that took [::1]:<port> first and mimics that).
    */
   private async reach(server: OpencodeServer, dir: string): Promise<string | null> {
     const f = this.o.fetch ?? fetch;
-    const ask = async (url: string) => {
+    /** ok = it answered us; locked = it wants a password (401); refused = no connection at all; no = anything else. */
+    const ask = async (url: string, auth: boolean): Promise<'ok' | 'locked' | 'refused' | 'no'> => {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), REACH.requestMs);
       try {
@@ -223,20 +240,22 @@ export class OpencodeTracker {
           method: 'GET',
           redirect: 'error',
           signal: ac.signal,
-          headers: { authorization: 'Basic ' + Buffer.from('opencode:' + server.password).toString('base64'), accept: 'application/json' },
+          headers: auth ? { authorization: 'Basic ' + Buffer.from('opencode:' + server.password).toString('base64'), accept: 'application/json' } : { accept: 'application/json' },
         });
         void r.body?.cancel().catch(() => {});
-        return r.ok;
+        return r.ok ? 'ok' : r.status === 401 ? 'locked' : 'no';
       } catch {
-        return false;
+        return ac.signal.aborted ? 'no' : 'refused';
       } finally {
         clearTimeout(timer);
       }
     };
+    const v6 = server.url.replace('//127.0.0.1:', '//[::1]:');
     for (let i = 0; i < REACH.tries; i++) {
       if (i) await new Promise((r) => setTimeout(r, REACH.gapMs));
-      // One after the other: the password goes to the second address only when the first did not answer.
-      for (const url of [server.url, server.url.replace('//127.0.0.1:', '//[::1]:')]) if (await ask(url)) return url;
+      const v4 = await ask(server.url, true);
+      if (v4 === 'ok') return server.url;
+      if (v4 === 'refused' && (await ask(v6, false)) === 'locked' && (await ask(v6, true)) === 'ok') return v6;
     }
     return null;
   }

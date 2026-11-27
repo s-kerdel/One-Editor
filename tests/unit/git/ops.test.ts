@@ -41,6 +41,28 @@ describe('stage / unstage / discard', () => {
     expect(Object.values(await states(g)).every((v) => v.endsWith('+s'))).toBe(true);
   });
 
+  // Trust = the repository's hooks and filters run on what the user starts. A commit box (index-only write) runs no
+  // hook, and no action runs the folder's fsmonitor (reads never did).
+  it('a commit box runs nothing the folder configured; commit still runs its hooks, never the fsmonitor', async () => {
+    const dir = await makeRepo('act-neutral', { 'a.md': 'a\n' });
+    const marks = await tmpDir('act-marks');
+    const mark = (name: string) => `#!/bin/sh\ntouch "${marks}/${name}"\n`;
+    fs.writeFileSync(path.join(marks, 'fsm.sh'), mark('fsmonitor'), { mode: 0o755 });
+    git(dir, 'config', 'core.fsmonitor', path.join(marks, 'fsm.sh'));
+    for (const h of ['post-index-change', 'pre-commit']) fs.writeFileSync(path.join(dir, '.git/hooks', h), mark(h), { mode: 0o755 });
+    write(dir, 'a.md', 'b\n');
+    write(dir, 'n.md', 'n\n');
+    const g = svc(dir);
+    expect((await g.stage(['a.md'])).ok).toBe(true);
+    expect((await g.unstage(['a.md'])).ok).toBe(true);
+    expect((await g.stage(null)).ok).toBe(true);
+    expect((await g.discard(['n.md'], async () => {})).ok).toBe(true);
+    expect(fs.readdirSync(marks)).toEqual(['fsm.sh']);
+    expect((await g.commit({ message: 'x' })).ok).toBe(true);
+    expect(fs.readdirSync(marks)).toContain('pre-commit');
+    expect(fs.readdirSync(marks)).not.toContain('fsmonitor');
+  });
+
   it('unstage works before the first commit', async () => {
     const dir = await makeRepo('stage-initial');
     write(dir, 'a.md', 'a\n');
@@ -245,6 +267,18 @@ describe('push / pull / fetch with a local bare remote', () => {
     expect(await g.pull()).toMatchObject({ ok: true });
     expect(fs.existsSync(path.join(dir, 'c.md'))).toBe(true);
     expect((await g.push()).ok).toBe(true);
+  });
+
+  it('publishing: a remote named like an option never reaches git as one', async () => {
+    const dir = await makeRepo('push-opt', { 'a.md': 'a\n' });
+    const remote = await tmpDir('push-opt-remote');
+    git(remote, 'init', '-q', '--bare');
+    fs.appendFileSync(path.join(dir, '.git/config'), `[remote "--repo=${remote}"]\n\turl = ${remote}\n`);
+    const g = svc(dir);
+    expect(await g.push()).toEqual({ ok: false, message: `“--repo=${remote}” is not a valid remote name` });
+    expect(git(remote, 'for-each-ref').trim()).toBe(''); // nothing was pushed anywhere
+    git(dir, 'remote', 'add', 'origin', remote);
+    expect(await g.push()).toMatchObject({ ok: true, message: 'Published main' }); // `push -u -- origin main`
   });
 
   it('divergent pull without a configured strategy hands off to the terminal', async () => {
@@ -464,7 +498,7 @@ describe('BackendService.git dispatcher', () => {
     write(dir, 'junk.md', 'j\n');
     const trashed: string[] = [];
     const cfg = await tmpDir('dispatch-cfg');
-    const s = new BackendService(cfg, { trash: async (abs) => void (trashed.push(abs), fs.rmSync(abs)), trashIsAuthoritative: true }, {}, { env: testEnv() });
+    const s = new BackendService(cfg, { trash: async (abs) => void (trashed.push(abs), fs.rmSync(abs)), trashIsAuthoritative: true, confirmTrust: async () => true }, {}, { env: testEnv() });
     services.push(s);
     expect(await s.git('status')).toEqual({ ok: false, reason: 'no-repo' }); // no folder yet
     await s.openWorkspace(dir);

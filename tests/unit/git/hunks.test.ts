@@ -274,7 +274,7 @@ describe('stage / unstage blocks with git apply --cached', () => {
     const dir = await repo('rpc', { 'a.md': lines(6).join('\n') + '\n' });
     write(dir, 'a.md', lines(6, (i) => (i === 1 ? 'one' : i === 6 ? 'six' : `line ${i}`)).join('\n') + '\n');
     const cfg = await fsp.mkdtemp(path.join(BASE, 'rpc-cfg-'));
-    const s = new BackendService(cfg, {}, {}, { env: env() });
+    const s = new BackendService(cfg, { confirmTrust: async () => true }, {}, { env: env() });
     services.push(s);
     await s.openWorkspace(dir);
     await s.git('trust'); // the user's "Trust" in the Source control panel: no git runs without it
@@ -283,5 +283,32 @@ describe('stage / unstage blocks with git apply --cached', () => {
     expect(await s.git('stageHunks', 'a.md', [pick(b[0], true)])).toMatchObject({ ok: true });
     expect(blocks((await s.git('hunks', 'a.md')) as GitFileHunks).map((h) => h.state)).toEqual(['staged', 'unstaged']);
     await expect(s.git('stageHunks', 'a.md', [{ nope: 1 }])).rejects.toMatchObject({ code: 'EINVAL' });
+  });
+});
+
+// The work file is read after git looked at it: a link swapped in there meanwhile must not be followed out of the
+// folder. A wrapper around git does the swap right after the last git call hunks() makes (cat-file).
+describe.skipIf(process.platform === 'win32')('hunks() reads the work file inside the folder only', () => {
+  it('a link swapped in after git looked is not followed (no outside text reaches the page)', async () => {
+    const dir = await repo('swap', { 'a.txt': lines(5).join('\n') + '\n' });
+    write(dir, 'a.txt', lines(5, (i) => (i === 3 ? 'changed' : `line ${i}`)).join('\n') + '\n');
+    const outside = await fsp.mkdtemp(path.join(BASE, 'outside-'));
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'line 1\nline 2\nSECRET\nline 4\nline 5\n');
+    const real = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+    const flag = path.join(outside, 'armed');
+    const wrapper = path.join(outside, 'git-wrap.sh');
+    fs.writeFileSync(
+      wrapper,
+      `#!/bin/sh\n"${real}" "$@"; rc=$?\ncase " $* " in *" cat-file "*) if [ -f "${flag}" ]; then rm -f "${flag}" "${dir}/a.txt"; ln -s "${outside}/secret.txt" "${dir}/a.txt"; fi;; esac\nexit $rc\n`,
+      { mode: 0o755 },
+    );
+    const s = new GitService(dir, { env: env(), gitPath: wrapper });
+    services.push(s);
+    expect((await s.hunks('a.txt')).mode).toBe('hunks'); // the wrapper itself is a working git
+    fs.writeFileSync(flag, '');
+    const r = await s.hunks('a.txt');
+    expect(fs.lstatSync(path.join(dir, 'a.txt')).isSymbolicLink(), 'the swap happened').toBe(true);
+    expect(JSON.stringify(r)).not.toContain('SECRET');
+    expect(r).toEqual({ mode: 'file', reason: 'unavailable' });
   });
 });

@@ -65,4 +65,16 @@ grep -n "keyword" docs/llm/09-reference*.md
 - Remembered per folder (real path, the folder's own case rule) in `<app data>/git-trust.json`, shared by desktop and browser-mode servers; recent folders migrate once.
 - Never start git for the open folder outside `BackendService.git`.
 - Read paths switch off **every** configured filter driver (all config scopes; only canonical Git LFS, and only when git-lfs exists).
+  - A driver name with `=` cannot be switched off with `-c` (git splits at the first `=`): that folder gets **no git** (`reason: 'error'`).
+  - The switch-offs are worked out at discovery from `git config --includes --show-origin`. Every file an include names (active or not) and, with an `includeIf.onbranch:` include, `HEAD` are stat-checked before each git call (`Repo.configSigs`): a change → discover again. Inside WSL, `~/` includes are not checked (the distro's home is unknown).
+  - `config.worktree` changes rediscover like `config` (watcher).
+
+## What runs after trust (tier 2 actions)
+
+- **Before trust: no git at all** (gate above). After trust, actions (`act()`) run what the trust prompt names: the repository's **hooks** and **filters**, plus the user's own login (credential helper, ssh). Repo-local `core.sshCommand` / `credential.helper` are honoured after trust (a per-repo key is a normal setup).
+- **Every action: `core.fsmonitor` off** (as in reads; it only saves time).
+- **Commit boxes run no hook:** stage, unstage, stage blocks, discard are index-only writes → `core.hooksPath` = null device (`noHooks`, like the index refresh). Commit / push / pull / fetch / switch / new branch keep the hooks (pre-commit, commit-msg, pre-push …).
+- **Filters are never switched off in an action:** `git add` would store the unfiltered file (git-crypt: plain text committed), and `-c` overrides reach the hooks' own git calls (`GIT_CONFIG_PARAMETERS`).
+- Push publishes with `push -u -- <remote> <branch>`; a remote name starting with `-` (a folder's config can name one `--receive-pack=…`) is refused. The terminal hand-off drops the `--`.
+- `hunks()` reads the working copy through `readWork`: real path inside the folder's, `O_NOFOLLOW | O_NONBLOCK`, regular file, real path unchanged once open.
 - Tests trust their repos with `trustRepo()` (`tests/e2e/git-helpers.ts`) or `svc.git('trust')`

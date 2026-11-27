@@ -109,8 +109,8 @@ describe('start plans', () => {
     expect(JSON.stringify(s)).not.toMatch(/Users|home|AppData/);
     const env = { Path: 'C:\\Windows', WSLENV: 'FOO/u' };
     const wsl = planClaude({ available: true, via: 'wsl', distro: 'Ubuntu', path: '/usr/bin/claude' }, '\\\\wsl.localhost\\Ubuntu\\home\\me\\p', { platform: 'win32', env, wslExe: 'C:\\Windows\\System32\\wsl.exe', follow });
-    expect(wsl.args).toEqual(['-d', 'Ubuntu', '--cd', '/home/me/p', '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec claude ${ONE_FOLLOW_DIR:+--settings "$ONE_FOLLOW_DIR/settings.json"}', '/home/me/p']);
-    expect(wsl.env).toEqual({ ONE_FOLLOW_DIR: follow.dir, WSLENV: 'FOO/u:ONE_FOLLOW_DIR/p' });
+    expect(wsl.args).toEqual(['-d', 'Ubuntu', '--cd', '/home/me/p', '-e', 'bash', '-lic', 'cd -- "${ONE_CWD:-.}" 2>/dev/null; exec claude ${ONE_FOLLOW_DIR:+--settings "$ONE_FOLLOW_DIR/settings.json"}', 'claude']);
+    expect(wsl.env).toEqual({ ONE_FOLLOW_DIR: follow.dir, ONE_CWD: '/home/me/p', WSLENV: 'FOO/u:ONE_CWD:ONE_FOLLOW_DIR/p' });
   });
 
   it('native: --settings as its own argument; cmd shim quoted; Git Bash gets forward slashes', () => {

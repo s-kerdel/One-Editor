@@ -6,6 +6,7 @@
 //   · child processes: Linux reads /proc (no spawn); macOS one `ps` per refresh; Windows one long-lived
 //     PowerShell CIM query helper, started on the first snapshot and stopped on close or after 10 s
 //     without a snapshot. Inside WSL (Windows, \\wsl.localhost root): `ps` in the distro every 3rd refresh.
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { performance, type EventLoopUtilization } from 'node:perf_hooks';
@@ -38,11 +39,31 @@ export function registerProcessSource(s: ProcessSource): () => void {
 const HELPER_IDLE_MS = 10_000;
 const isWin = process.platform === 'win32';
 
+/**
+ * The process group `pgid` may be signalled as a whole: a real group (> 1) that is not this process's own (`own`;
+ * unknown = no group signal) nor that of its parent. 0 = signal the one process only.
+ */
+export function safeGroup(pgid: number, own: number | null): number {
+  if (!Number.isInteger(pgid) || pgid <= 1 || own === null || pgid === own || pgid === process.pid || pgid === process.ppid) return 0;
+  return pgid;
+}
+
+let psPath: string | undefined;
+/**
+ * `ps` by absolute path (POSIX): a bare name is looked up through PATH, where an empty entry means the current
+ * folder. Looked up once, on the first use (the explorer, a terminal's kill), never at startup.
+ */
+export function posixPs(): string {
+  return (psPath ??= ['/bin/ps', '/usr/bin/ps'].find((p) => fs.existsSync(p)) ?? '/bin/ps');
+}
+
 export class ProcessExplorer {
   private lastSelf: { cpu: NodeJS.CpuUsage; at: number; elu: EventLoopUtilization } | null = null;
   private cpuSamples = new Map<number, { cpuMs: number; at: number }>();
-  /** pid → its process group (only rows this explorer offered an action for). */
-  private killable = new Map<number, number>();
+  /** pid → its process group and whether it is a terminal's foreground job (only rows this explorer offered an action for). */
+  private killable = new Map<number, { pgid: number; foreground: boolean }>();
+  /** This process's own group (POSIX; null = not known yet, or unknowable): never signalled. */
+  private ownPgid: number | null = null;
   /** The last snapshot's children: what a stopped process started goes with it. */
   private lastChildren: ChildInfo[] = [];
   private idleTimer: NodeJS.Timeout | null = null;
@@ -107,7 +128,7 @@ export class ProcessExplorer {
       this.helperCpu = helper.cpuMs;
     }
     const kids = childRows(children, process.pid, { shellPids, selfPids }, (c) => this.cpuPct(c, now));
-    this.killable = new Map(kids.filter((r) => r.pid && r.actions?.length).map((r) => [r.pid!, children.find((c) => c.pid === r.pid)?.pgid ?? 0]));
+    this.killable = new Map(kids.filter((r) => r.pid && r.actions?.length).map((r) => [r.pid!, { pgid: children.find((c) => c.pid === r.pid)?.pgid ?? 0, foreground: !!r.actions?.includes('stopForeground') }]));
     this.lastChildren = children;
     rows.push(...kids);
     if (isWin) rows.push(...(await this.wslProcesses(notes)));
@@ -144,11 +165,13 @@ export class ProcessExplorer {
 
   /** Stop a child the explorer listed with an action (never the app or its Chromium processes). */
   kill(pid: number, group = false): boolean {
-    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid || !this.killable.has(pid)) return false;
-    const pgid = this.killable.get(pid) ?? 0;
+    const k = Number.isInteger(pid) && pid > 0 && pid !== process.pid ? this.killable.get(pid) : undefined;
+    if (!k) return false;
+    // `group` comes from the page: only a terminal's foreground job (`npm test` and what it started) goes as a group.
+    // Any other child may share a group with others, One's own included (git is not started in a group of its own).
+    const pgid = group && k.foreground && !isWin ? safeGroup(k.pgid, this.ownPgid) : 0;
     try {
-      // A terminal's foreground job: its whole process group (`npm test` and what it started).
-      if (group && !isWin && pgid > 1 && pgid !== process.pid && pgid !== process.ppid) process.kill(-pgid, 'SIGTERM');
+      if (pgid) process.kill(-pgid, 'SIGTERM');
       else process.kill(pid, 'SIGTERM');
     } catch {
       return false;
@@ -197,13 +220,20 @@ export class ProcessExplorer {
   }
 
   private async children(skip: ReadonlySet<number>): Promise<ChildInfo[]> {
-    if (process.platform === 'linux') return linuxChildren(process.pid, skip);
+    if (process.platform === 'linux') {
+      if (this.ownPgid === null) {
+        const self = await readText('/proc/self/stat');
+        this.ownPgid = (self && parseProcStat(self)?.pgid) || null;
+      }
+      return linuxChildren(process.pid, skip);
+    }
     if (isWin) {
       this.win ??= new WinQuery();
       return descendantsOf(process.pid, await this.win.query()).filter((c) => !skip.has(c.pid));
     }
-    const out = await run('ps', ['-A', '-o', 'pid=,ppid=,pgid=,tpgid=,%cpu=,rss=,command=']);
-    return descendantsOf(process.pid, parsePs(out)).filter((c) => !skip.has(c.pid));
+    const all = parsePs(await run(posixPs(), ['-A', '-o', 'pid=,ppid=,pgid=,tpgid=,%cpu=,rss=,command=']));
+    this.ownPgid = all.find((c) => c.pid === process.pid)?.pgid || null;
+    return descendantsOf(process.pid, all).filter((c) => !skip.has(c.pid));
   }
 
   /** git / inotifywait running inside the workspace's WSL distro (Windows sees only wsl.exe). */

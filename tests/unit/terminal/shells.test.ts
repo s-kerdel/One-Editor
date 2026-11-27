@@ -295,9 +295,12 @@ describe('Claude Code detection + start plan', () => {
   it('start plans: WSL (cd back after rc files), cmd shim (pushd on UNC), native binary (its folder first on PATH)', () => {
     const env = { Path: 'C:\\Windows', ComSpec: 'C:\\Windows\\system32\\cmd.exe', USERPROFILE: 'C:\\Users\\me' };
     const wsl = planClaude({ available: true, via: 'wsl', distro: 'Ubuntu', path: '/usr/bin/claude' }, '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', { platform: 'win32', env, wslExe: 'C:\\Windows\\System32\\wsl.exe' });
-    expect(wsl).toEqual({ file: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu', '--cd', '/home/me/my proj', '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec claude', '/home/me/my proj'], cwd: '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', env: {} });
+    expect(wsl).toEqual({ file: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu', '--cd', '/home/me/my proj', '-e', 'bash', '-lic', 'cd -- "${ONE_CWD:-.}" 2>/dev/null; exec claude', 'claude'], cwd: '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', env: { ONE_CWD: '/home/me/my proj', WSLENV: 'ONE_CWD' } });
     const shim = { available: true, via: 'native' as const, path: 'C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd' };
-    expect(planClaude(shim, 'C:\\notes', { platform: 'win32', env })).toMatchObject({ file: env.ComSpec, args: `/D /S /C ""${shim.path}""`, cwd: 'C:\\notes', env: { Path: 'C:\\Users\\me\\AppData\\Roaming\\npm;C:\\Windows' } });
+    // The shim runs a bare `node`: cmd.exe must not look for it in the (untrusted) folder first.
+    expect(planClaude(shim, 'C:\\notes', { platform: 'win32', env })).toMatchObject({ file: env.ComSpec, args: `/D /S /C ""${shim.path}""`, cwd: 'C:\\notes', env: { Path: 'C:\\Users\\me\\AppData\\Roaming\\npm;C:\\Windows', NoDefaultCurrentDirectoryInExePath: '1' } });
+    expect(planClaude(shim, '\\\\server\\share\\notes', { platform: 'win32', env }).env.NoDefaultCurrentDirectoryInExePath).toBe('1');
+    expect(planClaude({ available: true, via: 'native', path: 'C:\\Users\\me\\.local\\bin\\claude.exe' }, 'C:\\notes', { platform: 'win32', env }).env).not.toHaveProperty('NoDefaultCurrentDirectoryInExePath');
     expect(planClaude(shim, '\\\\server\\share\\notes', { platform: 'win32', env })).toMatchObject({ args: `/D /S /C "pushd "\\\\server\\share\\notes" && "${shim.path}""`, cwd: 'C:\\Users\\me' });
     expect(planClaude({ available: true, via: 'native', path: '/home/me/.local/bin/claude' }, '/home/me/proj', { platform: 'linux', env: { PATH: '/usr/bin' } })).toEqual({ file: '/home/me/.local/bin/claude', args: [], cwd: '/home/me/proj', env: { PATH: '/home/me/.local/bin:/usr/bin' } });
   });
@@ -407,23 +410,25 @@ describe('opencode detection + start plan', () => {
   it('WSL start plan: login bash, cd back after the rc files, exec the found path; with a server: address as an argument, password through WSLENV', () => {
     const info = { available: true, via: 'wsl' as const, distro: 'Ubuntu', path: '/home/me/.opencode/bin/opencode' };
     const o = { platform: 'win32', env: { ...WIN_ENV, WSLENV: 'X/p' }, wslExe: 'C:\\Windows\\System32\\wsl.exe' };
-    const script = 'cd -- "$0" 2>/dev/null; exec "$1"';
-    expect(planOpencode(info, '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', o)).toEqual({ file: o.wslExe, args: ['-d', 'Ubuntu', '--cd', '/home/me/my proj', '-e', 'bash', '-lic', script, '/home/me/my proj', info.path], cwd: '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', env: {} });
-    expect(planOpencode(info, 'C:\\Users\\me\\proj', o).args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/Users/me/proj', '-e', 'bash', '-lic', script, '/mnt/c/Users/me/proj', info.path]);
+    const script = 'cd -- "${ONE_CWD:-.}" 2>/dev/null; exec "$1"';
+    expect(planOpencode(info, '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', o)).toEqual({ file: o.wslExe, args: ['-d', 'Ubuntu', '--cd', '/home/me/my proj', '-e', 'bash', '-lic', script, 'opencode', info.path], cwd: '\\\\wsl.localhost\\Ubuntu\\home\\me\\my proj', env: { ONE_CWD: '/home/me/my proj', WSLENV: 'X/p:ONE_CWD' } });
+    expect(planOpencode(info, 'C:\\Users\\me\\proj', o).args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/Users/me/proj', '-e', 'bash', '-lic', script, 'opencode', info.path]);
     // Plain: nothing of a server.
-    expect(JSON.stringify(planOpencode(info, 'C:\\ws', o))).not.toMatch(/--server|OPENCODE_PASSWORD|WSLENV/);
+    expect(JSON.stringify(planOpencode(info, 'C:\\ws', o))).not.toMatch(/--server|OPENCODE_PASSWORD/);
     const withServer = planOpencode(info, 'C:\\ws', { ...o, server: { url: 'http://127.0.0.1:4000', password: 'pw-123456789' } });
     // The script stays fixed text: address + path are arguments; the password is never in argv.
-    expect(withServer.args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', 'cd -- "$0" 2>/dev/null; exec "$1" --server "$2"', '/mnt/c/ws', info.path, 'http://127.0.0.1:4000']);
+    expect(withServer.args).toEqual(['-d', 'Ubuntu', '--cd', '/mnt/c/ws', '-e', 'bash', '-lic', 'cd -- "${ONE_CWD:-.}" 2>/dev/null; exec "$1" --server "$2"', 'opencode', info.path, 'http://127.0.0.1:4000']);
     expect(JSON.stringify(withServer.args)).not.toContain('pw-123456789');
-    expect(withServer.env).toEqual({ OPENCODE_PASSWORD: 'pw-123456789', WSLENV: 'X/p:OPENCODE_PASSWORD' });
-    expect(planOpencode(info, 'C:\\ws', { ...o, env: WIN_ENV, server: { url: 'http://127.0.0.1:4000', password: 'pw-123456789' } }).env.WSLENV).toBe('OPENCODE_PASSWORD');
+    expect(withServer.env).toEqual({ OPENCODE_PASSWORD: 'pw-123456789', ONE_CWD: '/mnt/c/ws', WSLENV: 'X/p:ONE_CWD:OPENCODE_PASSWORD' });
+    expect(planOpencode(info, 'C:\\ws', { ...o, env: WIN_ENV, server: { url: 'http://127.0.0.1:4000', password: 'pw-123456789' } }).env.WSLENV).toBe('ONE_CWD:OPENCODE_PASSWORD');
+    // A folder no path in the distro names: no ONE_CWD (the script stays in --cd's folder).
+    expect(planOpencode(info, '\\\\nas\\share\\p', { ...o, env: WIN_ENV }).env).toEqual({});
   });
 
   it('WSL server plan: the fixed script through wsl.exe in the folder\'s Linux path; none for a folder the distro cannot name', () => {
     const info = { available: true, via: 'wsl' as const, distro: 'Ubuntu', path: '/home/me/.opencode/bin/opencode' };
     const exe = 'C:\\Windows\\System32\\wsl.exe';
-    expect(planOpencodeServeWsl(info, '\\\\wsl$\\ubuntu\\home\\me\\my proj', exe)).toEqual({ file: exe, args: ['-d', 'Ubuntu', '--cd', '/home/me/my proj', '-e', 'bash', '-lic', OPENCODE_WSL_SERVE, '/home/me/my proj', info.path], linuxRoot: '/home/me/my proj' });
+    expect(planOpencodeServeWsl(info, '\\\\wsl$\\ubuntu\\home\\me\\my proj', exe, { WSLENV: 'X/p' })).toEqual({ file: exe, args: ['-d', 'Ubuntu', '--cd', '/home/me/my proj', '-e', 'bash', '-lic', OPENCODE_WSL_SERVE, 'opencode', info.path], linuxRoot: '/home/me/my proj', env: { ONE_CWD: '/home/me/my proj', WSLENV: 'X/p:ONE_CWD' } });
     expect(planOpencodeServeWsl(info, 'C:\\ws', exe)?.linuxRoot).toBe('/mnt/c/ws');
     expect(planOpencodeServeWsl(info, '\\\\wsl.localhost\\Debian\\home\\me', exe)).toBeNull(); // another distro's folder
     expect(planOpencodeServeWsl(info, '\\\\nas\\share\\proj', exe)).toBeNull();
@@ -435,6 +440,7 @@ describe('opencode detection + start plan', () => {
     // No single quotes: wsl.exe re-quotes each argument for the distro with `'` — a `'` here would leave bash
     // waiting for the rest of that quote, and the server would never start.
     expect(OPENCODE_WSL_SERVE).not.toContain("'");
+    expect(OPENCODE_WSL_SERVE).toMatch(/^cd -- "\$\{ONE_CWD:-\.\}" 2>\/dev\/null \|\| exit 1;/);
     expect(OPENCODE_WSL_CWD.exec('hello\r\none-cwd /home/me/my proj\r\nserver listening')?.[1]).toBe('/home/me/my proj');
     expect(OPENCODE_WSL_CWD.exec('one-cwd relative/x\n')).toBeNull();
   });
@@ -457,5 +463,26 @@ describe('opencode detection + start plan', () => {
     expect(plan.file).toBe('C:\\Windows\\System32\\cmd.exe');
     expect(String(plan.args)).toContain('opencode.cmd');
     expect(String(plan.args)).not.toContain('pw-123456789');
+    expect(plan.env).toMatchObject({ OPENCODE_PASSWORD: 'pw-123456789', NoDefaultCurrentDirectoryInExePath: '1' });
+  });
+
+  // A folder name with a quote or a command substitution stays one value: it is never script text or a script argument.
+  it("WSL launches: a ' or $(…) in the folder name only ever travels as the ONE_CWD value", () => {
+    const evil = "\\\\wsl.localhost\\Ubuntu\\home\\me\\it's $(touch pwned)";
+    const linux = "/home/me/it's $(touch pwned)";
+    const exe = 'C:\\Windows\\System32\\wsl.exe';
+    const oc = { available: true, via: 'wsl' as const, distro: 'Ubuntu', path: '/home/me/.opencode/bin/opencode' };
+    const plans = [
+      planClaude({ available: true, via: 'wsl', distro: 'Ubuntu', path: '/usr/bin/claude' }, evil, { platform: 'win32', env: WIN_ENV, wslExe: exe }),
+      planOpencode(oc, evil, { platform: 'win32', env: WIN_ENV, wslExe: exe }),
+      planOpencode(oc, evil, { platform: 'win32', env: WIN_ENV, wslExe: exe, server: { url: 'http://127.0.0.1:4000', password: 'pw-123456789' } }),
+      planOpencodeServeWsl(oc, evil, exe, WIN_ENV)!,
+    ];
+    for (const p of plans) {
+      const afterE = (p.args as string[]).slice((p.args as string[]).indexOf('-lic') + 1);
+      expect(afterE.join(' '), 'not in the script or its arguments').not.toContain('pwned');
+      expect(p.env.ONE_CWD).toBe(linux);
+      expect(p.env.WSLENV).toContain('ONE_CWD');
+    }
   });
 });

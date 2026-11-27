@@ -7,7 +7,8 @@
 //    (`update-index --refresh`, hooks off, never while index.lock exists, never killed);
 //  - `core.fsmonitor` is forced off and every configured filter driver is neutralised (all config scopes,
 //    worktree config and includes; only canonical Git LFS stays): a downloaded folder with a hostile
-//    `.git/config` must not get code execution by being opened;
+//    `.git/config` must not get code execution by being opened. A driver name `-c` cannot address (`=`) means
+//    no git; an included config file or (onbranch include) HEAD that changed since means a new discovery;
 //  - `diff` runs with --no-ext-diff --no-textconv;
 //  - git is resolved to an absolute path ourselves: Windows' search order would otherwise run a `git.exe`
 //    sitting in the (untrusted) workspace folder;
@@ -60,7 +61,7 @@ function mappedDrives(): Promise<Map<string, string>> {
 }
 import { normalize } from '../shared/paths';
 import { BackendFailure } from './errors';
-import { resolveInside } from './pathsafe';
+import { isInsideDir, resolveInside } from './pathsafe';
 import { decode, toLf } from './textcodec';
 import { winSystemExe } from './winsys';
 
@@ -497,6 +498,39 @@ export function untrustedFilterOverrides(configZ: string, o: { lfsInstalled?: bo
 /** Is a canonical Git LFS driver configured? (Then discovery checks that git-lfs exists: git dies on a missing `filter-process`.) */
 export const hasLfsDriver = (configZ: string) => [...filterDrivers(configZ).values()].some(Boolean);
 
+/**
+ * A driver `-c` cannot switch off: git splits `-c filter.a=b.clean=` at the first `=` (it would set `filter.a`).
+ * Discovery then treats the folder as "cannot tell what would run" → no git.
+ */
+export const unswitchableFilter = (configZ: string): string | null => [...filterDrivers(configZ).keys()].find((n) => n.includes('=')) ?? null;
+
+/**
+ * Config files whose later change makes the filter switch-offs stale, from the `--show-origin -z` listing discovery
+ * reads (`file:<origin>` NUL `key` LF `value` NUL …): every file an include directive names — active or not, its
+ * condition is not evaluated here (a superset) —, resolved like git does (relative to the including file, `~/` = home;
+ * `%(prefix)` and includes from outside a file are skipped), plus HEAD when an `includeIf.onbranch:` exists (a branch
+ * switch turns such an include on). Paths in the platform's `P` rules; `origin` maps an origin path to an absolute one.
+ */
+export function configWatchFiles(configZ: string, o: { P: PlatformPath; origin: (p: string) => string; home: string | null; head: string }): string[] {
+  const out = new Set<string>();
+  const parts = configZ.split('\0');
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const [origin, rec] = [parts[i], parts[i + 1]];
+    const nl = rec.indexOf('\n');
+    const key = nl === -1 ? rec : rec.slice(0, nl);
+    const value = nl === -1 ? '' : rec.slice(nl + 1);
+    if (!/^include(if\..*)?\.path$/i.test(key) || !value) continue;
+    if (/^includeif\.onbranch:/i.test(key)) out.add(o.head);
+    let target: string | null = null;
+    if (value.startsWith('~/')) target = o.home ? o.P.join(o.home, value.slice(2)) : null;
+    else if (value.startsWith('%(prefix)')) target = null;
+    else if (o.P.isAbsolute(value)) target = value;
+    else if (origin.startsWith('file:')) target = o.P.resolve(o.P.dirname(o.origin(origin.slice(5))), value);
+    if (target) out.add(target);
+  }
+  return [...out];
+}
+
 /** Driver name → every one of its commands is canonical Git LFS. */
 function filterDrivers(configZ: string): Map<string, boolean> {
   const names = new Map<string, boolean>();
@@ -580,11 +614,13 @@ interface Repo {
   commonDir: string;
   /** Global `-c` arguments for every call. */
   base: string[];
+  /** Config files (`configWatchFiles`) with their change signature at discovery: a change → discover again. */
+  configSigs: Array<[file: string, sig: string]>;
 }
 
 const LF_POINTER = 'version https://git-lfs.github.com/spec/v1';
 // Files whose change means "re-read status / branch". Lock files are skipped: their rename produces the real name.
-const GIT_STATE_FILES = new Set(['HEAD', 'index', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'REBASE_HEAD', 'FETCH_HEAD', 'packed-refs', 'config', 'rebase-merge', 'rebase-apply']);
+const GIT_STATE_FILES = new Set(['HEAD', 'index', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'REBASE_HEAD', 'FETCH_HEAD', 'packed-refs', 'config', 'config.worktree', 'rebase-merge', 'rebase-apply']);
 
 export class GitService {
   private repoP: Promise<Repo | GitUnavailable> | null = null;
@@ -679,8 +715,24 @@ export class GitService {
     return { path: `wsl:${t.distro}`, version };
   }
 
-  /** Repository facts for the workspace (cached; re-checked when it was not a repo a moment ago). */
-  private repo(): Promise<Repo | GitUnavailable> {
+  /**
+   * Repository facts for the workspace (cached; re-checked when it was not a repo a moment ago, and discovered again
+   * when an included config file or — with an onbranch include — HEAD changed since: the filter switch-offs in
+   * `base` were worked out from that config).
+   */
+  private async repo(): Promise<Repo | GitUnavailable> {
+    const p = this.cachedRepo();
+    const r = await p;
+    if (!r.ok || !r.configSigs.length) return r;
+    for (const [f, sig] of r.configSigs) {
+      if ((await statSig(f)) === sig) continue; // one at a time: a hung share holds one libuv thread, not the pool
+      if (this.repoP === p) this.repoP = null;
+      return this.cachedRepo(); // that one fresh discovery (shared), not checked again here
+    }
+    return r;
+  }
+
+  private cachedRepo(): Promise<Repo | GitUnavailable> {
     if (this.repoP && this.repoMissAt && Date.now() - this.repoMissAt > NEGATIVE_TTL_MS) this.repoP = null;
     if (!this.repoP) {
       const p = this.discover();
@@ -734,17 +786,30 @@ export class GitService {
     const host = this.viaWsl && t ? (linux: string) => (this.opts.wsl?.hostPath ?? ((w, l) => toUncPath(w, l)))(t, linux) : (p: string) => this.P.resolve(this.root, p);
     const commonLinux = this.viaWsl && t ? path.posix.resolve(t.linux, common || gitDir) : common || gitDir;
     const base = ['-c', 'core.quotepath=off', '-c', 'core.fsmonitor=', '-c', 'status.relativePaths=false', '-c', 'color.ui=false', '-c', 'log.showSignature=false'];
-    // Every scope git reads for this folder (no --local: `.git/config.worktree` and includes count too).
-    // Exit 1 = no filter configured; anything else means we cannot tell what would run → no git here.
-    const cfg = await this.exec(git, ['config', '--includes', '-z', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$'], { timeoutMs: limit, maxBytes: 1024 * 1024, trigger: 'discover' });
+    // Every scope git reads for this folder (no --local: `.git/config.worktree` and includes count too), with the
+    // include directives and where each entry comes from (`configWatchFiles`: what to watch for a stale result).
+    // Exit 1 = no filter / include configured; anything else means we cannot tell what would run → no git here.
+    const cfg = await this.exec(git, ['config', '--includes', '--show-origin', '-z', '--get-regexp', '^(filter\\..*\\.(clean|smudge|process)|include\\.path|includeif\\..*\\.path)$'], { timeoutMs: limit, maxBytes: 1024 * 1024, trigger: 'discover' });
+    const configSigs: Array<[string, string]> = [];
     if (cfg.code === 0 && !cfg.overflow) {
       const z = cfg.stdout.toString('utf8');
+      const bad = unswitchableFilter(z);
+      if (bad !== null) return { ok: false, reason: 'error', message: `This folder's git configuration has a filter One cannot switch off (“${bad}”)` };
       // LFS configured but not installed: git would die on every status ("git-lfs: not found") → no filter at all.
       // `alias.lfs` is pinned: without git-lfs git would otherwise run an `lfs` alias from the folder's config.
       const lfsInstalled = !hasLfsDriver(z) || (await this.exec(git, ['-c', 'alias.lfs=!exit 1', 'lfs', 'version'], { timeoutMs: T_QUICK, maxBytes: 4096, trigger: 'discover' })).code === 0;
       base.push(...untrustedFilterOverrides(z, { lfsInstalled }));
+      // Inside WSL the paths are the distro's (relative to the Linux folder), and its home is not known here: `~/` is skipped.
+      const P = this.viaWsl ? path.posix : this.P;
+      const cwd = this.viaWsl && t ? t.linux : this.root;
+      const home = this.viaWsl ? null : (envGet(this.env, 'HOME') ?? (this.platform === 'win32' ? envGet(this.env, 'USERPROFILE') : undefined) ?? null);
+      const files = configWatchFiles(z, { P, origin: (o) => P.resolve(cwd, o), home, head: P.join(this.viaWsl ? path.posix.resolve(t!.linux, gitDir) : this.P.resolve(this.root, gitDir), 'HEAD') });
+      for (const f of files) {
+        const native = this.viaWsl && t ? host(f) : f;
+        configSigs.push([native, await statSig(native)]);
+      }
     } else if (cfg.code !== 1 || cfg.overflow) return failure(cfg) ?? { ok: false, reason: 'error', message: 'Could not read the git configuration of this folder' };
-    return { ok: true, git, toplevel: host(toplevel), prefix: prefix ?? '', gitDir: host(gitDir), commonDir: host(commonLinux), base };
+    return { ok: true, git, toplevel: host(toplevel), prefix: prefix ?? '', gitDir: host(gitDir), commonDir: host(commonLinux), base, configSigs };
   }
 
   private git(repo: Repo, args: string[], o: Omit<ExecOptions, 'env'>) {
@@ -841,8 +906,7 @@ export class GitService {
     return this.serial(async (): Promise<IndexRefreshResult> => {
       if (await exists(path.join(repo.gitDir, 'index.lock'))) return { ok: false, skipped: 'locked' };
       const t0 = performance.now();
-      const noHooks = this.platform === 'win32' && !this.viaWsl ? 'NUL' : '/dev/null';
-      const args = ['-c', `core.hooksPath=${noHooks}`, 'update-index', '-q', '--unmerged', '--ignore-missing', '--ignore-submodules', '--refresh'];
+      const args = [...this.noHooks, 'update-index', '-q', '--unmerged', '--ignore-missing', '--ignore-submodules', '--refresh'];
       const r = await this.git(repo, args, { timeoutMs: 0, maxBytes: 1024 * 1024, low: true, direct: true, trigger: 'index-refresh' });
       if (r.code === 0) {
         this.scan = null;
@@ -936,8 +1000,13 @@ export class GitService {
   }
 
   // ---- tier 2: source control (mutating) ----------------------------------------------------
-  // These run with the user's full configuration — hooks and filters included: they are what the
-  // user asked for. Only `core.quotepath` is forced, for parsing. One mutation at a time (index.lock).
+  // Trusted folders only (the gate). These run what the trust prompt names — the repository's hooks and filters —
+  // and the user's own login (credential helper, ssh): they are what the user asked for. A filter is never switched
+  // off here: `git add` would put the unfiltered file in the index (git-crypt: plain text committed), and `-c`
+  // overrides reach the hooks' own git calls too (GIT_CONFIG_PARAMETERS).
+  // Beyond that nothing configured runs: `core.fsmonitor` is off as in reads (it only ever saves time), and the
+  // index-only writes behind the commit boxes (stage / unstage / blocks / discard) run no hook, like the index
+  // refresh. `core.quotepath` / `color.ui` are forced for parsing. One mutation at a time (index.lock).
 
   private chain: Promise<unknown> = Promise.resolve();
   private serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -955,11 +1024,19 @@ export class GitService {
     return { ok: false, message: repo.message || why[repo.reason] || 'git is not available' };
   }
 
-  /** Runs a mutating git command and turns its outcome into an action result. */
-  private async act(repo: Repo, args: string[], o: { input?: string | Buffer; timeoutMs?: number; net?: boolean; ok?: string; explain?: (text: string) => string | null } = {}): Promise<GitActionResult> {
+  /** No hooks: `core.hooksPath` pointed at the null device (the platform's git runs on: inside WSL that is Linux). */
+  private get noHooks(): string[] {
+    return ['-c', `core.hooksPath=${this.platform === 'win32' && !this.viaWsl ? 'NUL' : '/dev/null'}`];
+  }
+
+  /**
+   * Runs a mutating git command and turns its outcome into an action result. `hooks: false` = an index-only write
+   * (a commit box): no hook runs (post-index-change, …); commit / push / pull / switch keep the repository's hooks.
+   */
+  private async act(repo: Repo, args: string[], o: { input?: string | Buffer; timeoutMs?: number; net?: boolean; hooks?: false; ok?: string; explain?: (text: string) => string | null } = {}): Promise<GitActionResult> {
     const env = o.net ? { ...this.env } : this.env;
     if (o.net) delete env.GCM_INTERACTIVE; // the credential manager's own window is fine; terminal prompts are not
-    const r = await this.exec(repo.git, ['-c', 'core.quotepath=off', '-c', 'color.ui=false', ...args], {
+    const r = await this.exec(repo.git, ['-c', 'core.quotepath=off', '-c', 'color.ui=false', '-c', 'core.fsmonitor=', ...(o.hooks === false ? this.noHooks : []), ...args], {
       env,
       timeoutMs: this.opts.timeouts?.action ?? o.timeoutMs ?? 60_000,
       maxBytes: 4 * 1024 * 1024,
@@ -971,12 +1048,14 @@ export class GitService {
     });
     if (r.error) return { ok: false, message: r.error.message };
     const text = r.stderr + (r.stderr && r.stdout.length ? '\n' : '') + r.stdout.toString('utf8');
-    if (r.timedOut) return { ok: false, timeout: true, message: GIT_TIMEOUT_TEXT, ...(o.net ? { terminal: terminalCommand(args), auth: true } : {}) };
+    // The hand-off the user types: without push's `--` (its remote name was checked: no leading '-').
+    const terminal = () => terminalCommand(args.filter((a) => a !== '--'));
+    if (r.timedOut) return { ok: false, timeout: true, message: GIT_TIMEOUT_TEXT, ...(o.net ? { terminal: terminal(), auth: true } : {}) };
     if (r.code === 0) return { ok: true, message: o.ok ?? gitMessage(text, 2) };
     const plain = o.explain?.(text);
     if (plain) return { ok: false, message: plain };
     const msg = gitMessage(text) || `git ${args[0]} failed`;
-    if (o.net && isAuthError(text)) return { ok: false, auth: true, message: msg, terminal: terminalCommand(args) };
+    if (o.net && isAuthError(text)) return { ok: false, auth: true, message: msg, terminal: terminal() };
     if (/gpg failed|signing failed|passphrase/i.test(text)) return { ok: false, message: msg, terminal: `git ${args[0]}` };
     return { ok: false, message: msg };
   }
@@ -1003,7 +1082,7 @@ export class GitService {
     const repo = await this.needRepo();
     if (!('base' in repo)) return repo;
     const c = this.withSpecs(repo, ['add', '-A'], this.specs(repo, paths));
-    return this.serial(() => this.act(repo, c.args, { input: c.input }));
+    return this.serial(() => this.act(repo, c.args, { input: c.input, hooks: false }));
   }
 
   async unstage(paths: unknown): Promise<GitActionResult> {
@@ -1014,7 +1093,7 @@ export class GitService {
       const head = await this.hasHead(repo);
       const verb = !head ? ['rm', '--cached', '-r', '-q', '--ignore-unmatch'] : atLeast(repo.git.version, 2, 23) ? ['restore', '--staged'] : ['reset', '-q'];
       const c = this.withSpecs(repo, verb, specs);
-      return this.act(repo, c.args, { input: c.input });
+      return this.act(repo, c.args, { input: c.input, hooks: false });
     });
   }
 
@@ -1039,7 +1118,7 @@ export class GitService {
       if (tracked.length) {
         const verb = atLeast(repo.git.version, 2, 23) ? ['restore', '--worktree'] : ['checkout', '-q'];
         const c = this.withSpecs(repo, verb, tracked.map((p) => `:(top,literal)${repo.prefix}${p}`));
-        const r = await this.act(repo, c.args, { input: c.input });
+        const r = await this.act(repo, c.args, { input: c.input, hooks: false });
         if (!r.ok) return r;
       }
       for (const p of loose) await trash(p);
@@ -1113,14 +1192,9 @@ export class GitService {
     const head = await this.catFile(repo, 'HEAD', f.headPath);
     if (head.tooLarge) return whole('too-large');
     if (!head.data) return whole('unavailable');
-    let raw: Buffer;
-    try {
-      const abs = this.P.join(this.root, ...clean.split('/'));
-      if ((await fsp.stat(abs)).size > GIT_MAX_BLOB_BYTES) return whole('too-large');
-      raw = await fsp.readFile(abs);
-    } catch {
-      return whole('unavailable');
-    }
+    const raw = await this.readWork(clean);
+    if (raw === 'too-large') return whole('too-large');
+    if (!raw) return whole('unavailable');
     const h = decode(head.data);
     const w = decode(raw);
     if (h.binary || w.binary) return whole('binary');
@@ -1128,6 +1202,38 @@ export class GitService {
     // A lone CR is a line break for the editor but not for git: the lines would not line up.
     if (/\r(?!\n)/.test(h.text) || /\r(?!\n)/.test(w.text)) return whole('special');
     return { mode: 'hunks', head: toLf(h.text), work: toLf(w.text), hunks: f.blocks.map(({ a0, a1, b0, b1, state }) => ({ a0, a1, b0, b1, state })) };
+  }
+
+  /** The folder without links (only a success is remembered: an answer that failed once is asked again). */
+  private realRoot: string | null = null;
+
+  /**
+   * The working copy of `clean` for hunks(), read inside the folder only: git looked at it a moment ago, and a link
+   * swapped in since (the file, or a folder above it) must not lead out of the folder. Its real path must be inside
+   * the folder's, it is opened without following a link and without blocking (FIFO), must be a regular file, and its
+   * real path must be unchanged once it is open. null: not readable here.
+   */
+  private async readWork(clean: string): Promise<Buffer | 'too-large' | null> {
+    const abs = this.P.join(this.root, ...clean.split('/'));
+    this.realRoot ??= await fsp.realpath(this.root).catch(() => null);
+    const real = await fsp.realpath(abs).catch(() => null);
+    const fold = this.opts.foldCase ?? (this.platform === 'win32' || this.platform === 'darwin');
+    if (!this.realRoot || !real || !isInsideDir(real, this.realRoot, this.P, fold)) return null;
+    const fh = await fsp.open(real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)).catch(() => null);
+    if (!fh) return null;
+    try {
+      const st = await fh.stat();
+      if (!st.isFile()) return null;
+      if (st.size > GIT_MAX_BLOB_BYTES) return 'too-large';
+      if ((await fsp.realpath(abs).catch(() => null)) !== real) return null;
+      const buf = Buffer.alloc(st.size);
+      const { bytesRead } = await fh.read(buf, 0, st.size, 0);
+      return buf.subarray(0, bytesRead);
+    } catch {
+      return null;
+    } finally {
+      await fh.close().catch(() => {});
+    }
   }
 
   /** Puts blocks into the index (`include`) or takes them out, by their ranges from `hunks()`. */
@@ -1144,7 +1250,7 @@ export class GitService {
       const { hunks, missing } = hunksForPicks(f.blocks, list);
       if (missing) return { ok: false, message: 'The file changed meanwhile. Look at it again, then retry.' };
       if (!hunks.length) return { ok: true };
-      return this.act(repo, ['apply', '--cached', '--unidiff-zero', '--whitespace=nowarn', '-'], { input: buildPatch(f.repoPath, hunks), ok: '' });
+      return this.act(repo, ['apply', '--cached', '--unidiff-zero', '--whitespace=nowarn', '-'], { input: buildPatch(f.repoPath, hunks), ok: '', hooks: false });
     });
   }
 
@@ -1218,7 +1324,10 @@ export class GitService {
     if (!s.branch.upstream) {
       const remotes = await this.remotes(repo);
       if (!remotes.length) return { ok: false, message: 'This repository has no remote' };
-      args = ['push', '-u', remotes.includes('origin') ? 'origin' : remotes[0], s.branch.head];
+      const remote = remotes.includes('origin') ? 'origin' : remotes[0];
+      // Names come from the folder's config (`[remote "--receive-pack=…"]` is listed by `git remote`): never an option.
+      if (remote.startsWith('-')) return { ok: false, message: `“${remote}” is not a valid remote name` };
+      args = ['push', '-u', '--', remote, s.branch.head];
     }
     return this.serial(async () => {
       const r = await this.act(repo, args, { net: true, timeoutMs: 5 * 60_000, ok: s.branch.upstream ? 'Pushed' : `Published ${s.branch.head}` });
@@ -1552,7 +1661,7 @@ export class GitService {
     });
     if (!changed.length || this.disposed) return;
     if (changed.some((f) => f.includes(`${path.sep}refs${path.sep}`) || path.basename(f) === 'packed-refs')) this.refsGen++;
-    if (changed.some((f) => path.dirname(f) === this.root || path.basename(f) === 'config')) {
+    if (changed.some((f) => path.dirname(f) === this.root || path.basename(f) === 'config' || path.basename(f) === 'config.worktree')) {
       // Repository appeared / vanished / was reconfigured: rediscover and re-arm the watchers.
       this.invalidate();
       this.stopWatching();

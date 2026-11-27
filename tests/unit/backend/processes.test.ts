@@ -6,7 +6,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { childRows, descendantsOf, gitVerb, parsePs, parseProcStat, parseWinProcs, procText, treeOrder, type ChildInfo, type ProcRow, type ProcSnapshot } from '../../../src/shared/processes';
-import { ProcessExplorer, registerProcessSource } from '../../../src/backend/processes';
+import { ProcessExplorer, posixPs, registerProcessSource, safeGroup } from '../../../src/backend/processes';
 import { BackendService } from '../../../src/backend/service';
 
 describe('parsing', () => {
@@ -123,6 +123,52 @@ describe.skipIf(process.platform !== 'linux')('Linux snapshot (real /proc)', () 
     expect(ex.helperRunning).toBe(false);
     expect(ex.kill(sleep.pid!), 'forgotten after close').toBe(false);
     off();
+  });
+
+  // The page asks for `group`; only a terminal's foreground job may be stopped as a group. A plain child shares a
+  // group with others (here: its own detached group, so nothing outside this test is ever signalled).
+  it('`group` is honoured only for a terminal foreground job: a plain child is stopped alone', async () => {
+    const sh = spawn('sh', ['-c', 'sleep 601 & sleep 602 & wait'], { stdio: 'ignore', detached: true });
+    kids.push(sh);
+    const ex = new ProcessExplorer({ root: () => null });
+    await new Promise((r) => setTimeout(r, 150));
+    const snap = await ex.snapshot();
+    const [a, b] = ['sleep 601', 'sleep 602'].map((cmd) => snap.rows.find((r) => r.parent === `pid:${sh.pid}` && r.detail === cmd)!);
+    expect(a?.actions, JSON.stringify(snap.rows.map((r) => [r.name, r.detail]))).toEqual(['kill']);
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(ex.kill(a.pid!, true)).toBe(true);
+    for (let i = 0; i < 50 && alive(a.pid!); i++) await new Promise((r) => setTimeout(r, 20));
+    expect(alive(a.pid!)).toBe(false);
+    expect(alive(b.pid!), 'the other member of the group lives').toBe(true);
+    expect(alive(sh.pid!), 'and so does its parent').toBe(true);
+    ex.close();
+    try {
+      process.kill(-sh.pid!, 'SIGKILL');
+    } catch {}
+  });
+});
+
+describe.skipIf(process.platform === 'win32')('POSIX ps by absolute path', () => {
+  it('never a bare name (an empty PATH entry would mean the current folder)', () => {
+    expect(path.isAbsolute(posixPs())).toBe(true);
+  });
+});
+
+describe('process group signals', () => {
+  it("a group is signalled only when it is a real group that is not the app's own", () => {
+    expect(safeGroup(4242, 100)).toBe(4242);
+    expect(safeGroup(100, 100), "the app's own group").toBe(0);
+    expect(safeGroup(4242, null), 'own group unknown: no group signal').toBe(0);
+    expect(safeGroup(1, 100)).toBe(0);
+    expect(safeGroup(0, 100)).toBe(0);
+    expect(safeGroup(process.pid, 100)).toBe(0);
   });
 });
 

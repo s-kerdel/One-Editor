@@ -37,6 +37,7 @@ import { claudeHint, claudeInstall, detectClaude, detectOpencode, detectShells, 
 import { ClaudeFollow } from './terminal-follow';
 import { OpencodeTracker } from './terminal-opencode';
 import { winSystemExe } from '../backend/winsys';
+import { posixPs } from '../backend/processes';
 
 // ---------------------------------------------------------------- node-pty surface we use
 
@@ -498,7 +499,7 @@ export class TerminalService {
     const f = this.o.follow;
     if (!f || !info.path) return null;
     // Inside WSL: started in the distro through wsl.exe (a Linux path is not a program main can start).
-    const wsl = info.via === 'wsl' ? (wslExe ? planOpencodeServeWsl(info, root, wslExe) : null) : undefined;
+    const wsl = info.via === 'wsl' ? (wslExe ? planOpencodeServeWsl(info, root, wslExe, env) : null) : undefined;
     // No plan (another distro's folder, a network share): nothing was started.
     if (wsl === null) {
       onFail(wslExe ? 'folder' : 'spawn');
@@ -702,7 +703,7 @@ export class TerminalService {
   private descendants(pid: number): number[] {
     if (this.platform === 'win32' || this.o.signalGroup) return [];
     try {
-      const rows = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 1500, maxBuffer: 4 << 20 }).split('\n');
+      const rows = execFileSync(posixPs(), ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 1500, maxBuffer: 4 << 20 }).split('\n');
       const kids = new Map<number, number[]>();
       for (const row of rows) {
         const [c, p] = row.trim().split(/\s+/).map(Number);
