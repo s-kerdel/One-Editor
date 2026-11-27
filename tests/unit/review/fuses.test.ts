@@ -17,18 +17,18 @@ function fakeExe(name: string, wire: string, o: { version?: number; twice?: bool
 }
 
 describe('Electron fuses of the packaged app', () => {
-  it('what ships: RunAsNode on (web server child), NODE_OPTIONS and --inspect off; nothing else is touched', () => {
-    expect(SEC_EDIT_FUSES).toEqual({ RunAsNode: true, EnableNodeOptionsEnvironmentVariable: false, EnableNodeCliInspectArguments: false });
+  it('what ships: RunAsNode, NODE_OPTIONS and --inspect off, the app only from app.asar; nothing else is touched', () => {
+    expect(SEC_EDIT_FUSES).toEqual({ RunAsNode: false, EnableNodeOptionsEnvironmentVariable: false, EnableNodeCliInspectArguments: false, OnlyLoadAppFromAsar: true });
     const exe = fakeExe('default', '101100011'); // Electron 45's defaults
     const before = fs.readFileSync(exe);
     const now = applyFuses(exe);
-    expect(now).toEqual({ RunAsNode: true, EnableCookieEncryption: false, EnableNodeOptionsEnvironmentVariable: false, EnableNodeCliInspectArguments: false, EnableEmbeddedAsarIntegrityValidation: false, OnlyLoadAppFromAsar: false, LoadBrowserProcessSpecificV8Snapshot: false, GrantFileProtocolExtraPrivileges: true, WasmTrapHandlers: true });
+    expect(now).toEqual({ RunAsNode: false, EnableCookieEncryption: false, EnableNodeOptionsEnvironmentVariable: false, EnableNodeCliInspectArguments: false, EnableEmbeddedAsarIntegrityValidation: false, OnlyLoadAppFromAsar: true, LoadBrowserProcessSpecificV8Snapshot: false, GrantFileProtocolExtraPrivileges: true, WasmTrapHandlers: true });
     expect(readFuses(exe)).toEqual(now);
     const after = fs.readFileSync(exe);
     expect(after.length).toBe(before.length);
     const changed = [...after.keys()].filter((i) => after[i] !== before[i]);
     const wireAt = before.indexOf(SENTINEL) + SENTINEL.length + 2;
-    expect(changed).toEqual([wireAt + FUSES.indexOf('EnableNodeOptionsEnvironmentVariable'), wireAt + FUSES.indexOf('EnableNodeCliInspectArguments')]);
+    expect(changed).toEqual(['RunAsNode', 'EnableNodeOptionsEnvironmentVariable', 'EnableNodeCliInspectArguments', 'OnlyLoadAppFromAsar'].map((f) => wireAt + FUSES.indexOf(f)));
     expect(applyFuses(exe)).toEqual(now); // idempotent
   });
 

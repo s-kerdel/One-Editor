@@ -1,19 +1,27 @@
-// The packaged Linux build (npm run package:linux) must launch from app.asar and work end to end.
-// It ships with its fuses set (scripts/fuses.mjs): no --inspect, no NODE_OPTIONS — so Playwright's
-// Electron launcher (which attaches through --inspect) cannot drive it, and SEC_EDIT_* test hooks are
-// ignored (src/main/env-guard.ts). It is started like a user would start it and driven through
-// Chromium's own DevTools port, with a private profile (--user-data-dir).
+// The packaged Linux build must launch from app.asar and work end to end.
+// It ships with its fuses set (scripts/fuses.mjs): no Node mode, no --inspect, no NODE_OPTIONS, the app from
+// app.asar only — so Playwright's Electron launcher (which attaches through --inspect) cannot drive it, and
+// SEC_EDIT_* test hooks are ignored (src/main/env-guard.ts). It is started like a user would start it and driven
+// through Chromium's own DevTools port, with a private profile (--user-data-dir). A release package refuses that
+// port: build a test package for this spec, outside release/:
+//   node scripts/package.mjs linux --out .tmp/<area>/release --test-package
+//   SEC_EDIT_PACKAGED_DIR=.tmp/<area>/release npx playwright test -c playwright.electron.config.ts tests/e2e/electron/packaged.spec.ts
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { chromium, type Browser, type Page } from '@playwright/test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { test, expect, fs, path } from './fixture';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const bin = path.join(root, 'release/One-linux-x64/one');
-const winZip = path.join(root, 'release/One-win32-x64.zip');
-const winExe = path.join(root, 'release/One-win32-x64/One.exe');
+const out = path.resolve(root, process.env.SEC_EDIT_PACKAGED_DIR || 'release');
+const bin = path.join(out, 'One-linux-x64/one');
+const winZip = path.join(out, 'One-win32-x64.zip');
+const winExe = path.join(out, 'One-win32-x64/One.exe');
+const unpacked = path.join(out, 'One-linux-x64/resources/app.asar.unpacked');
 
-test.skip(process.platform !== 'linux' || !fs.existsSync(bin), 'run `npm run package:linux` first');
+test.skip(process.platform !== 'linux' || !fs.existsSync(bin), 'build a Linux test package first (see the top of this file)');
 
 const running: Array<{ child: ChildProcess; browser?: Browser }> = [];
 test.afterEach(async () => {
@@ -80,9 +88,9 @@ test('packaged Linux build: the terminal loads node-pty from app.asar.unpacked',
   await expect.poll(text).toContain(`PTY=42 ${el.ws}`);
 });
 
-test('packaged build: fuses are set, test hooks are dead, the web server child still starts (RunAsNode)', async ({ el }) => {
+test('packaged build: fuses are set, test hooks are dead, the web server child still starts (a utilityProcess)', async ({ el }) => {
   const fuses = await import(path.join(root, 'scripts/fuses.mjs'));
-  const want = { RunAsNode: true, EnableNodeOptionsEnvironmentVariable: false, EnableNodeCliInspectArguments: false };
+  const want = { RunAsNode: false, EnableNodeOptionsEnvironmentVariable: false, EnableNodeCliInspectArguments: false, OnlyLoadAppFromAsar: true };
   expect(fuses.readFuses(bin)).toMatchObject(want);
   if (fs.existsSync(winExe)) expect(fuses.readFuses(winExe)).toMatchObject(want);
 
@@ -102,12 +110,72 @@ test('packaged build: fuses are set, test hooks are dead, the web server child s
   expect(fs.existsSync(hooked)).toBe(false);
   expect(fs.existsSync(marker)).toBe(false); // NODE_OPTIONS fuse: nothing was preloaded into main
 
-  // RunAsNode stays on for exactly this: "Start web server" runs the bundled server with the app's own executable.
+  // "Start web server" runs the bundled server in a utilityProcess (no Node mode: the fuse is off).
   const st = await page.evaluate(() => (window as any).secEditBridge.webServer.start({ port: null, access: 'local' }));
   expect(st).toMatchObject({ ok: true, result: { state: 'running' } });
   const origin: string = st.result.urls[0].origin;
   expect((await fetch(origin)).status).toBeLessThan(500);
   expect((await page.evaluate(() => (window as any).secEditBridge.webServer.stop())).result.state).toBe('stopped');
+});
+
+/** A data folder with MCP on, one shared folder and a token (what Settings → MCP server writes). */
+function mcpConfig(el: { tmp: string }) {
+  const xdg = path.join(el.tmp, 'xdg');
+  const cfg = path.join(xdg, 'sec-edit');
+  const shared = path.join(el.tmp, 'shared');
+  fs.mkdirSync(cfg, { recursive: true });
+  fs.mkdirSync(shared, { recursive: true });
+  fs.writeFileSync(path.join(shared, 'hello.md'), '# from the packaged server');
+  const raw = 'one_' + crypto.randomBytes(32).toString('base64url');
+  const sha256 = crypto.createHash('sha256').update(raw).digest('hex');
+  fs.writeFileSync(path.join(cfg, 'mcp.json'), JSON.stringify({ version: 1, enabled: true, folders: [{ id: 'aaaaaaaa', alias: 'shared', path: fs.realpathSync(shared), mode: 'read' }], tokens: [{ id: 'bbbbbbbb', name: 'Packaged', sha256, hint: '', created: 1 }] }));
+  fs.writeFileSync(path.join(cfg, 'settings.json'), '{}');
+  // Only what a client passes: no display (headless), the data folder by XDG (SEC_EDIT_* hooks are dead here).
+  return { raw, cfg, env: { PATH: process.env.PATH ?? '', HOME: el.tmp, XDG_CONFIG_HOME: xdg, ONE_MCP_TOKEN: raw } };
+}
+
+async function readHello(command: string, args: string[], env: Record<string, string>) {
+  const client = new Client({ name: 'packaged-e2e', version: '1' });
+  const t0 = Date.now();
+  await client.connect(new StdioClientTransport({ command, args, env, stderr: 'pipe' }));
+  const ms = Date.now() - t0;
+  try {
+    const read = (await client.callTool({ name: 'read_file', arguments: { path: 'hello.md' } })) as any;
+    return { ms, text: read.content.map((c: any) => c.text).join('\n') as string };
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+test('packaged build: `one --mcp-stdio` serves MCP without a window or display; a setup copied before still works; Node mode runs nothing', async ({ el }) => {
+  const m = mcpConfig(el);
+  const fresh = await readHello(bin, ['--ozone-platform=headless', '--mcp-stdio'], m.env);
+  console.log(`[packaged] --mcp-stdio: connected (initialize) in ${fresh.ms} ms`);
+  expect(fresh.text).toContain('from the packaged server');
+  expect(fs.existsSync(path.join(m.cfg, 'headless-profile'))).toBe(true); // Chromium's files apart from One's own
+  // The old setup (Node mode + cli.mjs): the fuse ignores ELECTRON_RUN_AS_NODE, main recognises its own server program.
+  const old = await readHello(bin, [path.join(unpacked, 'dist/mcp/cli.mjs'), '--stdio'], { ...m.env, ELECTRON_RUN_AS_NODE: '1', DISPLAY: process.env.DISPLAY || ':99' });
+  expect(old.text).toContain('from the packaged server');
+  // Any other script given with ELECTRON_RUN_AS_NODE is never run (the app starts instead: killed here).
+  const marker = path.join(el.tmp, 'node-mode-ran');
+  const script = path.join(el.tmp, 'evil.js');
+  fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x');`);
+  const child = spawn(bin, ['--disable-gpu', `--user-data-dir=${el.userData}`, script], { env: { ...process.env, DISPLAY: process.env.DISPLAY || ':99', ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore' });
+  running.push({ child });
+  await new Promise((r) => setTimeout(r, 3000));
+  expect(fs.existsSync(marker)).toBe(false);
+});
+
+test('packaged build: `one --serve` (what start-web.sh runs, here without --open) runs browser mode without a window', async ({ el }) => {
+  expect(fs.readFileSync(path.join(path.dirname(bin), 'start-web.sh'), 'utf8')).toContain('--serve "$FOLDER" --open');
+  const child = spawn(bin, ['--ozone-platform=headless', '--serve', el.ws], { env: { PATH: process.env.PATH ?? '', HOME: el.tmp, XDG_CONFIG_HOME: path.join(el.tmp, 'xdg') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  running.push({ child });
+  let text = '';
+  child.stdout!.on('data', (d) => (text += String(d)));
+  child.stderr!.on('data', (d) => (text += String(d)));
+  await expect.poll(() => /http:\/\/127\.0\.0\.1:\d+\/\?token=[a-f0-9]+/.test(text), { timeout: 20000 }).toBe(true);
+  const url = /http:\/\/127\.0\.0\.1:\d+\/\?token=[a-f0-9]+/.exec(text)![0];
+  expect((await fetch(url)).status).toBe(200);
 });
 
 test('packaged build: --inspect does not open a debugger on the main process', async ({ el }) => {

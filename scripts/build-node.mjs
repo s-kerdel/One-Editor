@@ -24,6 +24,8 @@ if (only === 'all' || only === 'electron') {
   // node-pty is native: loaded at runtime from node_modules (dev) or app.asar.unpacked (packaged).
   jobs.push({ ...common, entryPoints: ['src/main/main.ts'], outfile: `${outdir}/main/main.cjs`, format: 'cjs', external: ['electron', 'node-pty'] });
   jobs.push({ ...common, entryPoints: ['src/main/preload.ts'], outfile: `${outdir}/main/preload.cjs`, format: 'cjs', external: ['electron'] });
+  // "Start web server": the utilityProcess entry that runs dist/server/cli.mjs (no Node mode: RunAsNode fuse off).
+  jobs.push({ ...common, entryPoints: ['src/main/web-server-child.ts'], outfile: `${outdir}/main/web-server-child.cjs`, format: 'cjs' });
   // What this build ships (names + versions from the lockfile), read by the opt-in "Security updates" check.
   writeShippedDeps(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), path.resolve(outdir, 'main/shipped-deps.json'));
 }

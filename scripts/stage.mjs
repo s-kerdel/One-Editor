@@ -1,7 +1,9 @@
 // Stages a minimal production app folder:  <out>/package.json + <out>/dist/{main,renderer,server,mcp}
 // + <out>/node_modules/node-pty (the one native module: runtime JS + the target's binaries only).
 // Everything else is bundled, so packages ship exactly what runs.
-//   node scripts/stage.mjs [--out release/app] [--platform win32|linux|darwin] [--arch x64|arm64]
+//   node scripts/stage.mjs [--out release/app] [--platform win32|linux|darwin] [--arch x64|arm64] [--test-package]
+//   --test-package: a package for tests/e2e/electron/packaged.spec.ts only (dist/main/test-package.txt lets it take
+//   --remote-debugging-port, which a release package refuses: src/main/launch-mode.ts). Never for release/.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -51,6 +53,9 @@ fs.writeFileSync(
     2,
   ),
 );
+if (args.includes('--test-package')) {
+  fs.writeFileSync(path.join(out, 'dist/main/test-package.txt'), 'Built for the tests: this package accepts --remote-debugging-port. Never ship it.\n');
+}
 stageNodePty(path.join(out, 'node_modules/node-pty'));
 console.log(`staged → ${path.relative(root, out) || out}`);
 

@@ -6,6 +6,8 @@
 # Install:  sudo ln -sf /Applications/One.app/Contents/Resources/bin/one /usr/local/bin/one
 # A running One takes the path into its window; otherwise One starts. The terminal is not held.
 unset CDPATH
+# Never Node mode: with ELECTRON_RUN_AS_NODE set (by the user's shell, a tool) the app would run the first path as a script.
+unset ELECTRON_RUN_AS_NODE
 SELF="$0"
 while [ -L "$SELF" ]; do # through the /usr/local/bin symlink (macOS readlink has no -f before 12.3)
   LINK="$(readlink "$SELF")"
@@ -15,4 +17,5 @@ EXE="$(cd "$(dirname "$SELF")" && pwd)/../../MacOS/one"
 [ -x "$EXE" ] || { echo "one: cannot find the One app next to $SELF" >&2; exit 1; }
 [ $# -gt 0 ] || set -- .
 # The app resolves relative paths against this shell's folder (a running One is handed it too).
-nohup "$EXE" "$@" >/dev/null 2>&1 &
+# `--`: what follows are paths, never switches (a file named --remote-debugging-port=… from `one *` stays a file).
+nohup "$EXE" -- "$@" >/dev/null 2>&1 &

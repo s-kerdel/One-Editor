@@ -3,6 +3,9 @@
 //   node scripts/package.mjs linux   → release/One-linux-x64/one       + release/One-linux-x64.zip
 //   node scripts/package.mjs darwin  → release/One-darwin-<arch>/One.app + .zip   (npm run package:mac; arch = this Mac's)
 //   macOS: ad-hoc signed (no Apple Developer ID), so the first launch needs right-click → Open; see README.
+//   --out <dir>      build there instead of release/ (tests, snapshots: e.g. .tmp/<area>/release)
+//   --test-package   a package for tests/e2e/electron/packaged.spec.ts: it accepts --remote-debugging-port (a
+//                    release package refuses it). Needs --out: never into release/.
 // Ships only the staged app (package.json + dist/) inside app.asar, plus node-pty in app.asar.unpacked.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -13,17 +16,23 @@ import { applyFuses } from './fuses.mjs';
 import { writeLicences } from './notices.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const platform = process.argv[2] || process.platform;
+const argv = process.argv.slice(2);
+const outAt = argv.indexOf('--out');
+const outArg = outAt === -1 ? null : argv[outAt + 1];
+const testPackage = argv.includes('--test-package');
+const positional = argv.filter((a, i) => !a.startsWith('--') && !(outAt !== -1 && i === outAt + 1));
+const platform = positional[0] || process.platform;
 // A Mac builds for itself by default (arm64 on Apple Silicon); pass x64 / arm64 to cross-build. Win/Linux: x64.
-const arch = process.argv[3] || (platform === 'darwin' && process.arch === 'arm64' ? 'arm64' : 'x64');
+const arch = positional[1] || (platform === 'darwin' && process.arch === 'arm64' ? 'arm64' : 'x64');
+if (testPackage && !outArg) throw new Error('--test-package needs --out <dir> (a test package never goes into release/)');
 if (!['win32', 'linux', 'darwin'].includes(platform)) throw new Error(`Unknown platform ${platform}`);
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const electronVersion = JSON.parse(fs.readFileSync(path.join(root, 'node_modules/electron/package.json'), 'utf8')).version;
-const release = path.join(root, 'release');
+const release = outArg ? path.resolve(root, outArg) : path.join(root, 'release');
 const staged = path.join(release, 'app');
 
 const t0 = Date.now();
-execFileSync(process.execPath, [path.join(root, 'scripts/stage.mjs'), '--out', staged, '--platform', platform, '--arch', arch], { stdio: 'inherit', cwd: root });
+execFileSync(process.execPath, [path.join(root, 'scripts/stage.mjs'), '--out', staged, '--platform', platform, '--arch', arch, ...(testPackage ? ['--test-package'] : [])], { stdio: 'inherit', cwd: root });
 
 const [outDir] = await packager({
   dir: staged,
@@ -41,9 +50,8 @@ const [outDir] = await packager({
   buildVersion: pkg.version,
   appCopyright: `© ${new Date().getFullYear()} One`,
   // node-pty must be real files: its .node binaries, ConPTY's OpenConsole.exe and its worker scripts.
-  // The web server + the UI it serves are real files too: the start scripts run them with the exe in
-  // Node mode (ELECTRON_RUN_AS_NODE), where loading ESM from inside an asar is not reliable.
-  // The MCP server too: MCP clients start it the same way (One MCP.cmd / one-mcp.sh, or the exe directly).
+  // The web server + the UI it serves and the MCP server stay real files too: `One --serve` / `One --mcp-stdio`
+  // and the web server's utilityProcess import them as ES modules by their file path (src/main/headless.ts).
   asar: { unpackDir: '{node_modules/node-pty,node_modules/node-pty/**,dist/server,dist/server/**,dist/renderer,dist/renderer/**,dist/mcp,dist/mcp/**}' },
   overwrite: true,
   prune: false, // nothing to prune: the staged app has no package dependencies (node-pty is staged by hand)
@@ -78,7 +86,7 @@ const [outDir] = await packager({
   quiet: true,
 });
 
-// Fuses: no NODE_OPTIONS, no --inspect for the packaged app (RunAsNode stays: the web server child needs it).
+// Fuses (scripts/fuses.mjs): no Node mode, no NODE_OPTIONS, no --inspect, the app from app.asar only.
 // macOS keeps the fuse wire in the Electron Framework binary, and flipping it breaks the code signature: the whole
 // bundle is signed again (ad hoc) right after, which Apple Silicon requires anyway before it will run a binary.
 const showFuses = (f) => console.log(`fuses: ${Object.entries(f).map(([k, v]) => `${k}=${v === true ? 'on' : v === false ? 'off' : v}`).join(' ')}`);

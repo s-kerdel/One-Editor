@@ -24,15 +24,22 @@ export const FUSES = [
 
 /**
  * What sec-edit ships with. Only what differs from Electron's defaults is listed; the rest stays as built.
- *  - RunAsNode stays ON: "Start web server" (and the .cmd / start-web.sh launchers) run the bundled
- *    server with the app's own executable in Node mode (ELECTRON_RUN_AS_NODE).
+ *  - RunAsNode OFF: ELECTRON_RUN_AS_NODE no longer turns One into a script runner that any program of the
+ *    user could use to run code as One (macOS: with One's privacy grants and keychain item). Its own servers run
+ *    without it: "Start web server" in a utilityProcess, MCP clients and the launchers as `One --mcp-stdio` /
+ *    `One --serve` (src/main/launch-mode.ts).
  *  - NODE_OPTIONS / NODE_EXTRA_CA_CERTS and --inspect* are OFF: neither the environment nor a command
  *    line can load code into, or attach a debugger to, the main process (which has full file access).
+ *  - OnlyLoadAppFromAsar ON: the app loads from resources/app.asar only, never from a resources/app folder
+ *    someone puts next to it (Electron would try that folder first).
+ *  - EnableEmbeddedAsarIntegrityValidation stays OFF for now: it works on Windows / macOS only, and a build whose
+ *    check fails does not start at all; it has not been run there yet (packager 20.3.1 writes the hashes).
  */
 export const SEC_EDIT_FUSES = {
-  RunAsNode: true,
+  RunAsNode: false,
   EnableNodeOptionsEnvironmentVariable: false,
   EnableNodeCliInspectArguments: false,
+  OnlyLoadAppFromAsar: true,
 };
 
 function wireOf(buf, file) {
