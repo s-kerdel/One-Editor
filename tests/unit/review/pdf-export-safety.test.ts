@@ -126,6 +126,34 @@ describe('exportPdf: save flow', () => {
     again.s.dispose();
   });
 
+  it('two windows (services) on one app data folder keep each other’s remembered PDF folder', async () => {
+    const root2 = path.join(tmp, 'notes2');
+    await fsp.mkdir(path.join(root2, 'sub'), { recursive: true });
+    await fsp.writeFile(path.join(root2, 'sub', 'Report.md'), '# Report 2');
+    const [out1, out2] = [path.join(tmp, 'out1'), path.join(tmp, 'out2')];
+    await Promise.all([fsp.mkdir(out1), fsp.mkdir(out2)]);
+    const answers = { a: null as string | null, b: null as string | null };
+    const a = await service({ save: () => answers.a });
+    const b = await service({ save: () => answers.b });
+    await b.s.openWorkspace(root2);
+    // Both looked at the file before either saved (each used to keep a whole stale copy and write it back).
+    await Promise.all([a.s.exportPdf(req()), b.s.exportPdf(req())]);
+    [answers.a, answers.b] = [path.join(out1, 'a.pdf'), path.join(out2, 'b.pdf')];
+    await Promise.all([a.s.exportPdf(req()), b.s.exportPdf(req())]);
+    const saved = path.join(tmp, 'cfg', 'export-dirs.json');
+    const disk = () => (fs.existsSync(saved) ? Object.values(JSON.parse(fs.readFileSync(saved, 'utf8'))).sort() : []);
+    await expect.poll(disk).toEqual([out1, out2].sort());
+    a.s.dispose();
+    b.s.dispose();
+    // A later launch suggests each folder its own.
+    const again = await service({ save: () => null });
+    await again.s.exportPdf(req());
+    await again.s.openWorkspace(root2);
+    await again.s.exportPdf(req());
+    expect(again.calls.dialog).toEqual([path.join(out1, 'Report.pdf'), path.join(out2, 'Report.pdf')]);
+    again.s.dispose();
+  });
+
   it('a remembered folder that no longer exists falls back to the note folder', async () => {
     const gone = path.join(tmp, 'gone');
     await fsp.mkdir(gone);

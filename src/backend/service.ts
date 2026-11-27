@@ -86,6 +86,10 @@ const INDEX_KEYS = ['search.respectGitignore', 'search.skipLockfiles', 'search.s
 const appIndexOptions = (s: Settings): IndexOptions => ({ ...indexOptionsFrom(s), textPatterns: cleanAssociations(s['files.associations']).map((r) => r.pattern) });
 
 const samePath = (a: string, b: string) => (process.platform === 'linux' ? a === b : a.toLowerCase() === b.toLowerCase());
+/** recent.json → its paths (anything else in a hand-edited file is dropped). */
+const recentList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((p): p is string => typeof p === 'string') : []);
+/** export-dirs.json → its object (a corrupt file counts as empty). */
+const exportDirsOf = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
 export interface ServiceHooks {
   /** Native folder picker; absent in server mode. */
@@ -132,16 +136,26 @@ export class BackendService {
   private settingsInFlight = new Map<string, number>();
   private settingsWrites: Promise<unknown> = Promise.resolve();
   private unwatch: (() => void) | null = null;
-  /** In-memory copy of recent.json (rapid opens must not read a stale file). */
+  /**
+   * recent.json as this process last saw it (rapid opens must not read a stale file). Other windows /
+   * processes write it too: `recentStamp` = the file's identity when read, a different one is read again.
+   */
   private recent: string[] | null = null;
+  private recentStamp: string | null = null;
+  /** Bumped by every local change: a read that started before one must not replace it. */
+  private recentGen = 0;
+  /** Our writes not on disk yet: the in-memory list is the newest meanwhile. */
+  private recentPending = 0;
+  private recentWrites: Promise<unknown> = Promise.resolve();
   /** Absolute paths waiting for the renderer (launch args); drained by bootstrap(). */
   readonly openRequests: string[] = [];
   /** True once a renderer has called bootstrap(): later open requests are sent to it instead of queued. */
   booted = false;
   /** PDFs written by exportPdf in this process: the only files showExportedFile will open. */
   private exported = new Set<string>();
-  /** In-memory copy of export-dirs.json (workspace id → last PDF folder). */
-  private exportDirs: Record<string, unknown> | null = null;
+  /** export-dirs.json (workspace id → last PDF folder): our entries not on disk yet (the file is read per export). */
+  private exportDirs = new Map<string, string>();
+  private exportDirWrites: Promise<unknown> = Promise.resolve();
   /** Git for the open folder: created on the first git call (no spawn at launch). */
   private monitor: GitMonitor | null = null;
   private gitListeners = new Set<(e: GitMonitorEvent) => void>();
@@ -248,9 +262,8 @@ export class BackendService {
       this.fsListeners.forEach((l) => l(e));
       this.monitor?.trigger('fs', e.map((x) => x.path));
     });
-    const recent = (await this.recentWorkspaces()).filter((p) => !samePath(p, resolved));
-    this.recent = [resolved, ...recent].slice(0, 20);
-    void writeJson(this.recentFile, this.recent).catch(() => {});
+    await this.recentWorkspaces(); // the list the change applies to (also picks up other writers)
+    void this.changeRecent((list) => [resolved, ...list.filter((p) => !samePath(p, resolved))].slice(0, 20)).catch(() => {});
     const ws = this.workspace;
     await ws.detectCase(); // the renderer's create / rename checks need it (lookups only, no writes)
     return ws.info();
@@ -264,17 +277,61 @@ export class BackendService {
   }
 
   async recentWorkspaces(): Promise<string[]> {
-    if (!this.recent) {
-      const list = await readJson<string[]>(this.recentFile, []);
-      this.recent ??= Array.isArray(list) ? list.filter((p) => typeof p === 'string') : [];
+    if (this.recent && this.recentPending) return [...this.recent];
+    const gen = this.recentGen;
+    // Stat before read: a change in between is seen (and read) next time.
+    const stamp = await this.recentFileStamp();
+    if (this.recent && stamp === this.recentStamp) return [...this.recent];
+    const list = recentList(await readJson<unknown>(this.recentFile, []));
+    if (gen === this.recentGen && !this.recentPending) {
+      this.recent = list;
+      this.recentStamp = stamp;
     }
-    return [...this.recent];
+    return [...(this.recent ?? list)];
   }
 
   async forgetRecent(absPath: string) {
-    this.recent = (await this.recentWorkspaces()).filter((p) => !samePath(p, absPath));
-    await writeJson(this.recentFile, this.recent);
-    return [...this.recent];
+    await this.recentWorkspaces();
+    await this.changeRecent((list) => list.filter((p) => !samePath(p, absPath)));
+    return [...(this.recent ?? [])];
+  }
+
+  /** Identity of recent.json on disk (an atomic write is a new file: new inode / file id), null = missing. */
+  private async recentFileStamp(): Promise<string | null> {
+    const st = await fsp.stat(this.recentFile).catch(() => null);
+    return st ? `${st.ino}:${st.mtimeMs}:${st.size}` : null;
+  }
+
+  /**
+   * One change to the recent list: applied in memory now, then to the file as it is on disk, under the
+   * file lock (other windows / processes write recent.json too: a whole stale copy dropped their entries).
+   */
+  private changeRecent(op: (list: string[]) => string[]): Promise<void> {
+    this.recent = op(this.recent ?? []);
+    this.recentGen++;
+    this.recentPending++;
+    const run = this.recentWrites.then(() =>
+      withFileLock(this.recentFile, async () => {
+        const next = op(recentList(await readJson<unknown>(this.recentFile, [])));
+        await writeJson(this.recentFile, next);
+        return { next, stamp: await this.recentFileStamp() }; // stamped inside the lock: no other writer yet
+      }),
+    );
+    const done = run.then(
+      ({ next, stamp }) => {
+        // The last of our writes landed: the merged file is the list now.
+        if (--this.recentPending) return;
+        this.recent = next;
+        this.recentStamp = stamp;
+        this.recentGen++;
+      },
+      (err) => {
+        this.recentPending--; // the file is unchanged (same stamp): memory keeps the change
+        throw err;
+      },
+    );
+    this.recentWrites = done.catch(() => {});
+    return done;
   }
 
   async resolvePath(absPath: string): Promise<ResolvedPath | null> {
@@ -412,12 +469,9 @@ export class BackendService {
     const { path: rel, noteAbs, html, layout } = await checkPdfRequest(req, (p) => ws.abs(p));
     const { renderPdf, pickSavePath } = this.hooks;
     if (!renderPdf || !pickSavePath) throw new BackendFailure('ENOTSUP', 'PDF export needs the desktop app — in the browser use Print and pick "Save as PDF"');
-    if (!this.exportDirs) {
-      const saved = await readJson<unknown>(this.exportDirsFile, {});
-      this.exportDirs = saved && typeof saved === 'object' && !Array.isArray(saved) ? (saved as Record<string, unknown>) : {};
-    }
     const key = rootId(ws.root);
-    const last = typeof this.exportDirs[key] === 'string' ? (this.exportDirs[key] as string) : null;
+    const saved = this.exportDirs.get(key) ?? exportDirsOf(await readJson<unknown>(this.exportDirsFile, {}))[key];
+    const last = typeof saved === 'string' ? saved : null;
     const dir = last && (await fsp.stat(last).then((st) => st.isDirectory(), () => false)) ? last : path.dirname(noteAbs);
     // Render while the dialog is open: the PDF is usually ready by the time "Save" is clicked.
     const rendering = renderPdf(html, layout);
@@ -432,9 +486,23 @@ export class BackendService {
     if (inside && bytes.byteLength <= MAX_BINARY_BYTES) await ws.writeBinary(inside, bytes);
     else await writeFileAtomic(abs, bytes, retryWin);
     this.exported.add(abs);
-    this.exportDirs = { ...this.exportDirs, [key]: path.dirname(abs) };
-    void writeJson(this.exportDirsFile, this.exportDirs).catch(() => {});
+    void this.saveExportDir(key, path.dirname(abs)).catch(() => {});
     return { abs, rel: inside, bytes: bytes.byteLength };
+  }
+
+  /** This folder's entry only, merged into the file as it is now under the file lock (other windows' folders stay). */
+  private saveExportDir(key: string, dir: string): Promise<void> {
+    this.exportDirs.set(key, dir);
+    const run = this.exportDirWrites.then(() =>
+      withFileLock(this.exportDirsFile, async () => {
+        const disk = exportDirsOf(await readJson<unknown>(this.exportDirsFile, {}));
+        await writeJson(this.exportDirsFile, { ...disk, [key]: dir });
+      }),
+    );
+    // On disk now: the file is the answer again (a failed write keeps ours in memory).
+    const done = run.then(() => void (this.exportDirs.get(key) === dir && this.exportDirs.delete(key)));
+    this.exportDirWrites = done.catch(() => {});
+    return done;
   }
 
   async showExportedFile(abs: unknown, how: unknown) {

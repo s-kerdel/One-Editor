@@ -63,6 +63,36 @@ describe('BackendService', () => {
     s.dispose();
   });
 
+  it('two windows (services) on one app data folder keep each other’s recent folders: newest first, deduped, capped', async () => {
+    const other = path.join(tmp, 'other');
+    await fsp.mkdir(other);
+    const sub = path.join(root, 'sub');
+    const onDisk = () => (fs.existsSync(path.join(cfg, 'recent.json')) ? JSON.parse(fs.readFileSync(path.join(cfg, 'recent.json'), 'utf8')) : []);
+    const a = new BackendService(cfg);
+    const b = new BackendService(cfg);
+    // At the same time: neither write drops the other's folder (each was a whole stale copy before).
+    await Promise.all([a.openWorkspace(root), b.openWorkspace(other)]);
+    await expect.poll(() => onDisk().slice().sort()).toEqual([other, root].sort());
+    // Each sees what the other added (the file changed since it last read it).
+    expect((await a.recentWorkspaces()).sort()).toEqual([other, root].sort());
+    expect((await b.recentWorkspaces()).sort()).toEqual([other, root].sort());
+    // The newest open goes first everywhere; a folder already listed moves up instead of twice.
+    await a.openWorkspace(sub);
+    await expect.poll(async () => (await b.recentWorkspaces())[0]).toBe(sub);
+    await b.openWorkspace(root);
+    await expect.poll(() => a.recentWorkspaces()).toEqual([root, sub, other]);
+    expect(await b.forgetRecent(sub)).toEqual([root, other]);
+    expect(await a.recentWorkspaces()).toEqual([root, other]);
+    // A list another writer left long: the merge keeps it at 20, the newest first.
+    fs.writeFileSync(path.join(cfg, 'recent.json'), JSON.stringify(Array.from({ length: 25 }, (_, i) => `/gone/${i}`)));
+    await a.openWorkspace(other);
+    await expect.poll(() => onDisk().length).toBe(20);
+    expect(onDisk()[0]).toBe(other);
+    expect(await b.recentWorkspaces()).toEqual(onDisk());
+    a.dispose();
+    b.dispose();
+  });
+
   it('bootstrap returns everything for first paint and drains open requests', async () => {
     const s = new BackendService(cfg);
     await s.openWorkspace(root);
