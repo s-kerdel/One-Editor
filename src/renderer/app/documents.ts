@@ -40,6 +40,37 @@ export async function refreshTree() {
 let sessionTimer: ReturnType<typeof setTimeout> | null = null;
 let sessionRestored = false;
 
+// Per-folder state of other modules ({{variables}}, the remote-images choice, recent files) rides along with
+// the folder's session (SessionState, kept by the backend per folder): localStorage has one origin for every
+// folder, so a page could read and change another folder's values there.
+type FolderKey = 'variables' | 'remoteImages' | 'recentFiles';
+const FOLDER_KEYS: readonly FolderKey[] = ['variables', 'remoteImages', 'recentFiles'];
+let folderState: { [K in FolderKey]?: SessionState[K] } = {};
+let folderSeeded = false;
+const legacyTried = new Set<string>();
+
+/** This folder's value (undefined while the session is not restored yet, or unset). `legacy`: where an older
+ *  version kept it in localStorage; deleted there on first use, its value kept when the session has none. */
+export function folderValue<K extends FolderKey>(key: K, legacy?: { key: string; parse: (raw: string) => SessionState[K] | undefined }): SessionState[K] | undefined {
+  if (folderSeeded && legacy && !legacyTried.has(legacy.key)) {
+    legacyTried.add(legacy.key);
+    let v: SessionState[K] | undefined;
+    try {
+      const raw = localStorage.getItem(legacy.key);
+      localStorage.removeItem(legacy.key);
+      if (raw !== null) v = legacy.parse(raw);
+    } catch {}
+    if (v !== undefined && folderState[key] === undefined) setFolderValue(key, v);
+  }
+  return folderState[key];
+}
+
+export function setFolderValue<K extends FolderKey>(key: K, v: SessionState[K] | undefined): void {
+  if (v === undefined) delete folderState[key];
+  else folderState[key] = v;
+  persistSession();
+}
+
 export function sessionSnapshot(): SessionState {
   return {
     openTabs: app.tabs.value.map((t) => t.path),
@@ -56,6 +87,7 @@ export function sessionSnapshot(): SessionState {
     languageOverrides: ui.languageOverrides.value,
     // Zen: what to restore on leaving (the terminal is memory only: it starts closed anyway).
     zen: zenSaved(ui.zen.value),
+    ...folderState,
   };
 }
 
@@ -213,8 +245,27 @@ export function noteEdited(path: string, content: string) {
 // ---- workspace ------------------------------------------------------------------------------
 /** Opening another folder (a user action, never the launch): the code is in ./doc-save. */
 export const openWorkspace = (absPath: string, o?: { newWindow?: boolean }): Promise<void> => actions.load().then((m) => m.openWorkspace(absPath, o));
-/** doc-save's openWorkspace: the next restoreSession() restores the new folder's session. */
-export const markSessionUnrestored = () => void (sessionRestored = false);
+/** doc-save's openWorkspace, right before the switch: the pending save reaches the old folder first (awaited:
+ *  browser-mode requests may arrive in any order) and this page saves no session after it (it reloads for the
+ *  new folder). The result resumes saving (the switch failed). */
+export async function suspendSession(): Promise<() => void> {
+  const was = sessionRestored;
+  sessionRestored = false;
+  if (sessionTimer) {
+    clearTimeout(sessionTimer);
+    sessionTimer = null;
+    await app.backend.saveSession(sessionSnapshot()).catch(() => {});
+  }
+  return () => void (sessionRestored = was);
+}
+
+/** The next restoreSession() restores another folder's session. */
+export function markSessionUnrestored() {
+  sessionRestored = false;
+  folderSeeded = false;
+  folderState = {};
+  legacyTried.clear();
+}
 
 export function applySessionLayout(s: SessionState | null) {
   if (!s) return;
@@ -239,6 +290,9 @@ export function applySessionLayout(s: SessionState | null) {
 }
 
 export async function restoreSession(s: SessionState | null) {
+  folderState = {};
+  for (const k of FOLDER_KEYS) if (s?.[k] !== undefined) (folderState as Record<string, unknown>)[k] = s[k];
+  folderSeeded = true;
   applySessionLayout(s);
   if (s) {
     const files = new Set(app.files.value);

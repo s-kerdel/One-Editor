@@ -9,6 +9,11 @@ const keys = (q: string) => filterSettings(q).map((d) => d.key);
 const def = (k: string) => settingByKey(k)!;
 
 describe('settings registry', () => {
+  it('browser mode greys out what its server will not write: the remote-images default', () => {
+    // A taken-over page in browser mode must not turn remote images on; the pinned server drops the write.
+    expect(def('preview.remoteImages').desktopOnly).toBe(true);
+  });
+
   it('has unique keys and DOM ids, and every setting belongs to a known section', () => {
     expect(new Set(SETTINGS.map((d) => d.key)).size).toBe(SETTINGS.length);
     expect(new Set(SETTINGS.map((d) => d.id)).size).toBe(SETTINGS.length);

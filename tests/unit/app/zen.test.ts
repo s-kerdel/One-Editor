@@ -13,6 +13,7 @@ import { installZenImpl, setZen, toggleZen, zenOptions } from '../../../src/rend
 import { applySessionLayout, persistSession, sessionSnapshot } from '../../../src/renderer/app/documents';
 import { settingByKey } from '../../../src/renderer/app/settings-registry';
 import { panelOpen } from '../../../src/renderer/terminal/state';
+import { accentCss, colorCache, folderCss } from '../../../src/renderer/app/accent';
 
 const layout = () => ({ sidebar: app.sidebarVisible.value, panel: app.sidebarPanel.value, overview: ui.overviewVisible.value, processes: ui.processesOpen.value, terminal: panelOpen.value });
 const cache = () => JSON.parse(localStorage.getItem('sec-edit-layout') ?? 'null');
@@ -169,6 +170,7 @@ describe('theme-boot.js (before first paint)', () => {
     const d = document.documentElement;
     for (const a of ['data-zen', 'data-folders', 'data-sb']) d.removeAttribute(a);
     document.getElementById('se-folder')?.remove();
+    document.getElementById('se-accent')?.remove();
     new Function(src)();
     return d;
   };
@@ -179,11 +181,34 @@ describe('theme-boot.js (before first paint)', () => {
     expect(boot({ layout: JSON.stringify({ sb: true }) }).hasAttribute('data-zen')).toBe(false);
   });
 
-  it('applies the folder colour mode and its cached stylesheet', () => {
-    const d = boot({ folders: 'one', folder: '/*#ef4444*/html:root:root{--folder-color:#ef4444}' });
+  it('applies the folder colour mode and builds its stylesheet from the cached colours', () => {
+    const d = boot({ folders: 'one', folder: colorCache('folder', '#ef4444') });
     expect(d.dataset.folders).toBe('one');
-    expect(document.getElementById('se-folder')?.textContent).toContain('--folder-color:#ef4444');
+    expect(document.getElementById('se-folder')?.textContent).toBe(folderCss('#ef4444'));
     expect(boot({}).hasAttribute('data-folders')).toBe(false);
     expect(document.getElementById('se-folder')).toBeNull();
+  });
+
+  it('the accent stylesheet it builds is exactly what app/accent.ts makes (no flash, no stale check)', () => {
+    for (const hex of ['#7aa2f7', '#3b6ee8', '#101010', '#fffff0', '#ef4444', '#eab308']) {
+      boot({ accent: colorCache('accent', hex) });
+      expect(document.getElementById('se-accent')?.textContent, hex).toBe(accentCss(hex));
+    }
+  });
+
+  it('a cached value that is not the expected list of #rrggbb colours is never injected (old CSS caches too)', () => {
+    for (const bad of [
+      "/*#ef4444*/html:root:root{--accent:#ef4444}@import url('https://t.example/x.css');",
+      '#ef4444 #ef4444 #ef4444 #ef4444 #ef4444 #ef4444 red}*{display:none',
+      '#ef4444 #ef4444',
+      '#ef4444 #ef4444 #ef4444 #ef4444 #ef4444 #ef4444 #ef4444 #ef4444',
+    ]) {
+      boot({ accent: bad, folder: bad });
+      expect(document.getElementById('se-accent'), bad).toBeNull();
+      expect(document.getElementById('se-folder'), bad).toBeNull();
+    }
+    // the skeleton sizes are numbers only
+    expect(boot({ layout: JSON.stringify({ w: '1px;background:url(https://t.example/a)', ow: 300 }) }).style.getPropertyValue('--skel-sidebar')).toBe('');
+    expect(document.documentElement.style.getPropertyValue('--skel-ov')).toBe('300px');
   });
 });

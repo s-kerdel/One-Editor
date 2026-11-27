@@ -7,8 +7,9 @@ import { renderInline } from './inline-render';
 import { followLinkElement } from './links';
 import { docPath } from './host';
 import { app } from '../app/app';
-import { isRunnableFence } from '../terminal/run';
+import { copyableCode, isRunnableFence } from '../terminal/run';
 import { codeAction } from '../variables/cm';
+import { remoteAllowed } from '../preview/remote';
 import type { CodeHeaderVars } from '../variables/api';
 
 const SVG: Record<string, string> = {
@@ -319,12 +320,12 @@ export class CodeHeaderWidget extends WidgetType {
       };
       // Placeholders are resolved first (may ask for missing values); null = nothing to resolve.
       void codeAction('copy', view, pos, code).then((r) => {
-        if (r === null)
-          navigator.clipboard?.writeText(code).then(done, () => {
-            fallbackCopy(code);
-            done();
-          }) ?? (fallbackCopy(code), done());
-        else if (r) done();
+        if (r !== null) return void (r && done());
+        const text = copyableCode(code);
+        navigator.clipboard?.writeText(text).then(done, () => {
+          fallbackCopy(text);
+          done();
+        }) ?? (fallbackCopy(text), done());
       });
     });
     if (this.vars?.multi) {
@@ -545,6 +546,8 @@ export class MermaidWidget extends WidgetType {
     const el = document.createElement('div');
     el.className = 'se-mermaid';
     el.dataset.src = this.source;
+    // The note's remote-media policy (as for live-mode images): without it, a diagram that loads anything is not drawn.
+    if (remoteAllowed(view.state.facet(docPath))) el.dataset.remote = '';
     const pending = document.createElement('pre');
     pending.className = 'se-mermaid-pending';
     pending.textContent = this.source;

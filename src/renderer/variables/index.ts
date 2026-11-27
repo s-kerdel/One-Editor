@@ -12,6 +12,7 @@ import { docPath } from '../editor/host';
 import type { CodeCtx, VariablesApi, VarsProvider } from './api';
 import { codeAtCursor, setVarsProvider } from './cm';
 import { varsStatus } from './slot';
+import { copyableCode } from '../terminal/run';
 import * as S from './store';
 import { describe, envNames, expandForTargets, lookup, MASK, osMismatch, parseFenceInfo, resolveText, targetFields, targetNames, vaultKeyFor, type Lookup, type Missing, type Scope } from './resolve';
 import { addSecretName, setValue } from './write';
@@ -221,7 +222,9 @@ async function actionText(code: string, ctx: CodeCtx, verb: 'Copy' | 'Run', targ
   return { text: r.text, parts: 'parts' in r ? r.parts : undefined };
 }
 
-async function writeClipboard(text: string) {
+/** Copied code (values filled in): no control characters, as for a plain code block's Copy. */
+async function writeClipboard(code: string) {
+  const text = copyableCode(code);
   try {
     await navigator.clipboard.writeText(text);
   } catch {

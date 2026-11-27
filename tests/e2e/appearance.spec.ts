@@ -97,7 +97,9 @@ test('a saved accent applies on a fresh profile too (no cache yet)', async ({ pa
   await ws.server.service.saveSettings({ accentColor: '#22c55e', theme: 'light' });
   await ws.open(page);
   await expect.poll(() => cssVar(page, '--accent')).not.toBe('#3b6ee8');
-  expect(await page.evaluate(() => localStorage.getItem('sec-edit-accent'))).toContain('/*#22c55e*/');
+  // The cache holds #rrggbb colours only (theme-boot.js builds the sheet from them), never CSS text.
+  expect(await page.evaluate(() => localStorage.getItem('sec-edit-accent'))).toMatch(/^#22c55e( #[0-9a-f]{6}){6}$/);
+  expect(await page.evaluate(() => document.getElementById('se-accent')?.textContent)).toContain('/*#22c55e*/');
   // A garbage value in a hand-edited settings file is ignored.
   await page.evaluate(() => (window as any).__secEdit.backend.saveSettings({ accentColor: 'javascript:alert(1)' }));
   await page.reload();

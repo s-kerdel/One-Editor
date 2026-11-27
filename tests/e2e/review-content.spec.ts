@@ -138,20 +138,25 @@ test.describe('untrusted note content', () => {
       await openFile(page, 'other.md');
       await expect(bar).toBeVisible();
       expect(t.hits).not.toContain('/c.png');
-      // "Always for this folder": kept per folder (localStorage), survives a reload.
+      // "Always for this folder": kept in the folder's own session (never localStorage, which every folder's
+      // page shares), survives a reload.
       await bar.getByRole('button', { name: 'Always for this folder' }).click();
       await expect.poll(() => t.hits).toContain('/c.png');
       await page.reload();
       await page.waitForSelector('html[data-ready="true"]');
-      expect(await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('sec-edit-remote:')).length)).toBe(1);
+      expect(await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('sec-edit-remote:')))).toEqual([]);
+      expect((await ws.server.service.getSession()).remoteImages).toBe('allow');
       // Settings → Preview "Never load" does not override the folder's explicit choice; resetting it does.
       await page.evaluate(async () => {
         const app = (window as any).__secEdit;
         app.settings.value = await app.backend.saveSettings({ 'preview.remoteImages': 'never' });
         app.events.emit('settings:changed', app.settings.value);
-        localStorage.clear();
-        app.events.emit('media:policy');
       });
+      await page.keyboard.press('Control+Shift+p');
+      await page.keyboard.type('Images from the internet: use the default for this folder');
+      await expect(page.getByRole('dialog').getByText('use the default for this folder').first()).toBeVisible();
+      await page.keyboard.press('Enter');
+      await expect.poll(async () => (await ws.server.service.getSession()).remoteImages).toBeUndefined();
       await setMode(page, 'preview');
       await openFile(page, 'remote.md');
       await expect(page.locator(`${P} img.se-remote-blocked`)).toHaveCount(2);

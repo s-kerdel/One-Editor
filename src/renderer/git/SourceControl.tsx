@@ -861,6 +861,8 @@ const trustLater = signal(false);
  */
 function TrustPrompt({ s }: { s: GitStore }) {
   const [working, setWorking] = useState(false);
+  // Browser mode: the server never grants trust (ENOTSUP), only the desktop app's own dialog does.
+  const [desktopOnly, setDesktopOnly] = useState(app.backend.kind === 'web');
   const trust = async () => {
     setWorking(true);
     try {
@@ -868,11 +870,24 @@ function TrustPrompt({ s }: { s: GitStore }) {
       trustLater.value = false;
       s.reset();
     } catch (err) {
-      app.toast(String((err as Error)?.message ?? err), 'error');
+      if ((err as { code?: string })?.code === 'ENOTSUP') setDesktopOnly(true);
+      else app.toast(String((err as Error)?.message ?? err), 'error');
     } finally {
       setWorking(false);
     }
   };
+  if (desktopOnly)
+    return (
+      <div class="se-scm se-scm-empty se-scm-trust" data-testid="git-trust" role="group" aria-label="Git is off in this folder">
+        <Icon name="gitBranch" size={22} />
+        <p>
+          <strong>This folder is a git repository.</strong>
+        </p>
+        <p>Its settings can make git run programs (hooks, filters), so a browser page cannot turn git on here.</p>
+        <p data-testid="git-trust-desktop">Trust this folder in the desktop app (Source control).</p>
+        <p class="se-scm-trust-note">Until then git is off here: no status, marks or change bars.</p>
+      </div>
+    );
   if (trustLater.value)
     return (
       <div class="se-scm se-scm-empty" data-testid="git-trust">

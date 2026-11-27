@@ -329,6 +329,12 @@ function RestartNotice() {
   );
 }
 
+/** Browser mode: why a desktop-only row is greyed out, where the generic line says too little. */
+const DESKTOP_OFF_HINT: Record<string, string> = {
+  zoom: 'Desktop app only. Use the browser zoom here.',
+  'preview.remoteImages': 'Change this in the desktop app.',
+};
+
 function SettingRow({ def, s }: { def: SettingDef; s: Values }) {
   const desktopOff = !!def.desktopOnly && !app.backend.setZoom;
   const disabled = desktopOff || (def.enabledWhen ? !def.enabledWhen(s) : false);
@@ -343,7 +349,7 @@ function SettingRow({ def, s }: { def: SettingDef; s: Values }) {
           {def.label}
           {changed && <span class="se-set-dot" aria-label="Changed from default" />}
         </span>
-        <span class="se-set-hint">{desktopOff ? (def.key === 'zoom' ? 'Desktop app only. Use the browser zoom here.' : 'Desktop app only.') : def.description}</span>
+        <span class="se-set-hint">{desktopOff ? (DESKTOP_OFF_HINT[def.key] ?? 'Desktop app only.') : def.description}</span>
       </label>
       <div class="se-set-control">
         <Control def={def} s={s} disabled={disabled} />

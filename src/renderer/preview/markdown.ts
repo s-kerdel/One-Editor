@@ -7,7 +7,7 @@ import { languageForFence, languageForPath } from '@shared/languages';
 import { dirname, extname } from '@shared/paths';
 import { parseWikiLink, resolveWikiTarget } from '@shared/wikilinks';
 import { useOneBlockRules } from '@shared/md-block-rules';
-import { USER_MARK, sanitizeHtml, sanitizeToFragment, type SanitizeContext } from './sanitize';
+import { USER_MARK, mermaidFetches, relativeUrl, sanitizeHtml, sanitizeToFragment, type SanitizeContext } from './sanitize';
 
 export interface RenderOptions {
   /** Workspace-relative path of the note being rendered (relative links/images resolve against it). */
@@ -55,14 +55,7 @@ export function slugify(text: string): string {
     .replace(/\s+/g, '-');
 }
 
-/** Relative URL from the directory of `from` to workspace path `to` (both POSIX, workspace-relative). */
-export function relativeUrl(from: string | undefined, to: string): string {
-  const a = from ? dirname(from).split('/').filter(Boolean) : [];
-  const b = to.split('/');
-  let i = 0;
-  while (i < a.length && i < b.length - 1 && a[i] === b[i]) i++;
-  return encodeURI([...a.slice(i).map(() => '..'), ...b.slice(i)].join('/'));
-}
+export { relativeUrl };
 
 // ---------------------------------------------------------------- block rules
 
@@ -384,7 +377,8 @@ function variablesRule(state: StateCore): void {
   if (!vars) return;
   for (const t of state.tokens) {
     if (t.type === 'fence' || t.type === 'code_block') {
-      if (!t.content.includes('{{')) continue;
+      // Never in a diagram: mermaid draws in the live page, so values would go wherever its labels / styles load from.
+      if (!t.content.includes('{{') || fenceWord(t.info ?? '') === 'mermaid') continue;
       t.attrSet('data-vars', '');
       t.content = vars(t.content, t.info ?? '');
     } else if (t.type === 'inline') {
@@ -430,11 +424,16 @@ R.link_open = (tokens, i, o, env, self) => {
 /** Invisible and direction-changing characters: what is drawn differs from what Copy / Run hand out. */
 const HIDDEN_CHARS = /[\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/;
 
-function codeBlock(code: string, info: string, tokenAttrs: string): string {
+const fenceWord = (info: string) => (info.trim().split(/[\s{]/)[0] ?? '').toLowerCase();
+
+function codeBlock(code: string, info: string, tokenAttrs: string, remote = false): string {
   const word = info.trim().split(/[\s{]/)[0] ?? '';
   const lang = languageForFence(info);
   if (word.toLowerCase() === 'mermaid') {
-    return `<div class="se-mermaid"${tokenAttrs}><pre class="se-mermaid-src"><code>${esc(code)}</code></pre></div>\n`;
+    // Mermaid draws in the live page: data-remote = the note may load remote media (./enhance draws with it).
+    // Without it, a diagram that would load anything is not drawn and counts as blocked media (the "Load" bar).
+    const blocked = !remote && mermaidFetches(code);
+    return `<div class="se-mermaid${blocked ? ' se-remote-blocked' : ''}"${remote ? ' data-remote=""' : ''}${tokenAttrs}><pre class="se-mermaid-src"><code>${esc(code)}</code></pre></div>\n`;
   }
   if (word.toLowerCase() === 'math') return `<div class="se-math se-math-display"${tokenAttrs}>${esc(code.trim())}</div>\n`;
   const title = /\btitle=(?:"([^"]+)"|(\S+))/.exec(info);
@@ -450,7 +449,7 @@ function codeBlock(code: string, info: string, tokenAttrs: string): string {
 }
 // data-src-line: where the block starts in the rendered source — Copy / Run read the text from there (fenceAt).
 const srcLine = (t: Token) => (t.map ? ` data-src-line="${t.map[0]}"` : '');
-R.fence = (tokens, i) => codeBlock(tokens[i].content, tokens[i].info, attrs(tokens[i]) + srcLine(tokens[i]));
+R.fence = (tokens, i, _o, env) => codeBlock(tokens[i].content, tokens[i].info, attrs(tokens[i]) + srcLine(tokens[i]), !!(env as unknown as Env).opts?.remote);
 R.code_block = (tokens, i) => codeBlock(tokens[i].content, '', attrs(tokens[i]) + srcLine(tokens[i]));
 
 R.embed = (tokens, i, _o, e) => {

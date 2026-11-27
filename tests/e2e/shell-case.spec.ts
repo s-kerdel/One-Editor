@@ -108,8 +108,8 @@ test('Note.md + note.md, Docs/ + docs/: deleting one keeps the other everywhere'
   await expect(page.locator('.se-pal-item[data-path="cases/note.md"]')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect.poll(() => backlinks(page, 'cases/Note.md')).toEqual(['linker.md', 'linker.md']); // [[cases/note]] now finds the survivor
-  const recent = await page.evaluate(() => Object.entries(localStorage).filter(([k]) => k.startsWith('se-search:recent:')).flatMap(([, v]) => JSON.parse(v as string) as string[]));
-  expect(recent).toContain('cases/Note.md');
+  // Recent files live in the folder's session (not localStorage, which every folder's page shares).
+  await expect.poll(async () => (await ws.server.service.getSession()).recentFiles ?? []).toContain('cases/Note.md');
 });
 
 test('case-insensitive folder (NTFS; simulated in the renderer): "note" next to Note.md says why and creates nothing', async ({ page, ws }) => {

@@ -12,7 +12,7 @@ import { sectionSource, splitSections, type Section } from './sections';
 import { createEnhancer, enhanceAll } from './enhance';
 import { embedSourceOf, expandEmbeds, invalidateEmbeds, type EmbedContext } from './embeds';
 import { allowNoteRemote, remoteAllowed, remoteAsks, setFolderRemote } from './remote';
-import { isRunnableFence } from '../terminal/run';
+import { copyableCode, isRunnableFence } from '../terminal/run';
 
 /** Desktop app: a "Run in terminal" button on shell code blocks (live preview only — exports render
  *  fresh markdown, so they never carry it). */
@@ -634,7 +634,7 @@ export function createPreview(el: HTMLElement): PreviewController {
     if (btn.matches('.se-code-multi')) return void app.variables?.forTargets(src.code, ctx);
     if (btn.matches('.se-code-run')) return void (vars ? vars.runCode(src.code, ctx) : app.runInTerminal?.(src.code, { lang: block.dataset.fence }));
     if (vars) return void vars.copyCode(src.code, ctx).then((ok) => ok && flashCopied(btn));
-    void copyText(btn, src.code);
+    void copyText(btn, copyableCode(src.code));
   }
 
   function findAnchor(id: string): HTMLElement | null {

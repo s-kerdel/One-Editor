@@ -2,6 +2,7 @@
 // copy a code block. Feature-detects the optional controller capabilities.
 import { app } from '../app/app';
 import { copyText } from '../app/fileops';
+import { copyableCode } from '../terminal/run';
 import { taskMarkOffset, type CodeBlockEntry, type DocModel, type TaskEntry } from './model';
 
 /** Cursor to `line` in the active editor, editor focused (Reading mode: scroll the preview). */
@@ -26,5 +27,5 @@ export function toggleTask(path: string, task: Pick<TaskEntry, 'line' | 'col' | 
 
 /** Copies a block's code (from the same text version the row was built from, so it always matches). */
 export function copyBlock(model: DocModel, block: CodeBlockEntry) {
-  void copyText(model.blockText(block), 'Code');
+  void copyText(copyableCode(model.blockText(block)), 'Code');
 }

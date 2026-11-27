@@ -19,6 +19,10 @@ const PROMPT = /^\s*[$>](?: |$)/;
  */
 export const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 
+/** What a code block's Copy hands out: the code without CONTROL characters (an ESC sequence pasted into a
+ *  terminal could end its bracketed paste and run; Ctrl-O would press Enter). Line breaks become \n. */
+export const copyableCode = (code: string): string => code.replace(/\r\n?/g, '\n').replace(CONTROL, '');
+
 /**
  * Code block → text to paste:
  *  - `console` transcripts: keep only the prompt lines (`$ cmd`, `> continuation`), prompts removed;

@@ -38,7 +38,14 @@ describe('xterm view (headless)', () => {
     v.paste('ls');
     expect(input.at(-1)).toBe('\x1b[200~ls\x1b[201~');
     v.paste('echo hi\x1b[201~rm -rf ~\n'); // a crafted block must not close the bracket and run
-    expect(input.at(-1)).toBe('\x1b[200~echo hirm -rf ~\r\x1b[201~');
+    expect(input.at(-1)).toBe('\x1b[200~echo hi[201~rm -rf ~\r\x1b[201~');
+    // Nested: a one-pass strip of the marker would leave a working \x1b[201~ behind.
+    v.paste('a\x1b[20\x1b[201~1~b\x1b\x1b[201~[201~c');
+    expect(input.at(-1)).toBe('\x1b[200~a[20[201~1~b[201~[201~c\x1b[201~');
+    expect(input.at(-1)!.slice(6, -6)).not.toContain('\x1b');
+    // Other controls act as key presses (Ctrl-O runs the line in readline, ^C, C1 CSI): gone; tab stays.
+    v.paste('x\x0f\x03\x9b201~\ty\r\nz');
+    expect(input.at(-1)).toBe('\x1b[200~x201~\ty\rz\x1b[201~');
     // Not opened yet (no layout): selection / clear / fit must be harmless no-ops, not crashes.
     v.selectAll();
     v.clear();

@@ -1,7 +1,7 @@
 // Path links in terminal output + "Run in terminal" text preparation.
 import { describe, it, expect } from 'vitest';
 import { findPathCandidates, resolveLinkPath, type LinkContext } from '../../../src/renderer/terminal/links';
-import { isRunnableFence, prepareRunText } from '../../../src/renderer/terminal/run';
+import { copyableCode, isRunnableFence, prepareRunText } from '../../../src/renderer/terminal/run';
 
 const pick = (text: string) => findPathCandidates(text).map((c) => ({ text: text.slice(c.start, c.end), path: c.path, line: c.line, col: c.col }));
 
@@ -96,5 +96,12 @@ describe('run in terminal', () => {
     expect(prepareRunText('$ make\u000f\n$ ls\u000b', 'console')).toBe('make\nls');
     // Tabs and newlines stay; a lone CR is a line break (so the "several lines?" question still comes).
     expect(prepareRunText('a\tb\rc', 'bash')).toBe('a\tb\nc');
+  });
+
+  it('Copy hands out code without control characters (a paste into a terminal must not run it)', () => {
+    expect(copyableCode('echo hi\u001b[201~rm -rf ~\u000f')).toBe('echo hi[201~rm -rf ~');
+    expect(copyableCode('a\u009b201~b\u0085c')).toBe('a201~bc'); // C1
+    // Everything else stays as written: indentation, blank lines, tabs, no trimming.
+    expect(copyableCode('  if x:\r\n\n\tpass\r')).toBe('  if x:\n\n\tpass\n');
   });
 });

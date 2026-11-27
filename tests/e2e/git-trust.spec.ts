@@ -41,13 +41,12 @@ test('untrusted repository: no marks, no branch, no change bars → panel prompt
   expect(direct).toEqual({ status: { ok: false, reason: 'untrusted', repoLikely: true }, stage: 'EACCES', commit: 'EACCES', log: 'EACCES', head: { content: null, oid: null } });
   expect(fs.existsSync(marker)).toBe(false);
 
-  // The status item opens the panel, which asks.
+  // The status item opens the panel. Browser mode cannot grant trust: no Trust button, a note says where.
   await off.click();
   const prompt = page.getByTestId('git-trust');
   await expect(prompt).toContainText('This folder is a git repository.');
-  await expect(prompt).toContainText('Its settings can make git run programs (hooks, filters). Trust this folder?');
-  await page.getByTestId('git-trust-no').click();
-  await expect(prompt).toContainText('Git is off in this folder.');
+  await expect(page.getByTestId('git-trust-desktop')).toHaveText('Trust this folder in the desktop app (Source control).');
+  await expect(page.getByTestId('git-trust-yes')).toHaveCount(0);
   await expect(page.getByTestId('scm')).toHaveCount(0);
   expect(fs.existsSync(marker)).toBe(false);
 

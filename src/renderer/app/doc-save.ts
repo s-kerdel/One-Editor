@@ -6,7 +6,8 @@ import { app } from './app';
 import { RpcError } from '../platform';
 import * as ui from './ui';
 import { brandTitle } from '@shared/brand';
-import { autosaveTimers, clearConflict, discardDoc, getBeforeSave, markSessionUnrestored, openFile, persistSession, refreshTree, restoreSession, setConflict } from './documents';
+import type { WorkspaceInfo } from '@shared/api';
+import { autosaveTimers, clearConflict, discardDoc, getBeforeSave, openFile, persistSession, setConflict, suspendSession } from './documents';
 
 // ---- save -----------------------------------------------------------------------------------
 export async function save(path: string, opts: { force?: boolean; auto?: boolean; retry?: number } = {}): Promise<boolean> {
@@ -174,6 +175,9 @@ export function replaceFromDisk(path: string, next: string) {
   else ed?.setContent(path, next);
 }
 
+/** The page reload after an in-place folder switch (a seam for the unit tests). */
+export const pageReload = { run: () => location.reload() };
+
 /** `newWindow` (Shift+click / Shift+Enter): in a new window instead of switching this one. */
 export async function openWorkspace(absPath: string, o: { newWindow?: boolean } = {}) {
   // Multiple windows: main decides. A folder another window has open only brings that window up ('focused');
@@ -181,24 +185,21 @@ export async function openWorkspace(absPath: string, o: { newWindow?: boolean } 
   if (app.backend.openFolderWindow && (await app.backend.openFolderWindow(absPath, o.newWindow ? 'new' : 'here')) !== 'here') return;
   const openTabs = app.tabs.value.map((t) => t.path);
   if (!(await confirmUnsaved(openTabs))) return;
-  const ws = await app.backend.openWorkspace(absPath);
-  markSessionUnrestored();
-  batch(() => {
-    for (const t of openTabs) discardDoc(t);
-    app.tabs.value = [];
-    app.activePath.value = null;
-    ui.mru.value = [];
-    ui.expanded.value = new Set();
-    ui.treeFilter.value = '';
-    ui.treeSelection.value = null;
-    ui.languageOverrides.value = {};
-    app.workspace.value = ws;
-    app.tree.value = null;
-  });
-  app.events.emit('active:changed', null);
+  const resume = await suspendSession();
+  let ws: WorkspaceInfo;
+  try {
+    ws = await app.backend.openWorkspace(absPath);
+  } catch (err) {
+    resume();
+    throw err;
+  }
+  // A fresh page for the new folder: nothing a note of the old folder ran, or left in memory, carries over, and
+  // bootstrap restores the new folder's session the way a launch does (the old page is shown until it paints).
+  // Until then nothing of the old folder may land in the new one: no autosave, and no unload-time save
+  // (browser mode) of a doc kept unsaved with "Don't save".
+  for (const t of autosaveTimers.values()) clearTimeout(t);
+  autosaveTimers.clear();
+  app.docs.clear();
   document.title = brandTitle(ws.name);
-  await refreshTree();
-  app.events.emit('workspace:opened', ws);
-  await restoreSession(await app.backend.getSession().catch(() => null));
-  ui.recentFolders.value = await app.backend.recentWorkspaces().catch(() => ui.recentFolders.value);
+  pageReload.run();
 }

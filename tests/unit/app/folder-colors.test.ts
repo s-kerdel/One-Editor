@@ -3,7 +3,7 @@
 // derived --folder-color stylesheet (cached for theme-boot.js), readable in both themes.
 import { describe, it, expect, beforeEach } from 'vitest';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/shared/api';
-import { contrast, folderColor, folderCss, hexToRgb } from '../../../src/renderer/app/accent';
+import { colorCache, contrast, folderColor, folderCss, hexToRgb } from '../../../src/renderer/app/accent';
 import { FOLDER_SWATCHES, settingByKey } from '../../../src/renderer/app/settings-registry';
 import { applySettingsToDom } from '../../../src/renderer/app/settings';
 
@@ -57,7 +57,8 @@ describe('setting → DOM', () => {
   it('a picked colour installs and caches --folder-color; reset removes both', async () => {
     apply({ 'tree.folderColors': 'one', 'tree.folderColor': '#EF4444' });
     await expect.poll(sheet).toContain('--folder-color:#ef4444');
-    expect(localStorage.getItem('sec-edit-folder')).toBe(sheet());
+    // The cache holds the colours only (#rrggbb); theme-boot.js builds the same sheet from them.
+    expect(localStorage.getItem('sec-edit-folder')).toBe(colorCache('folder', '#ef4444'));
     apply({ 'tree.folderColors': 'one', 'tree.folderColor': '' });
     expect(sheet()).toBeNull();
     expect(localStorage.getItem('sec-edit-folder')).toBeNull();

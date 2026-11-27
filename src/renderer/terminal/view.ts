@@ -7,6 +7,7 @@ import '@xterm/xterm/css/xterm.css';
 import { findPathCandidates } from './links';
 import { cmdTracker, terminalKeyAction } from './keys';
 import { writeClipboard } from './clipboard';
+import { CONTROL } from './run';
 import type { TermTheme } from './theme';
 import type { FindOptions, GpuMode, Off, TerminalView, TerminalViewOptions } from './types';
 
@@ -254,11 +255,12 @@ export function createXtermView(o: TerminalViewOptions): TerminalView {
 
   /**
    * What xterm's own paste() does (\n → \r, bracketed paste when the shell asked for it), but usable
-   * before the view is opened (Run in terminal into a hidden panel). Embedded bracket markers are
-   * dropped: pasted text must never be able to end the bracket early and run as typed input.
+   * before the view is opened (Run in terminal into a hidden panel). Every C0 / C1 control but tab and
+   * newline goes (CONTROL): no ESC means no bracket marker, however nested, so pasted text can never end
+   * the bracket early and run as typed input (Ctrl-O, ^C and friends would act as key presses too).
    */
   function paste(text: string) {
-    const t = text.replace(/\r?\n/g, '\r').replace(/\x1b\[20[01]~/g, '');
+    const t = text.replace(/\r\n?/g, '\n').replace(CONTROL, '').replace(/\n/g, '\r');
     if (t) term.input(term.modes.bracketedPasteMode ? `\x1b[200~${t}\x1b[201~` : t, true);
   }
 

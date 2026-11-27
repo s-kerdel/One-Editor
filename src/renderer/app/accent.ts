@@ -1,6 +1,7 @@
 // Accent colour (Settings → Appearance): derives every accent token for the dark and the light theme
-// from one picked colour and installs them as a tiny stylesheet. The same stylesheet text is cached
-// in localStorage so theme-boot.js can apply it before first paint (no colour flash on refresh).
+// from one picked colour and installs them as a tiny stylesheet. The derived colours (#rrggbb only) are
+// cached in localStorage and theme-boot.js builds the same stylesheet from them before first paint (no colour
+// flash on refresh). Never CSS text: every folder's page shares localStorage, and theme-boot would inject it.
 // The folder colour (Folder colours → One colour) works the same way with one token, --folder-color.
 // Lazy: only loaded when a custom colour is set and its cache is missing or stale.
 
@@ -121,7 +122,20 @@ export function folderCss(hex: string): string {
 
 const SHEETS = { accent: accentCss, folder: folderCss };
 
-/** Installs (or replaces) a colour stylesheet (`<style id="se-accent|se-folder">`) and caches it for the next launch. */
+/** What theme-boot.js gets (space separated, every one #rrggbb), the order its stylesheet builder reads:
+ *  accent = pick, dark accent / strong / fg, light accent / strong / fg; folder = pick, dark, light.
+ *  The rgba() tokens are the accent with each theme's fixed alphas (THEMES), so they need no entry. */
+export function colorCache(kind: keyof typeof SHEETS, hex: string): string {
+  const h = hex.toLowerCase();
+  if (kind === 'folder') return [h, folderColor(h, 'dark'), folderColor(h, 'light')].join(' ');
+  const t = (theme: 'dark' | 'light') => {
+    const a = accentTokens(h, theme);
+    return [a['--accent'], a['--accent-strong'], a['--accent-fg']];
+  };
+  return [h, ...t('dark'), ...t('light')].join(' ');
+}
+
+/** Installs (or replaces) a colour stylesheet (`<style id="se-accent|se-folder">`) and caches its colours for the next launch. */
 export function applyColorSheet(kind: keyof typeof SHEETS, hex: string): void {
   if (!isHexColor(hex)) return;
   const css = SHEETS[kind](hex);
@@ -133,7 +147,7 @@ export function applyColorSheet(kind: keyof typeof SHEETS, hex: string): void {
   }
   el.textContent = css;
   try {
-    localStorage.setItem(`sec-edit-${kind}`, css);
+    localStorage.setItem(`sec-edit-${kind}`, colorCache(kind, hex));
   } catch {}
 }
 

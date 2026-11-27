@@ -1,12 +1,12 @@
 // Runtime state of {{variables}} (lazy chunk): parsed variables.md files, the active environment +
 // target per workspace, remembered form values, and the secrets vault client.
-// Per-workspace state lives in localStorage keyed by the folder (Electron keeps it in the app's data
-// folder; browser mode on its sticky port) — not in settings.json, which holds user settings only.
+// Per-workspace state lives in the folder's session (backend, per folder; app/documents folderValue): not in
+// localStorage, which every folder's page shares, and not in settings.json, which holds user settings only.
 import { signal } from '@preact/signals';
 import { basename, dirname, stem } from '@shared/paths';
 import { VAULT_LIMITS, type VaultReply, type VaultStatus } from '@shared/vault';
 import { app } from '../app/app';
-import { noteEdited } from '../app/documents';
+import { folderValue, noteEdited, setFolderValue } from '../app/documents';
 import { refreshVariables } from './cm';
 import { parseNoteMeta, parseVariablesFile, type NoteMeta, type VarsFile } from './parse';
 import { DEFAULT_DANGER, parseFenceInfo, type Scope } from './resolve';
@@ -164,26 +164,25 @@ interface WsState {
   target?: string | null;
   values?: Record<string, string>;
 }
-const stateKey = () => `sec-edit-vars:${app.workspace.value?.root ?? ''}`;
-let stateMemo: { key: string; s: WsState } | null = null;
+
+/** Only the shape this module writes (the session file is JSON anyone with the page could have saved). */
+export function cleanWsState(v: unknown): WsState {
+  const o = v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+  const str = (x: unknown) => (typeof x === 'string' ? x : null);
+  const values: Record<string, string> = {};
+  if (o.values && typeof o.values === 'object') for (const [k, x] of Object.entries(o.values)) if (typeof x === 'string') values[k] = x;
+  return { env: str(o.env), target: str(o.target), values };
+}
+
+// Older versions: localStorage `sec-edit-vars:<root>`, moved into the session on first use.
+const legacy = () => ({ key: `sec-edit-vars:${app.workspace.value?.root ?? ''}`, parse: (raw: string) => cleanWsState(JSON.parse(raw)) });
 
 export function wsState(): WsState {
-  const key = stateKey();
-  if (stateMemo?.key === key) return stateMemo.s;
-  let s: WsState = {};
-  try {
-    s = JSON.parse(localStorage.getItem(key) ?? '{}') ?? {};
-  } catch {}
-  stateMemo = { key, s };
-  return s;
+  return cleanWsState(folderValue('variables', legacy()));
 }
 
 export function setWsState(patch: Partial<WsState>): void {
-  const s = { ...wsState(), ...patch };
-  stateMemo = { key: stateKey(), s };
-  try {
-    localStorage.setItem(stateKey(), JSON.stringify(s));
-  } catch {}
+  setFolderValue('variables', { ...wsState(), ...patch });
   bump();
 }
 
@@ -367,7 +366,6 @@ export function installStore(): void {
   app.events.on('tree:changed', () => bump());
   app.events.on('workspace:opened', () => {
     entries.clear();
-    stateMemo = null;
     known.clear();
     memory.clear();
     bump();

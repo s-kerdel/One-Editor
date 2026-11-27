@@ -1,18 +1,21 @@
 // Remote media policy: may a note load images from the internet (tracking pixels, IP leaks)? The email
 // client model: the default comes from Settings → Preview ("preview.remoteImages": ask / always / never);
-// a folder can override it ("Always for this folder", per-folder renderer state in localStorage
-// `sec-edit-remote:<root>`, like `sec-edit-vars:<root>`); "Load" allows one note until the app restarts.
+// a folder can override it ("Always for this folder": SessionState.remoteImages in the folder's own session,
+// never localStorage, which every folder's page shares); "Load" allows one note until the app restarts.
 // The sanitizer enforces it (./sanitize: blocked media become placeholders): the static CSP cannot say
 // "this folder yes, that one no", so its img-src still lists https: / http:.
-// Small and dependency-free: the editor chunk reads it for live-mode images too.
+// Small, startup modules only (app, documents): the editor chunk reads it for live-mode images too.
 import { app } from '../app/app';
+import { folderValue, setFolderValue } from '../app/documents';
 
 export type RemoteDefault = 'ask' | 'always' | 'never';
 export type FolderRemote = 'allow' | 'block';
 
 const allowedNotes = new Set<string>();
 const root = () => app.workspace.value?.root ?? '';
-const storeKey = () => `sec-edit-remote:${root()}`;
+const asChoice = (v: unknown): FolderRemote | undefined => (v === 'allow' || v === 'block' ? v : undefined);
+// Older versions: localStorage `sec-edit-remote:<root>`, moved into the session on first use.
+const legacy = () => ({ key: `sec-edit-remote:${root()}`, parse: asChoice });
 
 export function remoteDefault(): RemoteDefault {
   const v = app.settings.value['preview.remoteImages'];
@@ -21,12 +24,7 @@ export function remoteDefault(): RemoteDefault {
 
 export function folderRemote(): FolderRemote | null {
   if (!root()) return null;
-  try {
-    const v = localStorage.getItem(storeKey());
-    return v === 'allow' || v === 'block' ? v : null;
-  } catch {
-    return null;
-  }
+  return asChoice(folderValue('remoteImages', legacy())) ?? null;
 }
 
 const changed = () => app.events.emit('media:policy');
@@ -34,10 +32,7 @@ const changed = () => app.events.emit('media:policy');
 /** null = back to the default from Settings. */
 export function setFolderRemote(v: FolderRemote | null): void {
   if (!root()) return;
-  try {
-    if (v) localStorage.setItem(storeKey(), v);
-    else localStorage.removeItem(storeKey());
-  } catch {}
+  setFolderValue('remoteImages', v ?? undefined);
   changed();
 }
 

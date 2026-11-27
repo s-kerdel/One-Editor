@@ -73,6 +73,8 @@ test.describe('hostile markdown', () => {
     await ws.write('evil.md', EVIL);
     await ws.write('evil-embed.md', EMBED);
     await ws.write('evil.svg', SVG);
+    // Draw the hostile diagram (an <img> label + themeCSS): with the default policy it is not drawn at all.
+    await ws.server.service.saveSettings({ 'preview.remoteImages': 'always' });
   });
 
   for (const mode of ['live', 'split', 'preview'] as const) {

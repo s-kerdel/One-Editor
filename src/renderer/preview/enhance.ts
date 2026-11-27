@@ -2,7 +2,7 @@
 // Nothing here is in the startup bundle — every library arrives through import() on first use, and
 // blocks are upgraded in place (plain text first) when they come near the viewport.
 import type { HighlighterCore } from 'shiki/core';
-import { sanitizeLib, sanitizeSvg } from './sanitize';
+import { mermaidFetches, sanitizeLib, sanitizeSvg } from './sanitize';
 
 // ---------------------------------------------------------------- Shiki
 
@@ -208,18 +208,36 @@ function mermaidTheme(dark: boolean) {
   };
 }
 
-/** Sanitized SVG for a diagram. Renders are serialised because mermaid's configuration is global. */
-function mermaidSvg(src: string, dark: boolean): Promise<string> {
-  const key = `${dark ? 'd' : 'l'}${src}`;
+// A diagram's own config (%%{init}%%, frontmatter `config:`) can set none of these: mermaid's defaults, plus
+// the CSS ones (themeCSS / font families / theme variables end up in its <style>: url(), @import) and the
+// label sanitizer's config.
+const MERMAID_SECURE = ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'suppressErrorRendering', 'maxEdges', 'themeCSS', 'fontFamily', 'altFontFamily', 'themeVariables', 'dompurifyConfig'];
+// HTML labels of a note that may not load remote media: no element or attribute that fetches (mermaidFetches
+// already keeps such a diagram from being drawn; this is the second layer, on the parsed label).
+const NO_FETCH_LABELS = { FORBID_TAGS: ['style', 'img', 'image', 'picture', 'source', 'video', 'audio', 'track', 'input', 'iframe', 'object', 'embed', 'link'], FORBID_ATTR: ['background', 'poster', 'srcset'] };
+const mermaidKey = (src: string, dark: boolean, remote: boolean) => `${dark ? 'd' : 'l'}${remote ? 'r' : '-'}${src}`;
+
+/** Sanitized SVG for a diagram. Renders are serialised because mermaid's configuration is global.
+ *  `remote`: the note may load remote media (./remote); without it the caller never draws a diagram that fetches. */
+function mermaidSvg(src: string, dark: boolean, remote: boolean): Promise<string> {
+  const key = mermaidKey(src, dark, remote);
   const hit = mermaidCache.get(key);
   if (hit !== undefined) return Promise.resolve(hit);
   const job = mermaidQueue.then(async () => {
     const mermaid = (await (mermaidP ??= import('mermaid').then((m) => m.default)));
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', suppressErrorRendering: true, fontFamily: '"Segoe UI", system-ui, -apple-system, sans-serif', ...mermaidTheme(dark) });
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      suppressErrorRendering: true,
+      secure: MERMAID_SECURE,
+      dompurifyConfig: remote ? { FORBID_TAGS: ['style'] } : NO_FETCH_LABELS, // the first is mermaid's own default
+      fontFamily: '"Segoe UI", system-ui, -apple-system, sans-serif',
+      ...mermaidTheme(dark),
+    });
     const id = `se-mmd-${++mermaidSeq}`;
     try {
       const { svg } = await mermaid.render(id, src);
-      const clean = sanitizeSvg(svg);
+      const clean = sanitizeSvg(svg, { remote });
       if (mermaidCache.size > 100) mermaidCache.clear();
       mermaidCache.set(key, clean);
       return clean;
@@ -232,24 +250,32 @@ function mermaidSvg(src: string, dark: boolean): Promise<string> {
   return job;
 }
 
+/** The diagram's source with a message instead of the drawing. */
+function mermaidMessage(el: HTMLElement, src: string, text: string): void {
+  el.classList.add('is-error');
+  el.replaceChildren();
+  const msg = document.createElement('div');
+  msg.className = 'se-mermaid-error';
+  msg.textContent = text;
+  const pre = document.createElement('pre');
+  pre.textContent = src;
+  el.append(msg, pre);
+}
+
 async function applyMermaid(el: HTMLElement, dark: boolean): Promise<void> {
   const src = el.dataset.src ?? el.querySelector('code')?.textContent ?? '';
+  // data-remote: set by the renderer (markdown.ts / the editor widget) when the note may load remote media.
+  const remote = el.dataset.remote !== undefined;
   el.dataset.src = src;
   el.dataset.done = dark ? 'dark' : 'light';
+  if (!remote && mermaidFetches(src)) return mermaidMessage(el, src, 'Mermaid: not drawn. This diagram loads images or styles, and this note may not load images from the internet.');
   try {
-    const svg = await mermaidSvg(src, dark);
+    const svg = await mermaidSvg(src, dark, remote);
     if (el.dataset.src !== src) return;
     el.innerHTML = svg;
     el.classList.remove('is-error');
   } catch (err) {
-    el.classList.add('is-error');
-    el.replaceChildren();
-    const msg = document.createElement('div');
-    msg.className = 'se-mermaid-error';
-    msg.textContent = `Mermaid: ${(err as Error)?.message ?? err}`;
-    const pre = document.createElement('pre');
-    pre.textContent = src;
-    el.append(msg, pre);
+    mermaidMessage(el, src, `Mermaid: ${(err as Error)?.message ?? err}`);
   }
 }
 
@@ -320,7 +346,7 @@ export function createEnhancer(scroller: HTMLElement): Enhancer {
           }
         } else {
           const src = el.querySelector('code')?.textContent ?? '';
-          const hit = mermaidCache.get(`${isDark() ? 'd' : 'l'}${src}`);
+          const hit = mermaidCache.get(mermaidKey(src, isDark(), el.dataset.remote !== undefined));
           if (hit !== undefined) {
             el.dataset.src = src;
             el.dataset.done = isDark() ? 'dark' : 'light';

@@ -8,7 +8,8 @@ import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { app } from '../../../src/renderer/app/app';
 import { connectBackend, fileUrl } from '../../../src/renderer/platform';
-import { openWorkspace } from '../../../src/renderer/app/doc-save';
+import { openWorkspace, pageReload } from '../../../src/renderer/app/doc-save';
+import { autosaveTimers, persistSession, restoreSession } from '../../../src/renderer/app/documents';
 import { getCommand } from '../../../src/renderer/app/commands';
 import { installShell } from '../../../src/renderer/app/shell';
 import { Welcome } from '../../../src/renderer/app/Welcome';
@@ -63,6 +64,7 @@ describe('the preload bridge', () => {
 
 describe('openWorkspace asks main where the folder opens', () => {
   let backend: Record<string, ReturnType<typeof vi.fn>>;
+  let reload: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     app.workspace.value = { root: '/home/u/a', name: 'a' } as any;
     app.tabs.value = [];
@@ -71,15 +73,49 @@ describe('openWorkspace asks main where the folder opens', () => {
       listTree: vi.fn(async () => ({ name: 'b', path: '', kind: 'dir', children: [] })),
       getSession: vi.fn(async () => null),
       recentWorkspaces: vi.fn(async () => []),
+      saveSession: vi.fn(async () => {}),
     };
+    reload = vi.spyOn(pageReload, 'run').mockImplementation(() => {});
   });
+  afterEach(() => reload.mockRestore());
 
-  it("plain: asks in 'here' mode; the answer 'here' switches this window in place", async () => {
+  it("plain: asks in 'here' mode; the answer 'here' switches this window: main opens it, then a fresh page", async () => {
     setBackend({ kind: 'electron', ...backend, openFolderWindow: vi.fn(async () => 'here' as const) });
     await openWorkspace('/home/u/b');
     expect(app.backend.openFolderWindow).toHaveBeenCalledWith('/home/u/b', 'here');
     expect(backend.openWorkspace).toHaveBeenCalledWith('/home/u/b');
-    expect(app.workspace.value).toEqual(WS);
+    // No in-place reset: the page reloads, so nothing the old folder's notes ran keeps running (audit M4).
+    expect(reload).toHaveBeenCalledOnce();
+    expect(reload.mock.invocationCallOrder[0]).toBeGreaterThan(backend.openWorkspace.mock.invocationCallOrder[0]);
+    expect(app.workspace.value?.root).toBe('/home/u/a');
+  });
+
+  it('before the reload nothing of the old folder can land in the new one; its pending session save goes to the old folder first', async () => {
+    setBackend({ kind: 'web', ...backend });
+    await restoreSession({ openTabs: [], activeTab: null });
+    persistSession(); // a debounced save is pending
+    const timer = setTimeout(() => {}, 60_000);
+    autosaveTimers.set('n.md', timer);
+    app.docs.set('n.md', { path: 'n.md', dirty: { value: true } } as any); // kept unsaved ("Don't save")
+    await openWorkspace('/home/u/b');
+    expect(backend.saveSession).toHaveBeenCalledOnce();
+    expect(backend.saveSession.mock.invocationCallOrder[0]).toBeLessThan(backend.openWorkspace.mock.invocationCallOrder[0]);
+    expect(autosaveTimers.size).toBe(0);
+    expect(app.docs.size).toBe(0); // browser mode's unload handler saves dirty docs: there are none
+    persistSession();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(backend.saveSession).toHaveBeenCalledOnce(); // this page saves no session into the new folder
+    clearTimeout(timer);
+  });
+
+  it('a refused open keeps this page and its session saves', async () => {
+    setBackend({ kind: 'web', ...backend, openWorkspace: vi.fn(async () => Promise.reject(new Error('EACCES'))) });
+    await restoreSession({ openTabs: [], activeTab: null });
+    await expect(openWorkspace('/home/u/b')).rejects.toThrow('EACCES');
+    expect(reload).not.toHaveBeenCalled();
+    persistSession();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(backend.saveSession).toHaveBeenCalled();
   });
 
   it("Shift (newWindow): asks in 'new' mode", async () => {
@@ -102,11 +138,11 @@ describe('openWorkspace asks main where the folder opens', () => {
     expect(backend.openWorkspace).not.toHaveBeenCalled();
   });
 
-  it('no openFolderWindow (browser mode, older main): in place, as before', async () => {
+  it('no openFolderWindow (browser mode, older main): in this page’s tab, also through a fresh page', async () => {
     setBackend({ kind: 'web', ...backend });
     await openWorkspace('/home/u/b');
     expect(backend.openWorkspace).toHaveBeenCalledWith('/home/u/b');
-    expect(app.workspace.value).toEqual(WS);
+    expect(reload).toHaveBeenCalledOnce();
   });
 });
 

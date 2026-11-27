@@ -819,6 +819,8 @@ const defs: Draft[] = [
     description: 'Ask: a note shows a bar to load them (a folder can be always allowed). Also live preview.',
     keywords: ['remote', 'external', 'tracking', 'privacy', 'http', 'web', 'load images', 'block'],
     default: 'ask',
+    // A page in browser mode cannot loosen it: the server keeps this setting out of its writes.
+    desktopOnly: true,
     control: {
       type: 'segmented',
       options: [

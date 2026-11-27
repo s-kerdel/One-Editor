@@ -183,6 +183,13 @@ export interface SessionState {
   expanded?: RelPath[];
   /** Zen mode is on: the layout to restore when leaving it (renderer app/zen.tsx). */
   zen?: { sidebarVisible: boolean; sidebarPanel: string; overviewVisible: boolean; processesOpen: boolean };
+  // Per-folder renderer state: here (the folder's own session) and never in localStorage, which every folder's page shares.
+  /** {{variables}}: active environment / target and remembered (non-secret) values (renderer variables/store.ts). */
+  variables?: { env?: string | null; target?: string | null; values?: Record<string, string> };
+  /** Images from the internet: this folder's own choice (renderer preview/remote.ts). */
+  remoteImages?: 'allow' | 'block';
+  /** Recently opened files, newest first (renderer search/recent.ts). */
+  recentFiles?: RelPath[];
   [key: string]: unknown;
 }
 
