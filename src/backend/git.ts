@@ -14,6 +14,7 @@
 //  - every renderer-supplied path goes through the workspace containment rules (pathsafe.resolveInside);
 //  - timeouts + output caps on every call; no terminal prompts.
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -157,7 +158,7 @@ export function locateGit(opts: { gitPath?: string; platform?: NodeJS.Platform; 
   const p = (async () => {
     const list = opts.gitPath ? [opts.gitPath] : gitCandidates(platform, env);
     for (const cand of list) {
-      if (!opts.gitPath && !isFile(cand)) continue;
+      if (!opts.gitPath && !(await isFile(cand))) continue;
       const r = await run(cand, ['--version'], { cwd: undefined, env: gitEnv(env), timeoutMs: T_DISCOVER, maxBytes: 4096 });
       const v = r.code === 0 ? parseGitVersion(r.stdout.toString('utf8')) : null;
       if (v && atLeast(v, ...MIN_VERSION)) return { path: cand, version: v };
@@ -169,9 +170,10 @@ export function locateGit(opts: { gitPath?: string; platform?: NodeJS.Platform; 
   return p;
 }
 
-function isFile(f: string): boolean {
+// Async (here, in hunks() and statSig()): one main process serves every window, a hung share must not freeze them all.
+async function isFile(f: string): Promise<boolean> {
   try {
-    return fs.statSync(f).isFile();
+    return (await fsp.stat(f)).isFile();
   } catch {
     return false;
   }
@@ -574,6 +576,8 @@ export class GitService {
   private touched = new Set<string>();
   private sigs = new Map<string, string>();
   private watchGen = 0;
+  private checkRun: Promise<void> | null = null;
+  private checkNext: Promise<void> | null = null;
   private disposed = false;
   private readonly platform: NodeJS.Platform;
   private readonly env: NodeJS.ProcessEnv;
@@ -1088,8 +1092,8 @@ export class GitService {
     let raw: Buffer;
     try {
       const abs = this.P.join(this.root, ...clean.split('/'));
-      if (fs.statSync(abs).size > GIT_MAX_BLOB_BYTES) return whole('too-large');
-      raw = fs.readFileSync(abs);
+      if ((await fsp.stat(abs)).size > GIT_MAX_BLOB_BYTES) return whole('too-large');
+      raw = await fsp.readFile(abs);
     } catch {
       return whole('unavailable');
     }
@@ -1457,8 +1461,17 @@ export class GitService {
 
   private async startWatching() {
     const gen = ++this.watchGen; // a newer start (rediscovery) wins over one still awaiting
+    const stale = () => gen !== this.watchGen || this.disposed || !this.listeners.size || this.watchers.length > 0;
     const repo = await this.repo();
-    if (gen !== this.watchGen || this.disposed || !this.listeners.size || this.watchers.length) return;
+    if (stale()) return;
+    // Baselines first (the stats are async), then every watcher is armed in one synchronous step.
+    const dotGit = path.join(this.root, '.git');
+    const dirs = repo.ok ? [...new Set([repo.gitDir, repo.commonDir])] : [];
+    const files = dirs.flatMap((d) => ['HEAD', 'index', 'packed-refs', 'config'].map((f) => path.join(d, f)));
+    const dotGitSig = await statSig(dotGit, true);
+    const fileSigs: string[] = [];
+    for (const f of files) fileSigs.push(await statSig(f)); // one at a time: a hung share holds one libuv thread, not the pool
+    if (stale()) return;
     const watch = (dir: string, opts: { recursive?: boolean }, accept: (name: string) => boolean) => {
       try {
         const w = fs.watch(dir, { persistent: false, recursive: !!opts.recursive }, (_t, name) => {
@@ -1472,41 +1485,60 @@ export class GitService {
       } catch {}
     };
     // `.git` appearing or vanishing in the workspace (git init / rm -rf .git).
-    const dotGit = path.join(this.root, '.git');
-    this.sigs.set(dotGit, statSig(dotGit, true));
+    this.sigs.set(dotGit, dotGitSig);
     watch(this.root, {}, (n) => n === '.git');
     if (!repo.ok) return;
-    const dirs = [...new Set([repo.gitDir, repo.commonDir])];
     for (const d of dirs) watch(d, {}, (n) => GIT_STATE_FILES.has(n));
     watch(path.join(repo.commonDir, 'refs'), { recursive: true }, (n) => !n.endsWith('.lock'));
-    for (const d of dirs) for (const f of ['HEAD', 'index', 'packed-refs', 'config']) this.sigs.set(path.join(d, f), statSig(path.join(d, f)));
+    files.forEach((f, i) => this.sigs.set(f, fileSigs[i]));
   }
 
   private scheduleEmit() {
     if (this.watchTimer) clearTimeout(this.watchTimer);
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
-      const changed: string[] = [];
-      for (const f of this.touched) {
-        const s = statSig(f, path.dirname(f) === this.root);
-        if (this.sigs.get(f) !== s) changed.push(f);
-        this.sigs.set(f, s);
-      }
-      this.touched.clear();
-      if (!changed.length || this.disposed) return;
-      if (changed.some((f) => f.includes(`${path.sep}refs${path.sep}`) || path.basename(f) === 'packed-refs')) this.refsGen++;
-      if (changed.some((f) => path.dirname(f) === this.root || path.basename(f) === 'config')) {
-        // Repository appeared / vanished / was reconfigured: rediscover and re-arm the watchers.
-        this.invalidate();
-        this.stopWatching();
-        if (this.listeners.size) void this.startWatching();
-      }
-      this.listeners.forEach((l) => {
-        try {
-          l();
-        } catch {}
-      });
+      void this.checkTouched();
     }, this.opts.watchDebounceMs ?? 300);
+  }
+
+  /** One check at a time (async stats must not interleave); a timer firing during a run gets the next one. */
+  private checkTouched(): Promise<void> {
+    if (!this.checkRun) {
+      this.checkRun = this.checkTouchedOnce().finally(() => (this.checkRun = null));
+      return this.checkRun;
+    }
+    this.checkNext ??= this.checkRun.catch(() => {}).then(() => {
+      this.checkNext = null;
+      return this.checkTouched();
+    });
+    return this.checkNext;
+  }
+
+  private async checkTouchedOnce() {
+    const gen = this.watchGen;
+    const files = [...this.touched];
+    this.touched.clear(); // events arriving meanwhile belong to the next run
+    const sigs: string[] = [];
+    for (const f of files) sigs.push(await statSig(f, path.dirname(f) === this.root));
+    if (gen !== this.watchGen) return; // stopped or re-armed meanwhile: the new baselines count
+    const changed: string[] = [];
+    files.forEach((f, i) => {
+      if (this.sigs.get(f) !== sigs[i]) changed.push(f);
+      this.sigs.set(f, sigs[i]);
+    });
+    if (!changed.length || this.disposed) return;
+    if (changed.some((f) => f.includes(`${path.sep}refs${path.sep}`) || path.basename(f) === 'packed-refs')) this.refsGen++;
+    if (changed.some((f) => path.dirname(f) === this.root || path.basename(f) === 'config')) {
+      // Repository appeared / vanished / was reconfigured: rediscover and re-arm the watchers.
+      this.invalidate();
+      this.stopWatching();
+      if (this.listeners.size) void this.startWatching();
+    }
+    this.listeners.forEach((l) => {
+      try {
+        l();
+      } catch {}
+    });
   }
 
   private stopWatching(clearListeners = false) {
@@ -1528,9 +1560,9 @@ export class GitService {
 }
 
 /** Change signature of a file (no atime: Windows reports reads as changes). `kindOnly`: just its existence. */
-function statSig(f: string, kindOnly = false): string {
+async function statSig(f: string, kindOnly = false): Promise<string> {
   try {
-    const st = fs.statSync(f);
+    const st = await fsp.stat(f);
     if (kindOnly) return st.isDirectory() ? 'dir' : 'file';
     return `${st.mtimeMs}:${st.size}:${st.ino}`;
   } catch {
