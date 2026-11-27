@@ -26,7 +26,7 @@ import { BackendFailure, MAX_INDEX_BYTES, Workspace, retryWin, type IndexOptions
 import { platformTrash } from './trash';
 import { withFileLock } from './filelock';
 import { checkPdfRequest, looksLikePdf, withPdfExtension, writeFileAtomic } from './pdf-export';
-import { GitService, gitEnv, hasDotGitAbove, locateGit, type GitServiceOptions } from './git';
+import { GitService, gitEnv, hasDotGitAboveAsync, locateGit, type GitServiceOptions } from './git';
 import { GitMonitor, findNestedRepos, type GitMonitorEvent } from './git-monitor';
 import { GitTrust } from './git-trust';
 import { diffTexts } from './git-compare';
@@ -702,7 +702,7 @@ export class BackendService {
     const root = this.ws().root;
     // Briefly cached (status is asked for in bursts); `git init` in a terminal shows up on the next look.
     if (this.repoLikely?.root !== root || Date.now() - this.repoLikely.at > 3000)
-      this.repoLikely = { root, at: Date.now(), p: (async () => hasDotGitAbove(root) || (await findNestedRepos(root, { maxRepos: 1 })).length > 0)().catch(() => false) };
+      this.repoLikely = { root, at: Date.now(), p: (async () => (await hasDotGitAboveAsync(root)) || (await findNestedRepos(root, { maxRepos: 1 })).length > 0)().catch(() => false) };
     return this.repoLikely.p;
   }
 

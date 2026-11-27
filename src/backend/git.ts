@@ -698,7 +698,7 @@ export class GitService {
 
   private async discover(): Promise<Repo | GitUnavailable> {
     const git = (await this.wslGit()) ?? (await locateGit({ gitPath: this.opts.gitPath, platform: this.platform, env: this.opts.env ?? process.env }));
-    if (!git) return { ok: false, reason: 'no-git', ...(hasDotGitAbove(this.root) ? { repoLikely: true } : {}) };
+    if (!git) return { ok: false, reason: 'no-git', ...((await hasDotGitAboveAsync(this.root)) ? { repoLikely: true } : {}) };
     const limit = this.opts.timeouts?.discover ?? T_DISCOVER;
     const r = await this.exec(git, ['rev-parse', '--show-toplevel', '--show-prefix', '--absolute-git-dir', '--git-common-dir'], { timeoutMs: limit, maxBytes: 64 * 1024, trigger: 'discover' });
     const fail = failure(r);
@@ -783,7 +783,7 @@ export class GitService {
     let changed = 0;
     for (const e of parsed.entries) if (e.unstaged && e.state !== 'untracked' && e.state !== 'ignored') changed++;
     this.scan = { wasted: scanned === undefined ? null : Math.max(0, scanned - changed), ms: out.ms };
-    const state = repoState(repo.gitDir);
+    const state = await repoState(repo.gitDir);
     if (state) out.state = state;
     return out;
   }
@@ -815,7 +815,7 @@ export class GitService {
     if (!this.idle) return { ok: false, skipped: 'busy' };
     // Inside serial(): one of our own commits / stages cannot start while it writes the index.
     return this.serial(async (): Promise<IndexRefreshResult> => {
-      if (fs.existsSync(path.join(repo.gitDir, 'index.lock'))) return { ok: false, skipped: 'locked' };
+      if (await exists(path.join(repo.gitDir, 'index.lock'))) return { ok: false, skipped: 'locked' };
       const t0 = performance.now();
       const noHooks = this.platform === 'win32' && !this.viaWsl ? 'NUL' : '/dev/null';
       const args = ['-c', `core.hooksPath=${noHooks}`, 'update-index', '-q', '--unmerged', '--ignore-missing', '--ignore-submodules', '--refresh'];
@@ -1131,7 +1131,7 @@ export class GitService {
     const amend = o.amend === true;
     const repo = await this.needRepo();
     if (!('base' in repo)) return repo;
-    const merging = repoState(repo.gitDir) === 'merge';
+    const merging = (await repoState(repo.gitDir)) === 'merge';
     if (!message.trim() && !amend && !merging) return { ok: false, message: 'Write a commit message first' };
     const args = ['commit', '-q'];
     if (amend) args.push('--amend');
@@ -1570,26 +1570,39 @@ async function statSig(f: string, kindOnly = false): Promise<string> {
   }
 }
 
-/** Operation in progress, from the marker files git leaves in its directory. */
-function repoState(gitDir: string): GitRepoState | undefined {
-  const has = (f: string) => fs.existsSync(path.join(gitDir, f));
-  if (has('rebase-merge') || has('rebase-apply')) return 'rebase';
-  if (has('MERGE_HEAD')) return 'merge';
-  if (has('CHERRY_PICK_HEAD')) return 'cherry-pick';
-  if (has('REVERT_HEAD')) return 'revert';
+/** fs.existsSync without blocking the main thread: false on any error. */
+function exists(f: string): Promise<boolean> {
+  return fsp.access(f).then(
+    () => true,
+    () => false,
+  );
+}
+
+/** Operation in progress, from the marker files git leaves in its directory (checked one at a time, in this order). */
+async function repoState(gitDir: string): Promise<GitRepoState | undefined> {
+  const has = (f: string) => exists(path.join(gitDir, f));
+  if ((await has('rebase-merge')) || (await has('rebase-apply'))) return 'rebase';
+  if (await has('MERGE_HEAD')) return 'merge';
+  if (await has('CHERRY_PICK_HEAD')) return 'cherry-pick';
+  if (await has('REVERT_HEAD')) return 'revert';
   return undefined;
 }
 
-/** A `.git` folder or file in `dir` or any parent (without git we cannot ask git). */
-export function hasDotGitAbove(dir: string): boolean {
+/** Where a `.git` may be: in `dir`, then in each parent, at most 64 levels. */
+function* dotGitPlaces(dir: string): Generator<string> {
   // Same boundary as git's own discovery: never step up into a GIT_CEILING_DIRECTORIES entry.
   const ceilings = new Set((process.env.GIT_CEILING_DIRECTORIES ?? '').split(path.delimiter).filter(Boolean).map((c) => path.resolve(c)));
   for (let d = dir, i = 0; i < 64; i++) {
-    if (fs.existsSync(path.join(d, '.git'))) return true;
+    yield path.join(d, '.git');
     const up = path.dirname(d);
-    if (up === d || ceilings.has(up)) return false;
+    if (up === d || ceilings.has(up)) return;
     d = up;
   }
+}
+
+/** A `.git` folder or file in `dir` or any parent (without git we cannot ask git). One check at a time, first hit wins. */
+export async function hasDotGitAboveAsync(dir: string): Promise<boolean> {
+  for (const f of dotGitPlaces(dir)) if (await exists(f)) return true;
   return false;
 }
 

@@ -191,7 +191,7 @@ Decisions and their reasons: `10-decisions.md`. Check a row first: `grep -n "sym
 | `src/main/main.ts`: `shownOrLater` | Waits ≤ 3 s for a new window to show before the next launch step. | No wait: the wrong window ends in front. No cap: a stuck renderer holds up every window after it. |
 | `src/main/app-menu.ts`: `registerAccelerator: false` | macOS File → New Window shows `CmdOrCtrl+Shift+N` but does not register it. | The menu takes the key from the renderer's `window.new` command (page and terminal alike). |
 | `src/backend/service.ts`: `changeRecent`, `saveExportDir` | recent.json / export-dirs.json: read-merge-write under `withFileLock`. | Windows drop each other's recent folders / last PDF folders. |
-| `src/backend/git.ts`: async `isFile`, `hunks`, `statSig` | No blocking file calls on the main thread; `statSig` one at a time. | A hung share freezes every window (one main process); parallel stats hold the whole libuv pool. |
+| `src/backend/git.ts`: async `isFile`, `hunks`, `statSig`, `repoState`, `exists` (index.lock), `hasDotGitAboveAsync` | No blocking file calls on the main thread (no `*Sync(` left in `git*.ts`); every check one at a time, first hit wins. | A hung share freezes every window (one main process); parallel stats hold the whole libuv pool. |
 
 ## STOP AND ASK list
 

@@ -1,25 +1,45 @@
 // No blocking file calls on the main thread (one main process serves every window): locating git, the
 // working-copy read of hunks() and the .git watcher's signatures use fs.promises, with the same results.
 // The watcher's checks never overlap, and a check that outlives its watchers reports nothing.
+// Marker files (rebase / merge / … state, index.lock) and the `.git`-above walk: fs.promises, one check
+// at a time, same order, first hit wins.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { GIT_MAX_BLOB_BYTES, GitService, locateGit } from '../../../src/backend/git';
+import { GIT_MAX_BLOB_BYTES, GitService, hasDotGitAboveAsync, locateGit } from '../../../src/backend/git';
 import { git, makeRepo, testEnv, tmpDir, until, write } from './helpers';
 
 const services: GitService[] = [];
-const svc = (root: string) => {
-  const s = new GitService(root, { env: testEnv(), watchDebounceMs: 40 });
+const svc = (root: string, extra: ConstructorParameters<typeof GitService>[1] = {}) => {
+  const s = new GitService(root, { env: testEnv(), watchDebounceMs: 40, ...extra });
   services.push(s);
   return s;
 };
 afterEach(() => {
   services.splice(0).forEach((s) => s.dispose());
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const realStat = fs.promises.stat.bind(fs.promises) as (p: fs.PathLike) => Promise<fs.Stats>;
 const pathsOf = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.map((c) => String(c[0]));
+const realAccess = fs.promises.access.bind(fs.promises) as (p: fs.PathLike, mode?: number) => Promise<void>;
+
+/** fs.promises.access under `prefix` answers from `present` (names relative to it); logs each check and how many ran at once. */
+function fakeAccess(prefix: string, present: () => string[]) {
+  const a = { seen: [] as string[], inflight: 0, max: 0, restore: () => spy.mockRestore() };
+  const spy = vi.spyOn(fs.promises, 'access').mockImplementation((async (p: fs.PathLike, mode?: number) => {
+    if (typeof p !== 'string' || !p.startsWith(prefix + path.sep)) return realAccess(p, mode);
+    const rel = path.relative(prefix, p);
+    a.seen.push(rel);
+    a.inflight++;
+    a.max = Math.max(a.max, a.inflight);
+    await new Promise((r) => setImmediate(r)); // parallel checks would show up in `max`
+    a.inflight--;
+    if (!present().includes(rel)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+  }) as never);
+  return a;
+}
 
 /** fs.promises.stat under `prefix` can be held at a gate; counts how many run at once. */
 function gateStats(prefix: string) {
@@ -139,5 +159,101 @@ describe('watching .git with async stats', () => {
     git(dir, 'add', 'b.md');
     git(dir, 'commit', '-qm', 'b');
     await until(() => b > 0); // the new watchers work
+  });
+});
+
+describe('marker files', () => {
+  const ALL = ['rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD'];
+
+  it('status() state: one check at a time in the old order, first hit wins, never existsSync', async () => {
+    const dir = await makeRepo('async-state', { 'a.md': 'a\n' });
+    const g = svc(dir);
+    expect((await g.status()).ok).toBe(true); // discovery first: only the state checks below
+    let present: string[] = [];
+    const a = fakeAccess(path.join(dir, '.git'), () => present);
+    const sync = vi.spyOn(fs, 'existsSync');
+    const cases: [string[], string | undefined, number][] = [
+      [[], undefined, 5],
+      [['rebase-apply', 'MERGE_HEAD'], 'rebase', 2],
+      [['rebase-merge'], 'rebase', 1],
+      [['MERGE_HEAD', 'REVERT_HEAD'], 'merge', 3],
+      [['CHERRY_PICK_HEAD'], 'cherry-pick', 4],
+      [['REVERT_HEAD'], 'revert', 5],
+    ];
+    for (const [files, state, checks] of cases) {
+      present = files;
+      a.seen = [];
+      const s = await g.status();
+      expect(s.ok ? s.state : 'not ok').toBe(state);
+      expect(a.seen).toEqual(ALL.slice(0, checks));
+    }
+    expect(a.max).toBe(1);
+    expect(pathsOf(sync).filter((p) => p.startsWith(dir))).toEqual([]);
+  });
+
+  it('commit: an empty message is refused, except while merging (MERGE_HEAD)', async () => {
+    const dir = await makeRepo('async-commit', { 'a.md': 'a\n' });
+    const g = svc(dir);
+    let present: string[] = [];
+    fakeAccess(path.join(dir, '.git'), () => present);
+    expect(await g.commit({ message: '' })).toEqual({ ok: false, message: 'Write a commit message first' });
+    present = ['MERGE_HEAD'];
+    expect(await g.commit({ message: '' })).toMatchObject({ ok: false, message: 'Nothing is staged to commit' }); // got as far as git
+  });
+
+  it('index refresh: skipped while index.lock exists (async check), runs once it is gone', async () => {
+    const dir = await makeRepo('async-lock', { 'a.md': 'a\n' });
+    const g = svc(dir);
+    expect((await g.status()).ok).toBe(true);
+    let present = ['index.lock'];
+    const a = fakeAccess(path.join(dir, '.git'), () => present);
+    const sync = vi.spyOn(fs, 'existsSync');
+    expect(await g.refreshIndex()).toEqual({ ok: false, skipped: 'locked' });
+    expect(a.seen).toEqual(['index.lock']);
+    expect(pathsOf(sync).filter((p) => p.startsWith(dir))).toEqual([]);
+    present = [];
+    expect(await g.refreshIndex()).toMatchObject({ ok: true });
+  });
+});
+
+describe('a .git in the folder or above', () => {
+  it('walks up one parent at a time, stops at the first hit and below a ceiling', async () => {
+    const top = await tmpDir('async-above');
+    const deep = path.join(top, 'a', 'b', 'c');
+    fs.mkdirSync(deep, { recursive: true });
+    vi.stubEnv('GIT_CEILING_DIRECTORIES', top); // `top` itself is never looked at
+    let present: string[] = [];
+    const a = fakeAccess(top, () => present);
+    const sync = vi.spyOn(fs, 'existsSync');
+    expect(await hasDotGitAboveAsync(deep)).toBe(false);
+    expect(a.seen).toEqual(['a/b/c/.git', 'a/b/.git', 'a/.git']);
+    expect(pathsOf(sync)).toEqual([]);
+    present = ['a/b/.git'];
+    a.seen = [];
+    expect(await hasDotGitAboveAsync(deep)).toBe(true);
+    expect(a.seen).toEqual(['a/b/c/.git', 'a/b/.git']);
+    expect(a.max).toBe(1);
+    a.restore(); // real files from here
+    fs.writeFileSync(path.join(top, 'a', '.git'), 'gitdir: elsewhere\n');
+    expect(await hasDotGitAboveAsync(path.join(top, 'a'))).toBe(true);
+    fs.mkdirSync(path.join(top, 'x'));
+    expect(await hasDotGitAboveAsync(path.join(top, 'x'))).toBe(false);
+  });
+
+  it('at most 64 levels', async () => {
+    const top = await tmpDir('async-deep');
+    const deep = path.join(top, ...Array(70).fill('d'));
+    fs.mkdirSync(deep, { recursive: true });
+    vi.stubEnv('GIT_CEILING_DIRECTORIES', '');
+    const a = fakeAccess(top, () => []);
+    expect(await hasDotGitAboveAsync(deep)).toBe(false);
+    expect(a.seen).toHaveLength(64);
+    expect(a.seen[63]).toBe(path.join(...Array(7).fill('d'), '.git'));
+  });
+
+  it('no git found: repoLikely only when a .git is there', async () => {
+    const noGit = (root: string) => svc(root, { gitPath: path.join(root, 'no-such-git') }).status();
+    expect(await noGit(await makeRepo('async-nogit-repo'))).toEqual({ ok: false, reason: 'no-git', repoLikely: true });
+    expect(await noGit(await tmpDir('async-nogit-plain'))).toEqual({ ok: false, reason: 'no-git' });
   });
 });
