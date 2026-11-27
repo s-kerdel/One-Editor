@@ -82,7 +82,7 @@ export interface TextPage {
   files: FileData[];
   /** null when this was the last page. */
   nextCursor: string | null;
-  /** Progress: indexable files in this pass, and how many have been examined so far. */
+  /** Progress: text files in this pass, and how many have been examined so far (name-only entries are not counted). */
   total?: number;
   done?: number;
 }

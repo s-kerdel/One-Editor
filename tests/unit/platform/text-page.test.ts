@@ -3,7 +3,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { Workspace } from '../../../src/backend/workspace';
+import { Workspace, MAX_TREE_ENTRIES } from '../../../src/backend/workspace';
+import { DEFAULT_INDEX, Indexer } from '../../../src/backend/indexer';
 import { BackendService } from '../../../src/backend/service';
 import type { FileData, TextPage } from '../../../src/shared/api';
 import { tmpRoot } from './helpers';
@@ -53,14 +54,19 @@ describe('readAllTextPage', () => {
     expect(pages.length).toBeGreaterThan(5);
     const flat = pages.flatMap((p) => p.files);
     expect(flat.map(strip)).toEqual(all.map(strip));
+    // Path order within pages too: name-only entries are merged in, not appended.
     expect(flat.map((f) => f.path)).toEqual([...flat.map((f) => f.path)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
-    // Skipped: binary / NUL content, > 2 MB, non-text extensions.
-    const paths = new Set(flat.map((f) => f.path));
-    for (const p of ['nul.txt', 'huge.md', 'image.png']) expect(paths.has(p), p).toBe(false);
+    // Not content-indexable (NUL content, > 2 MB, non-text extension): a name-only entry, never its text.
+    const text = flat.filter((f) => !f.binary);
+    for (const p of ['nul.txt', 'huge.md', 'image.png']) {
+      expect(text.some((f) => f.path === p), p).toBe(false);
+      expect(flat.find((f) => f.path === p), p).toMatchObject({ content: '', binary: true });
+    }
+    expect(flat.filter((f) => f.binary).map((f) => f.path)).toEqual(['huge.md', 'image.png', 'nul.txt']);
     expect(flat.find((f) => f.path === 'crlf.txt')).toMatchObject({ content: 'a\nb\n', eol: 'crlf' });
     expect(flat.find((f) => f.path === 'bom.md')).toMatchObject({ content: '# bom\n', bom: true });
     expect(flat.find((f) => f.path === 'ansi.txt')).toMatchObject({ content: 'café', encoding: 'windows-1252' });
-    expect(flat.length).toBe(303);
+    expect(text.length).toBe(303);
   });
 
   it('keeps pages near maxBytes (clamped) and never returns an empty page before the end', async () => {
@@ -79,9 +85,12 @@ describe('readAllTextPage', () => {
 
   it('cursor neither repeats nor skips existing files when the tree changes between pages', async () => {
     const first = await ws.readAllTextPage({ maxBytes: 64 * 1024 });
-    // Files appear before and after the cursor, one existing file disappears.
+    // Text and name-only files appear before and after the cursor, one existing name-only file disappears.
     await fsp.writeFile(path.join(dir, '0-first.md'), 'early');
+    await fsp.writeFile(path.join(dir, '0-first.png'), Buffer.from([0x89, 0x50]));
     await fsp.writeFile(path.join(dir, 'zz-last.md'), 'late');
+    await fsp.writeFile(path.join(dir, 'zz-last.png'), Buffer.from([0x89, 0x50]));
+    await fsp.rm(path.join(dir, 'image.png'));
     await ws.listTree();
     const last = first.files[first.files.length - 1].path;
     const rest: FileData[] = [];
@@ -96,7 +105,23 @@ describe('readAllTextPage', () => {
     expect(rest.every((f) => f.path > last)).toBe(true);
     expect(seen).toContain('zz-last.md');
     expect(seen).not.toContain('0-first.md'); // sorts before the cursor: arrives as a watcher event instead
-    expect(seen.length).toBe(304);
+    expect(seen).not.toContain('0-first.png');
+    expect(seen).not.toContain('image.png'); // gone before its page
+    const nameOnly = [...first.files, ...rest].filter((f) => f.binary).map((f) => f.path);
+    expect(nameOnly).toEqual(['huge.md', 'nul.txt', 'zz-last.png']);
+    expect(seen.length - nameOnly.length).toBe(304); // text: 300 notes, crlf, bom, ansi, zz-last.md
+  });
+
+  it('a page window holding more name-only files than one call takes as arguments', async () => {
+    // No text and MAX_TREE_ENTRIES binary names: one window, past the ~125k spread-argument limit.
+    const files = Array.from({ length: MAX_TREE_ENTRIES }, (_, i) => `img/${i}.png`);
+    const ix = new Indexer({ root: dir, cacheFile: null, readThreads: 0, index: DEFAULT_INDEX, foldCase: false });
+    ix.setPaths({ version: '1', files, ignoreDirs: [], repoDirs: [] });
+    const p = await ix.page(null);
+    expect(p.nextCursor).toBeNull();
+    expect(p.files.length).toBe(MAX_TREE_ENTRIES);
+    expect(p.files.every((f) => f.binary && f.content === '')).toBe(true);
+    ix.dispose();
   });
 
   it('a cursor from an unknown / deleted path resumes after it', async () => {

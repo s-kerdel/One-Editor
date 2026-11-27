@@ -169,14 +169,26 @@ export class Indexer {
     return paths;
   }
 
-  /** Name-only docs in the page window `(cursor, nextCursor]`; the final page (`nextCursor` null) takes the tail. */
-  private nameOnlyInWindow(cursor: string | null, nextCursor: string | null): FileData[] {
+  /**
+   * `files` (one page of the text pass, in path order) plus the name-only docs in the page window
+   * `(cursor, nextCursor]`, merged so the page stays in path order (readAllText promises sorted output).
+   * The final page (`nextCursor` null) takes the tail. A loop, not `push(...)`: a window can hold up to
+   * MAX_TREE_ENTRIES names, more than one call takes as arguments (RangeError past ~125k).
+   */
+  private withNameOnly(files: FileData[], cursor: string | null, nextCursor: string | null): FileData[] {
     const list = this.nameOnlyPaths();
-    if (!list.length) return [];
     const lo = cursor === null ? 0 : upperBound(list, cursor);
     const hi = nextCursor === null ? list.length : upperBound(list, nextCursor);
-    if (lo >= hi) return [];
-    return list.slice(lo, hi).map((path) => nameOnlyFile(path, 0)); // mtime from the watcher on the next change; never stat'ed here
+    if (lo >= hi) return files;
+    const out: FileData[] = [];
+    let j = lo;
+    // mtime 0: it comes from the watcher on the next change; a name-only file is never stat'ed here.
+    for (const f of files) {
+      while (j < hi && list[j] < f.path) out.push(nameOnlyFile(list[j++], 0));
+      out.push(f);
+    }
+    while (j < hi) out.push(nameOnlyFile(list[j++], 0));
+    return out;
   }
 
   /** The user's extra text names (opts.textPatterns) as a matcher, rebuilt when the options change. */
@@ -363,10 +375,10 @@ export class Indexer {
     } else pass.retarget(this.textPaths());
     this.armPassTimer();
     const stamps: Stamp[] = [];
-    const files = await pass.page(want, stamps);
+    const read = await pass.page(want, stamps);
     const finished = pass.finished;
     const next = finished ? null : pass.cursor;
-    files.push(...this.nameOnlyInWindow(cursor, next)); // name-only docs in this page's path range
+    const files = this.withNameOnly(read, cursor, next); // name-only docs in this page's path range
     if (finished && this.pass === pass) {
       this.pass = null;
       this.lastPass = { ...pass.stats, written: pass.written$ };
@@ -394,8 +406,7 @@ export class Indexer {
       if (performance.now() - t0 > SYNC_BURST_MS) await new Promise<void>((res) => setImmediate(res));
     }
     const next = i < list.length ? list[i - 1] : null;
-    files.push(...this.nameOnlyInWindow(cursor, next));
-    return { files, nextCursor: next, total: list.length, done: i, stamps };
+    return { files: this.withNameOnly(files, cursor, next), nextCursor: next, total: list.length, done: i, stamps };
   }
 
   /** Incremental update: the current text of a few changed files (filters applied, no full pass). */

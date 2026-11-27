@@ -60,27 +60,30 @@ describe('indexer: extra text names', () => {
 });
 
 describe('BackendService: the setting reaches the index', () => {
+  // The index holds content-indexed text and name-only entries (a non-text name: path only, `binary`, no content).
   async function indexed(s: BackendService) {
-    const out: string[] = [];
+    const text: string[] = [];
+    const nameOnly: string[] = [];
     let cursor: string | null = null;
     do {
       const pg = await s.workspace!.readAllTextPage({ cursor, maxBytes: 1 << 20 });
-      out.push(...pg.files.map((f) => f.path));
+      for (const f of pg.files) (f.binary ? nameOnly : text).push(f.path);
       cursor = pg.nextCursor;
     } while (cursor);
-    return out.sort();
+    return { text: text.sort(), nameOnly: nameOnly.sort() };
   }
 
   it('a mapped extension is indexed after the setting is saved, and no longer once it is removed', async () => {
     const s = new BackendService(cfg);
     await s.openWorkspace(root);
-    expect(await indexed(s)).toEqual(['a.php']);
+    // Unmapped: .ctp and .bin are found by name only, their content is not indexed.
+    expect(await indexed(s)).toEqual({ text: ['a.php'], nameOnly: ['View/index.ctp', 'blob.bin'] });
     await s.saveSettings({ 'files.associations': { '*.ctp': 'php' } });
     expect(s.workspace!.indexOptions.textPatterns).toEqual(['*.ctp']);
-    expect(await indexed(s)).toEqual(['View/index.ctp', 'a.php']);
+    expect(await indexed(s)).toEqual({ text: ['View/index.ctp', 'a.php'], nameOnly: ['blob.bin'] });
     await s.saveSettings({ 'files.associations': null });
     expect(s.workspace!.indexOptions.textPatterns).toEqual([]);
-    expect(await indexed(s)).toEqual(['a.php']);
+    expect(await indexed(s)).toEqual({ text: ['a.php'], nameOnly: ['View/index.ctp', 'blob.bin'] });
     s.dispose();
   });
 
@@ -90,7 +93,8 @@ describe('BackendService: the setting reaches the index', () => {
     const s = new BackendService(cfg);
     await s.openWorkspace(root);
     expect(s.workspace!.indexOptions.textPatterns).toEqual(['*.ctp']);
-    expect(await indexed(s)).toEqual(['View/index.ctp', 'a.php']);
+    // The hostile *.bin / *.png entries make nothing text: blob.bin stays name-only.
+    expect(await indexed(s)).toEqual({ text: ['View/index.ctp', 'a.php'], nameOnly: ['blob.bin'] });
     s.dispose();
   });
 

@@ -981,7 +981,7 @@ export class Workspace {
     return this.remove(rel);
   }
 
-  /** Every indexable text file, sorted by path. Prefer readAllTextPage for big folders. */
+  /** Every index entry (text files plus name-only entries), sorted by path. Prefer readAllTextPage for big folders. */
   async readAllText(): Promise<FileData[]> {
     const out: FileData[] = [];
     let cursor: string | null = null;
