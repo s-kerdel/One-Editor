@@ -34,6 +34,8 @@ function setup(os: 'win32' | 'linux', caseSensitive: boolean) {
       if (p === 'gone.md') throw new RpcError('ENOENT', `Not found: ${p}`);
     },
     saveSession: async () => {},
+    // A rename tells the bookmarks store (lazily, after the test's own assertions): it must find its backend call.
+    bookmarks: async () => [],
   } as never;
 }
 const names = (dir = '') => (findNode(app.tree.value, dir)?.children ?? []).map((c) => c.name);
