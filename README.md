@@ -50,14 +50,16 @@ One.exe C:\notes                 :: open a folder
 One.exe C:\notes\todo.md         :: open a file (inside its folder)
 ```
 
-- A second launch **hands the path to the running window**.
-- **Drag & drop** a folder or file onto the window also works.
+- **One window per folder.** A second launch brings the window that has the folder to the front, else opens a new
+  one. A file goes to the window whose folder holds it.
+- **No path** (or **`Shift`+click** on the taskbar button): a new window with the start screen.
+- **Drag & drop** a folder or file onto the window also works (a folder with **`Shift`** held: a new window).
 
 ---
 
 ## Run on macOS
 
-Needs **Node.js 20+**. Build on the Mac you will run it on:
+Needs **Node.js 22.12+**. Build on the Mac you will run it on:
 
 ```bash
 npm install
@@ -69,9 +71,10 @@ cp -R release/One-darwin-arm64/One.app /Applications/
   `xattr -cr /Applications/One.app`.
 - **Open With:** right-click a folder, text, Markdown, code or PDF file in Finder → **Open With → One**. One is only *offered*; it never
   becomes the default for a file type unless you choose that (Get Info → Open with → Change All). Dropping files on the Dock icon works too.
+- **One Dock icon** for all windows. Right-click it: your windows + **New Window**.
 - **`one` in the terminal:** `one` opens the current folder as a project, `one notes.md` a file, `one ~/notes src` several. A running One
-  takes them into its window. Install once (the command lives inside the app, so it always matches the installed version):
-  `sudo ln -sf /Applications/One.app/Contents/Resources/bin/one /usr/local/bin/one`
+  gives each folder its own window (or brings the one that has it to the front). Install once (the command lives inside the
+  app, so it always matches the installed version): `sudo ln -sf /Applications/One.app/Contents/Resources/bin/one /usr/local/bin/one`
 - **Quick try without packaging:** `npm run build && npm run electron -- <folder>`.
 - **Browser mode / MCP:** `release/One-darwin-*/start-web.sh [folder]` and `one-mcp.sh` (they use the app in `/Applications` when
   copied elsewhere).
@@ -90,7 +93,8 @@ npm run serve -- ~/notes --open
 - Prints a **URL with an access token** and opens it.
 - Listens on **127.0.0.1 only** by default. Options: `--port 4317`, `--host`, `--open`.
 - **Zoom** uses the browser's own zoom here.
-- **From the desktop app:** Settings → **Browser mode** → **Start web server** (or the palette). See the [user guide](docs/USER-GUIDE.md#browser-mode-web-server).
+- **From the desktop app:** Settings → **Browser mode** → **Start web server** (or the palette). It serves the folder of the
+  window that started it; every window shows its status. See the [user guide](docs/USER-GUIDE.md#browser-mode-web-server).
 
 ---
 
@@ -101,26 +105,27 @@ npm run serve -- ~/notes --open
 | **Editor** | **Live preview** (syntax hides until the cursor is on it) · source, split and reading view · **`/` slash menu** · smart lists (indent, renumber, checkboxes) · table editing (`Tab` between cells) · **paste images** → saved as attachments · paste rich text → Markdown · `![[embeds]]` · **properties** editor for YAML frontmatter · `[[link]]`, `#tag` and code-language autocomplete |
 | **Code** | Syntax highlighting · line comments, folding, multi-cursor · **formatting** for PHP, SQL, JS/TS, JSON, CSS/SCSS/Less, HTML, Vue, XML, YAML, GraphQL, shell, Markdown · format code blocks inside notes · respects `.prettierrc` and `.editorconfig` |
 | **Go to definition** | **`Ctrl+click`** or **`F12`** on a name in a code file jumps to where it is defined, also in another file · PHP follows **`use`** and **PSR-4** (composer.json), **into `vendor/`** · JS/TS follow **imports** · `$this->x()` / `this.x` look in the class and its parents · several matches → a small list · **`Shift+F12`** finds usages · `Alt+←` goes back. Name-based (no language server): many languages, no setup |
-| **Search** | **Find in files** that takes pasted commands literally (`git push --force-with-lease`) · filters (`path:` `ext:` `lang:` `in:code` `tag:`) · `"phrase"`, `-exclude`, `OR`, `/regex/` · typo-tolerant fallback · **replace in files** · quick open and command palette |
+| **Search** | **Find in files** that takes pasted commands literally (`git push --force-with-lease`) · filters (`path:` `ext:` `lang:` `in:code` `tag:`) · `"phrase"`, `-exclude`, `OR`, `/regex/` · typo-tolerant fallback · **PDFs and other non-text files** found by name, path and `ext:` · **replace in files** · quick open and command palette |
 | **Knowledge** | **Backlinks** + unlinked mentions · **outline** · **tags** · **graph** (global and local) · **renaming a file updates its links** · daily notes · templates |
 | **Preview** | Callouts, footnotes, `==highlight==`, math (KaTeX), Mermaid diagrams · export to HTML · print |
 | **PDF export** | **"Export note to PDF…"** (palette, editor or tab right-click) → a real PDF with code colours, math, diagrams and images. A4 / Letter / Legal, margins and page numbers in Settings → Export. Browser mode: the print dialog ("Save as PDF") |
-| **Files** | Atomic saves · autosave · CRLF, BOM and encoding preserved · external changes detected · delete goes to the Recycle Bin |
+| **Files** | Atomic saves · autosave · CRLF, BOM and encoding preserved · external changes detected · delete goes to the Recycle Bin · **New file …** (tree right-click): pick an extension, this project's most used first · **binary files** open as a card; **Open as text** shows them **read only** (first 2 MB, **Load all** on request) |
 | **Window** | **No Windows title bar** by default: minimize / maximize / close sit at the end of the tab strip, which is also where you drag the window. Native buttons, so **Snap Layouts** (hover maximize) and double-click-to-maximize work. Want the old title bar? Settings → Appearance → **Window frame: Native** → **Restart now** |
+| **Multiple windows** (desktop) | **One folder per window.** **`Ctrl+Shift+N`** opens a new window · **`Shift`+click** a folder (folder switcher, recent folders, Open folder…) opens it in a new window; a plain click switches this one · a folder already open just comes to the front · **settings, the MCP server and the web server status** are shared live by all windows; tabs and terminals stay per window |
 | **Layout** | **Two sidebar styles:** **Shelf** (default: workspace card, jump pill, panel pills, colour per folder, recent notes, editor as a card) or **Classic** (IDE-style icon bar). Switch in Settings → Appearance, or palette → "Switch sidebar style" |
 | **Look** | **Accent colour** (swatches or any colour) · **rounded or square** corners · **density** (compact / comfortable / spacious) · editor font, line height · **text width** readable / wide / full. All in Settings → Appearance, applied live |
 | **File overview** | **`Ctrl+Alt+B`** or the panel button at the end of the tab strip: a **right sidebar** for the open file — **outline** (code: classes / functions / methods), **code blocks** (copy a command in one click), **tasks** (tick them off), **links + backlinks**, **info** (words, reading time, size, tags). Follows the cursor. Remembered across restarts |
 | **Status bar** | Click the **language** (bottom right) to change a file's highlighting — searchable list, remembered per file |
-| **Terminal** (desktop) | **`` Ctrl+` ``** opens a terminal **in your folder**, at the bottom of the editor. Tabs with **coloured profile badges**, a **launcher** (`⊕ PowerShell 7 ▾`: every profile — PowerShell 7, Windows PowerShell, Command Prompt, Git Bash, **WSL distros**; Bash / Zsh / Fish elsewhere — ★ picks the default), **maximize** and **hide** (shells keep running), find, copy/paste, colours follow the theme. **Ctrl+click** a link or a path like `src/a.ts:12:3` to open it. Shell code blocks get a **▶ Run in terminal** button: it **types the command, you press Enter** |
-| **Git** | If the folder is a git repository **and you [trust it](docs/USER-GUIDE.md#trust-a-folder-first)**: **tree marks** (M / A / U / D / R / ! for conflicts, ignored files dimmed, a dot on folders with changes) · **branch in the status bar** (↑ ahead / ↓ behind, dirty dot; click → copy name, "Show changes" filters the tree) · **change bars** next to the text (added / changed / deleted, live while you type; click a bar → old lines + **Revert this change**) · **Diff with last commit** (unified or side by side). **`Ctrl+Shift+G` Git panel:** stage / unstage, discard (always asks; new files go to the Recycle Bin), **commit** (`Ctrl+Enter`, amend), **fetch / pull / push** with your own git login, branches, history, merge conflicts (**Accept current / incoming / both** in the editor). Uses **your installed git**. No force-push, no reset |
+| **Terminal** (desktop) | **`` Ctrl+` ``** opens a terminal **in your folder**, at the bottom of the editor. Tabs with **coloured profile badges**, a **launcher** (`⊕ PowerShell 7 ▾`: every profile — PowerShell 7, Windows PowerShell, Command Prompt, Git Bash, **WSL distros**; Bash / Zsh / Fish elsewhere — ★ picks the default), **maximize** and **hide** (shells keep running), **stays open in zen mode**, find, copy/paste, colours follow the theme. **Ctrl+click** a link or a path like `src/a.ts:12:3` to open it. Shell code blocks get a **▶ Run in terminal** button: it **types the command, you press Enter** |
+| **Git** | If the folder is a git repository **and you [trust it](docs/USER-GUIDE.md#trust-a-folder-first)**: **tree marks** (M / A / U / D / R / ! for conflicts, ignored files dimmed, a dot on folders with changes) · **branch in the status bar** (↑ ahead / ↓ behind, dirty dot; click → copy name, "Show changes" filters the tree) · **change bars** next to the text (added / changed / deleted, live while you type; click a bar → old lines + **Revert this change**) · **Diff with last commit** (unified or side by side). **`Ctrl+Shift+G` Git panel:** stage / unstage, discard (always asks; new files go to the Recycle Bin), **commit** (`Ctrl+Enter`, amend), **fetch / pull / push** with your own git login, branches, history, merge conflicts (**Accept current / incoming / both** in the editor). Uses **your installed git**; a slow first answer (cold disk, security scan) shows **"Git: no answer · Retry"** (it also looks again when you come back to the window), never "git was not found". No force-push, no reset |
 | **Compare text** | Right-click in the editor: **Compare Text with Clipboard** · **Select Text for Compare** → **Compare Text with Previous Selection** (any two files, code or notes). Uses **git's own diff** (`--histogram`; built-in diff when git is missing). Unified or side by side, word-level highlights, **Swap sides**, **Ignore whitespace**, **Copy as patch**. Tree / tab right-click: **Compare with Clipboard**. Off switch: Settings → Editor → **Compare text** |
 | **Variables & targets** | Write **`{{host}}`, `{{user}}`, `{{WS01.ip}}`** in commands; values come from the **nearest `variables.md`** (a YAML block: vars, **environments**, **targets**). Live mode shows **chips** with the value (hover = source, click = edit, file stays raw). **`env: lab ▾`** / **`⌖ DC01 ▾`** in the status bar (prod tinted red). Copy / ▶ Run use the values; missing ones are asked for. **Copy / Run for several targets**. **Secrets** in an encrypted vault (desktop), `••••` in preview and exports |
 | **Smart paste** (opt-in) | After a paste: **"Paste as…"** JSON block · formatted **curl** or curl **as template** (`{{host}}`, `{{token}}`) · stack trace → log block with clickable `file:line` · CSV / Excel → table · SQL formatted · VS Code code fenced in its language · **secret → `{{variable}}`**. Settings → Editor → Smart paste |
-| **Claude Code** (desktop) | If `claude` is installed: **"Claude Code"** in the launcher, plus **Claude: Ask about this file / selection** (palette or editor right-click). It **types** a prompt like `@notes/a.md lines 12-30`; **you review and press Enter**. No API keys, no network calls from the app |
+| **Claude Code** (desktop) | If `claude` is installed: **"Claude Code"** in the launcher, plus **Claude: Ask about this file / selection** (palette or editor right-click). It **types** a prompt like `@notes/a.md lines 12-30`; **you review and press Enter**. **AI changes** (`Ctrl+Alt+A`, preview) lists what it changed **per prompt**; your own saves between prompts are not counted as Claude's. No API keys, no network calls from the app |
 
 **Also:** [PDF viewer](docs/USER-GUIDE.md#pdf-files) · [bookmarks](docs/USER-GUIDE.md#bookmarks) (`Ctrl+Alt+K`) · [zen mode](docs/USER-GUIDE.md#zen-mode) (`Ctrl+Alt+Z`) · [MCP server for AI apps](docs/USER-GUIDE.md#mcp-server-ai-apps) · [Opencode and the AI changes list](docs/USER-GUIDE.md#opencode-and-the-ai-changes-list-preview) · [security updates check](docs/USER-GUIDE.md#security-updates).
 
-**Every setting has a control:** press `Ctrl+,`. The search box there also finds shortcuts.
+**Every setting has a control:** press `Ctrl+,`. The search box there also finds shortcuts. The bottom of its left list says which build you run (version, commit, Electron, **OS version**), with **Copy** for bug reports.
 
 ---
 
@@ -147,6 +152,7 @@ npm run serve -- ~/notes --open
 | Keys | Action |
 |---|---|
 | `Ctrl+N` | New note |
+| `Ctrl+Shift+N` | New window (**desktop only**) |
 | `Ctrl+S` | Save |
 | `Ctrl+W` | Close tab (or **double-click the tab name**) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab (recently used) |
@@ -252,14 +258,19 @@ On WSL start Xvfb first: `~/.local/xvfb/start-xvfb.sh :99`.
        Electron IPC (preload bridge)            HTTP RPC + SSE (token)
  ┌───────────────┴──────────────┐         ┌──────────────┴─────────────────┐
  │ src/main  (Electron main)    │         │ src/server  (browser mode)     │
- │ app:// protocol + code cache │         │ 127.0.0.1 only, Host-checked   │
- │ terminal: node-pty (ConPTY)  │         │ no terminal (ENOTSUP)          │
+ │ windows.ts: one per folder   │         │ 127.0.0.1 only, Host-checked   │
+ │ app:// protocol + code cache │         │ no terminal (ENOTSUP)          │
+ │ terminal: node-pty (ConPTY)  │         │ one window                     │
+ │ window-backend.ts per window │         │                                │
  └───────────────┬──────────────┘         └──────────────┬─────────────────┘
                  └──────────── src/backend ──────────────┘
           Workspace: tree index · atomic saves · encodings · watcher → events
 ```
 
 - **Paths** crossing the boundary are workspace-relative POSIX (`notes/a.md`).
+- **Desktop: one window per folder.** `src/main/windows.ts` routes each launch to a window. Each window has its own
+  `BackendService`, reached only through the `WindowBackend` seam (`src/main/window-backend.ts`), so it can later move
+  into its own process.
 - **Heavy parts load lazily** (highlighter, formatter, math, diagrams), so startup stays fast.
 - **Contributor rules and extension points:** [`LLM-INSTRUCTIONS.md`](LLM-INSTRUCTIONS.md) (entry point) → [`docs/llm/00-START-HERE.md`](docs/llm/00-START-HERE.md); full reference: [`docs/llm/09-reference.md`](docs/llm/09-reference.md).
 
