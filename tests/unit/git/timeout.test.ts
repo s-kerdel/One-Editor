@@ -33,6 +33,26 @@ function hangingGit(name: string, sub: string) {
 }
 
 describe('git gives no answer in time', () => {
+  it('`git --version` gives no answer in time: "timeout", not "no git"; never remembered, the next look asks again', async () => {
+    const dir = await makeRepo('t-version', { 'a.md': 'a\n' });
+    const fake = hangingGit('hang-version', '--version');
+    const look = () => {
+      const g = new GitService(dir, { env: testEnv(), gitPath: fake.exe, timeouts: { discover: 300 } });
+      services.push(g);
+      return g;
+    };
+    const g = look();
+    expect(await g.status()).toEqual({ ok: false, reason: 'timeout' });
+    expect(fake.asked()).toBe(1);
+    // A second look right away (another window; this one's next status) asks git again: no cached miss.
+    expect(await look().status()).toEqual({ ok: false, reason: 'timeout' });
+    expect(fake.asked()).toBe(2);
+    fake.answer();
+    expect(await g.reprobe()).toEqual({ ok: true }); // Retry / window focus (GitMonitor)
+    expect(fake.asked()).toBe(3);
+    expect((await g.status()).ok).toBe(true);
+  });
+
   it('the first look at the folder: reason "timeout" and no wording of its own; actions say the one sentence', async () => {
     const dir = await makeRepo('t-look', { 'a.md': 'a\n' });
     const fake = hangingGit('hang-look', 'rev-parse');

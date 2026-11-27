@@ -146,10 +146,26 @@ export function parseGitVersion(out: string): [number, number, number] | null {
 
 const atLeast = (v: [number, number, number], major: number, minor: number) => v[0] > major || (v[0] === major && v[1] >= minor);
 
-const exeCache = new Map<string, { at: number; p: Promise<GitExecutable | null> }>();
+const exeCache = new Map<string, { at: number; p: Promise<GitExecutable | null | 'timeout'> }>();
+
+interface LocateOptions {
+  gitPath?: string;
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  /** Tests only (GitServiceOptions.timeouts.discover); default T_DISCOVER. */
+  timeoutMs?: number;
+}
 
 /** First working git (cached; a miss is retried after a minute, in case git was just installed). */
-export function locateGit(opts: { gitPath?: string; platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv } = {}): Promise<GitExecutable | null> {
+export function locateGit(opts: LocateOptions = {}): Promise<GitExecutable | null> {
+  return findGit(opts).then((r) => (r === 'timeout' ? null : r));
+}
+
+/**
+ * locateGit, plus 'timeout': no candidate answered and one ran out of time (a cold start, a security scan).
+ * That is not "no git" and is never remembered: the next look asks again (10-decisions: first look at git).
+ */
+function findGit(opts: LocateOptions): Promise<GitExecutable | null | 'timeout'> {
   const platform = opts.platform ?? process.platform;
   const env = opts.env ?? process.env;
   const key = `${opts.gitPath ?? ''}\u0000${platform}\u0000${envGet(env, 'PATH') ?? ''}`;
@@ -157,16 +173,22 @@ export function locateGit(opts: { gitPath?: string; platform?: NodeJS.Platform; 
   if (hit && Date.now() - hit.at < 60_000) return hit.p;
   const p = (async () => {
     const list = opts.gitPath ? [opts.gitPath] : gitCandidates(platform, env);
+    let timedOut = false;
     for (const cand of list) {
       if (!opts.gitPath && !(await isFile(cand))) continue;
-      const r = await run(cand, ['--version'], { cwd: undefined, env: gitEnv(env), timeoutMs: T_DISCOVER, maxBytes: 4096 });
+      const r = await run(cand, ['--version'], { cwd: undefined, env: gitEnv(env), timeoutMs: opts.timeoutMs ?? T_DISCOVER, maxBytes: 4096 });
       const v = r.code === 0 ? parseGitVersion(r.stdout.toString('utf8')) : null;
       if (v && atLeast(v, ...MIN_VERSION)) return { path: cand, version: v };
+      if (r.timedOut) timedOut = true;
     }
-    return null;
+    return timedOut ? ('timeout' as const) : null;
   })();
   exeCache.set(key, { at: Date.now(), p });
-  p.then((r) => r || exeCache.set(key, { at: Date.now() - 50_000, p })); // misses expire sooner
+  p.then((r) => {
+    if (r === 'timeout') {
+      if (exeCache.get(key)?.p === p) exeCache.delete(key);
+    } else if (!r) exeCache.set(key, { at: Date.now() - 50_000, p }); // misses expire sooner
+  });
   return p;
 }
 
@@ -697,7 +719,9 @@ export class GitService {
   }
 
   private async discover(): Promise<Repo | GitUnavailable> {
-    const git = (await this.wslGit()) ?? (await locateGit({ gitPath: this.opts.gitPath, platform: this.platform, env: this.opts.env ?? process.env }));
+    const git = (await this.wslGit()) ?? (await findGit({ gitPath: this.opts.gitPath, platform: this.platform, env: this.opts.env ?? process.env, timeoutMs: this.opts.timeouts?.discover }));
+    // Like a rev-parse that ran out of time: "didn't answer in time", looked at again on Retry / window focus (GitMonitor).
+    if (git === 'timeout') return { ok: false, reason: 'timeout' };
     if (!git) return { ok: false, reason: 'no-git', ...((await hasDotGitAboveAsync(this.root)) ? { repoLikely: true } : {}) };
     const limit = this.opts.timeouts?.discover ?? T_DISCOVER;
     const r = await this.exec(git, ['rev-parse', '--show-toplevel', '--show-prefix', '--absolute-git-dir', '--git-common-dir'], { timeoutMs: limit, maxBytes: 64 * 1024, trigger: 'discover' });
