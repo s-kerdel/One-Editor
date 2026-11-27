@@ -3,7 +3,8 @@
 // Every path a tool or resource takes goes through ONE resolver, Folder.resolve():
 //   1. cleanPath()      string rules, decided without touching the disk (EINVAL): no "..", no absolute /
 //                       drive / UNC / device-namespace paths, "/" only (no "\"), no control characters,
-//                       no Unicode look-alikes of "/", "\", "." or ":", Windows name rules on Windows;
+//                       no Unicode look-alikes of "/", "\", "." or ":", Windows name rules on Windows,
+//                       8.3 short names everywhere (a FAT / NTFS volume answers them on Linux too);
 //   2. hidden()         the one visibility rule (dot segments, key files, the user's excludeGlobs, our temp
 //                       files), on the path as asked → ENOENT, the same answer as a missing file;
 //   3. Workspace.real() lexical containment (and One's own data folder is refused there);
@@ -25,7 +26,7 @@ import { isInsideDir, windowsNameProblem } from '../backend/pathsafe';
 import { decode, detectEol, toLf } from '../backend/textcodec';
 import { isProbablyTextName } from '../backend/textnames';
 import os from 'node:os';
-import { folderProblem } from './grant';
+import { folderProblem, oneInstallDirs } from './grant';
 import { defaultCacheDir, indexOptionsFrom } from '../backend/appdata';
 import type { Eol, FsEvent, Settings, TextEncoding, TreeNode } from '../shared/api';
 import type { McpConfig, McpMode } from '../shared/mcp';
@@ -33,10 +34,12 @@ import { associationMatcher, type LanguageInfo } from '../shared/languages';
 import { ToolError } from './protocol';
 import type { FolderIndex } from './indexes';
 
-/** Never visible, whatever the settings say (private keys, key stores, password databases). */
+/** Never visible, whatever the settings say (private keys, key stores, password databases, credential and
+ *  variable files: .asc armored keys, VPN profiles with keys inside, Terraform variables, netrc, kubeconfigs). */
 export const KEY_FILE_GLOBS = [
   '*.pem', '*.key', '*.pfx', '*.p12', '*.p8', '*.ppk', '*.jks', '*.keystore', '*.keytab', '*.kdbx', '*.kdb', '*.gpg',
   'id_rsa*', 'id_dsa*', 'id_ecdsa*', 'id_ed25519*', 'id_xmss*', 'secring*', 'wallet.dat', '*.tfstate', '*.tfstate.*',
+  '*.asc', '*.ovpn', '*.tfvars', '*.tfvars.json', '_netrc', '.netrc', '*.kubeconfig',
 ];
 export const MAX_PATH_CHARS = 1024;
 /** Larger files are not read (paging still loads the whole file to count lines). */
@@ -70,11 +73,13 @@ export function cleanPath(input: unknown, o: { win: boolean }): string {
       // Device names (CON, NUL, COM1, aux.txt), ':' (NTFS streams "a.md:secret"), trailing dots / spaces.
       const why = windowsNameProblem(seg) ?? windowsNameProblem(k);
       if (why) throw invalid(`"${seg}" ${why}`);
-      // 8.3 short names ("GIT~1", "PRIVAT~1.MD") are second names for other entries. Only the real shape
-      // (a base of at most 8 characters with its ~N, an extension of at most 3): "notes~2026.md" is ordinary.
-      const short = /^([^.~]{1,6})~(\d{1,6})(\.[^.]{0,3})?$/.exec(seg);
-      if (short && short[1].length + 1 + short[2].length <= 8) throw invalid(`"${seg}" looks like a Windows short (8.3) name; use the full name`);
     }
+    // 8.3 short names ("GIT~1", "ENV~1", "PRIVAT~1.MD") are second names for other entries: on Windows, and on
+    // Linux / WSL too for a FAT or NTFS volume (vfat, ntfs3, a mounted USB stick), where realpath keeps the short
+    // spelling, so the exact-spelling check cannot see it. Only the real shape (a base of at most 8 characters
+    // with its ~N, an extension of at most 3): "notes~2026.md" is ordinary.
+    const short = /^([^.~]{1,6})~(\d{1,6})(\.[^.]{0,3})?$/.exec(seg);
+    if (short && short[1].length + 1 + short[2].length <= 8) throw invalid(`"${seg}" looks like a Windows short (8.3) name; use the full name`);
     out.push(seg);
   }
   return out.join('/');
@@ -268,7 +273,8 @@ export class Folder {
       cacheDir: defaultCacheDir(this.env.configDir),
       // Links are never followed: one name per file, so no link can alias an excluded or hidden place.
       links: 'skip',
-      deny: [this.env.configDir],
+      // One's data folder and its text cache (on Windows in %LOCALAPPDATA%, outside the data folder).
+      deny: [this.env.configDir, defaultCacheDir(this.env.configDir)],
       ...(this.env.caseSensitive === undefined ? {} : { caseSensitive: this.env.caseSensitive }),
     });
     try {
@@ -605,23 +611,47 @@ const realOr = (p: string) => {
 export function grantProblem(folder: string, env: Pick<FolderEnv, 'configDir' | 'homedir' | 'win'>): string | null {
   const o = { homedir: env.homedir ?? os.homedir(), foldCase: env.win || process.platform !== 'linux' };
   const homes = [o.homedir, realOr(o.homedir)];
+  const cache = defaultCacheDir(env.configDir);
+  const installDirs = oneInstallDirs().flatMap((d) => [d, realOr(d)]);
   for (const f of [folder, realOr(folder)])
     for (const configDir of [env.configDir, realOr(env.configDir)])
-      for (const homedir of homes) {
-        const why = folderProblem(f, { configDir, homedir, foldCase: o.foldCase });
-        if (why) return why;
-      }
+      for (const cacheDir of [cache, realOr(cache)])
+        for (const homedir of homes) {
+          const why = folderProblem(f, { configDir, homedir, foldCase: o.foldCase, cacheDir, installDirs });
+          if (why) return why;
+        }
   return null;
 }
 
 /** Notes everywhere; other text files only with Settings → MCP server → "Also allow code and config files". */
 export const NOTE_EXTS: ReadonlySet<string> = new Set(['md', 'markdown', 'txt']);
 /** Never written, whatever the grant: Windows shell / execution types (.js runs in Windows Script Host on a
- *  double-click, .py / .pyw in the py launcher) and their Linux / macOS cousins. */
-const NEVER_EXTS = new Set(['lnk', 'url', 'scf', 'library-ms', 'bat', 'cmd', 'ps1', 'psm1', 'psd1', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'hta', 'exe', 'dll', 'msi', 'msc', 'cpl', 'scr', 'pif', 'com', 'reg', 'jar', 'appref-ms', 'application', 'desktop', 'command', 'py', 'pyw']);
+ *  double-click, .py / .pyw in the py launcher, .rb / .rbw / .pl with RubyInstaller / Perl, .ahk with
+ *  AutoHotkey, .inf / .sct / .wsc / .settingcontent-ms by Windows itself) and their Linux / macOS cousins
+ *  (shell scripts a file manager or a double-click runs, .command / .tool / .terminal on macOS, .pth files
+ *  Python runs at every start, .pyz / .pyzw zip apps). */
+const NEVER_EXTS = new Set([
+  'lnk', 'url', 'scf', 'library-ms', 'bat', 'cmd', 'ps1', 'psm1', 'psd1', 'ps1xml', 'vbs', 'vbe', 'js', 'jse', 'wsf', 'wsh', 'wsc', 'sct', 'hta', 'exe', 'dll', 'msi',
+  'msc', 'cpl', 'scr', 'pif', 'com', 'reg', 'inf', 'jar', 'appref-ms', 'application', 'settingcontent-ms', 'ahk', 'desktop', 'command', 'tool', 'terminal',
+  'py', 'pyw', 'pyz', 'pyzw', 'pth', 'sh', 'bash', 'zsh', 'fish', 'ksh', 'csh', 'tcsh', 'rb', 'rbw', 'pl', 'pm',
+]);
 const NEVER_NAMES = new Set(['desktop.ini', 'autorun.inf']);
 const NEVER = 'program, script and shortcut files are never written by AI apps';
 const NOTES_ONLY = 'only notes (.md, .markdown, .txt) can be written. Code and config files need "Also allow code and config files" in One → Settings → MCP server';
+
+/**
+ * Notes by their extension, but read later as instructions or code: AI agent instruction files (Claude Code
+ * incl. skills, Codex / opencode / Amp, Gemini CLI, Qwen Code, Crush, Warp, Copilot's *.instructions.md /
+ * *.prompt.md / *.chatmode.md; dot names like .cursorrules are hidden and no note type anyway), CMake's
+ * CMakeLists.txt (runs commands when configured), pip requirements files (-e / --index-url install code).
+ * They need the code grant, like any code or config file: what they say runs later with the user's rights.
+ * Not NEVER: keeping AGENTS.md or requirements.txt current is ordinary work once the user allows code changes.
+ */
+const OBEYED_NAMES = new Set(['claude.md', 'claude.local.md', 'agents.md', 'agents.override.md', 'agent.md', 'gemini.md', 'qwen.md', 'crush.md', 'warp.md', 'skill.md', 'cmakelists.txt']);
+const OBEYED_ENDINGS = ['.instructions.md', '.prompt.md', '.chatmode.md'];
+const isObeyedName = (key: string, name: string) =>
+  OBEYED_NAMES.has(name) || OBEYED_ENDINGS.some((x) => name.endsWith(x)) || (name.endsWith('.txt') && (name.includes('requirements') || /(?:^|\/)requirements\/[^/]+$/i.test(key)));
+const OBEYED = 'agent instructions and build files (CLAUDE.md, AGENTS.md, CMakeLists.txt, requirements.txt…) are run or obeyed later. They need "Also allow code and config files" in One → Settings → MCP server';
 
 /**
  * Why a write to `key` is refused by its file type, or null. `mapped` = the user's file type associations
@@ -641,7 +671,7 @@ export function writeTypeProblem(key: string, allowCode: boolean, mapped?: (path
     if (lang.extensions.some((e) => NEVER_EXTS.has(e.slice(1)))) return NEVER;
     if (!allowCode) return NOTES_ONLY;
   }
-  if (NOTE_EXTS.has(ext)) return null;
+  if (NOTE_EXTS.has(ext)) return allowCode || !isObeyedName(key, name) ? null : OBEYED;
   if (allowCode) return isProbablyTextName(name) ? null : 'only text files can be written (no text file extension)';
   return NOTES_ONLY;
 }

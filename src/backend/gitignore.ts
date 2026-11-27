@@ -5,16 +5,22 @@
 // within that order the last matching rule wins, and a file below an ignored folder stays ignored
 // (git cannot re-include it either).
 export interface IgnoreRule {
-  re: RegExp;
+  /** Does the pattern match this base-relative path? */
+  test(sub: string): boolean;
+  /** The pattern after the line rules (no "!", no trailing "/", no leading "/"): what the serialised set keeps. */
+  glob: string;
+  /** Has a "/" (at the start or in the middle): matched from the .gitignore's folder, else at any depth. */
+  anchored: boolean;
   negate: boolean;
   dirOnly: boolean;
 }
 
-/** One pattern line → rule (null for blanks / comments). */
+/** One pattern line → rule (null for blanks / comments). Loops, never a regex over the line (a 1 MB line of
+ *  spaces or slashes made `\s+$` / `\/+$` quadratic). */
 export function parseIgnoreLine(raw: string, foldCase: boolean): IgnoreRule | null {
-  let line = raw.replace(/\r$/, '');
+  let line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
   // Trailing spaces are ignored unless escaped with a backslash.
-  line = line.replace(/(?<!\\)\s+$/, '');
+  line = trimTrailingSpaces(line);
   if (!line || line.startsWith('#')) return null;
   let negate = false;
   if (line.startsWith('!')) {
@@ -24,23 +30,99 @@ export function parseIgnoreLine(raw: string, foldCase: boolean): IgnoreRule | nu
   let dirOnly = false;
   if (line.endsWith('/') && !line.endsWith('\\/')) {
     dirOnly = true;
-    line = line.replace(/\/+$/, '');
+    let end = line.length;
+    while (end > 0 && line[end - 1] === '/') end--;
+    line = line.slice(0, end);
   }
   if (!line) return null;
   // A slash at the start or in the middle anchors the pattern to the .gitignore's folder.
   const anchored = line.includes('/');
   if (line.startsWith('/')) line = line.slice(1);
-  const body = globToRegexSource(line);
-  const src = anchored ? `^${body}$` : `^(?:.*/)?${body}$`;
-  try {
-    return { re: new RegExp(src, foldCase ? 'i' : ''), negate, dirOnly };
-  } catch {
-    return null; // malformed class etc.: git skips those too
-  }
+  return compileRule(line, anchored, negate, dirOnly, foldCase);
 }
 
-function globToRegexSource(glob: string): string {
-  let out = '';
+function trimTrailingSpaces(line: string): string {
+  let end = line.length;
+  while (end > 0 && /\s/.test(line[end - 1])) end--;
+  if (end === line.length) return line;
+  if (end > 0 && line[end - 1] === '\\') end++; // "a\ " keeps its escaped space
+  return line.slice(0, end);
+}
+
+function compileRule(glob: string, anchored: boolean, negate: boolean, dirOnly: boolean, foldCase: boolean): IgnoreRule | null {
+  const test = globMatcher(glob, anchored, foldCase);
+  return test ? { test, glob, anchored, negate, dirOnly } : null; // malformed class etc.: git skips those too
+}
+
+// ---- glob matching: no RegExp ---------------------------------------------------------------------------
+// The patterns come from the folder (a downloaded repo's .gitignore) and run in Electron main for every file
+// event: a glob compiled to a regex (`[^/]*a[^/]*a…b`) backtracked exponentially on a long name and froze every
+// window. This is a state-set scan (like search's globSearch): O(path length × live states), whatever the input.
+
+// Token kinds (numbers, as in globSearch).
+/** One character (folded when the folder folds case). */
+const LIT = 0;
+/** `?`: one character but "/". */
+const ONE = 1;
+/** `[…]`: one character of the class (never "/", as in git). */
+const CLS = 2;
+/** `*`: any run without "/". */
+const STAR = 3;
+/** Trailing `/**`: everything below. */
+const ALL = 4;
+/** `**\/` (and the start of an unanchored pattern): nothing, or folders. Entry state: skip or go in. */
+const DIRS_IN = 5;
+/** Inside `**\/`: any character; a "/" may also end it. */
+const DIRS_BODY = 6;
+
+interface Tok {
+  k: number;
+  /** Lit: the character (lower case when folding). */
+  c?: string;
+  /** Cls: single characters, [lo, hi] code ranges, negated. */
+  chars?: string;
+  ranges?: number[];
+  neg?: boolean;
+}
+
+const lowerChar = (c: string) => {
+  const l = c.toLowerCase();
+  return l.length === 1 ? l : c;
+};
+
+/** The class between "[" and "]" (backslashes literal, "!" or "^" negates, "a-z" ranges), or null when invalid. */
+function parseClass(body: string, fold: boolean): Tok | null {
+  let cls = body;
+  const neg = cls[0] === '!' || cls[0] === '^';
+  if (neg) cls = cls.slice(1);
+  let chars = '';
+  const ranges: number[] = [];
+  for (let j = 0; j < cls.length; j++) {
+    if (cls[j + 1] === '-' && j + 2 < cls.length) {
+      const lo = cls.charCodeAt(j);
+      const hi = cls.charCodeAt(j + 2);
+      if (lo > hi) return null; // as the regex form: an invalid range drops the rule
+      ranges.push(lo, hi);
+      j += 2;
+    } else chars += cls[j];
+  }
+  return { k: CLS, chars: fold ? chars + chars.toLowerCase() + chars.toUpperCase() : chars, ranges, neg };
+}
+
+function inClass(t: Tok, ch: string, fold: boolean): boolean {
+  const probe = (c: string) => {
+    if (t.chars!.includes(c)) return true;
+    const code = c.charCodeAt(0);
+    for (let r = 0; r < t.ranges!.length; r += 2) if (code >= t.ranges![r] && code <= t.ranges![r + 1]) return true;
+    return false;
+  };
+  const hit = probe(ch) || (fold && (probe(ch.toLowerCase()) || probe(ch.toUpperCase())));
+  return hit !== !!t.neg;
+}
+
+function tokenize(glob: string, fold: boolean): Tok[] | null {
+  const toks: Tok[] = [];
+  const lit = (c: string) => toks.push({ k: LIT, c: fold ? lowerChar(c) : c });
   for (let i = 0; i < glob.length; i++) {
     const c = glob[i];
     if (c === '*') {
@@ -51,36 +133,115 @@ function globToRegexSource(glob: string): string {
           i++; // consume second '*'
           if (glob[i + 1] === '/') {
             i++;
-            out += '(?:.*/)?'; // "**/" — zero or more folders
-          } else out += '.*'; // trailing "/**" — everything inside
+            // "**/" — zero or more folders ("**/**/" is the same thing once)
+            if (toks.at(-1)?.k !== DIRS_BODY) toks.push({ k: DIRS_IN }, { k: DIRS_BODY });
+          } else toks.push({ k: ALL }); // trailing "/**" — everything inside
           continue;
         }
       }
       while (glob[i + 1] === '*') i++;
-      out += '[^/]*';
-    } else if (c === '?') out += '[^/]';
-    else if (c === '\\' && i + 1 < glob.length) out += escapeRe(glob[++i]);
+      toks.push({ k: STAR });
+    } else if (c === '?') toks.push({ k: ONE });
+    else if (c === '\\' && i + 1 < glob.length) lit(glob[++i]);
     else if (c === '[') {
       const end = glob.indexOf(']', i + 2);
-      if (end === -1) out += '\\[';
+      if (end === -1) lit('[');
       else {
-        let cls = glob.slice(i + 1, end);
-        if (cls.startsWith('!')) cls = '^' + cls.slice(1);
-        out += `[${cls.replace(/\\/g, '\\\\')}]`;
+        const t = parseClass(glob.slice(i + 1, end), fold);
+        if (!t) return null;
+        toks.push(t);
         i = end;
       }
-    } else out += escapeRe(c);
+    } else lit(c);
   }
-  return out;
+  return toks;
 }
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+/** The matcher for one pattern (whole path, like `^…$`), or null when the pattern is invalid. */
+export function globMatcher(glob: string, anchored: boolean, fold: boolean): ((s: string) => boolean) | null {
+  const body = tokenize(glob, fold);
+  if (!body) return null;
+  // Unanchored: `^(?:.*/)?body$` — the pattern may start after any "/".
+  const toks: Tok[] = anchored ? body : [{ k: DIRS_IN }, { k: DIRS_BODY }, ...body];
+  const m = toks.length;
+  const same = (t: Tok, ch: string) => t.c === ch || (fold && t.c === lowerChar(ch));
+  // Cheap rejects first (most rules miss most paths): characters the pattern must consume, its literal tail.
+  let need = 0;
+  for (const t of toks) if (t.k === LIT || t.k === ONE || t.k === CLS) need++;
+  let tail = 0;
+  while (tail < m && toks[m - 1 - tail].k === LIT) tail++;
+  const literalBody = body.every((t) => t.k === LIT);
+  // Reused per call (one thread): states of this step and the next, and the step each state was last added in.
+  let cur: number[] = [];
+  let nxt: number[] = [];
+  const mark = new Float64Array(m + 1).fill(-1);
+  let gen = 0;
+  const add = (list: number[], j: number) => {
+    for (;;) {
+      if (mark[j] === gen) return;
+      mark[j] = gen;
+      list.push(j);
+      if (j === m) return;
+      const k = toks[j].k;
+      if (k === STAR || k === ALL) j++; // may match nothing
+      else if (k === DIRS_IN) {
+        add(list, j + 1); // into the folders…
+        j += 2; // …or none
+      } else return;
+    }
+  };
+  return (s: string) => {
+    if (s.length < need) return false;
+    for (let x = 0; x < tail; x++) if (!same(toks[m - 1 - x], s[s.length - 1 - x])) return false;
+    if (literalBody) {
+      // "name" (any depth) / "a/b" (from the folder): equal, or a whole last part.
+      if (anchored) return s.length === body.length;
+      return s.length === body.length || s[s.length - body.length - 1] === '/';
+    }
+    gen++;
+    cur.length = 0;
+    add(cur, 0);
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      gen++;
+      nxt.length = 0;
+      for (const j of cur) {
+        if (j === m) continue;
+        const t = toks[j];
+        switch (t.k) {
+          case LIT:
+            if (same(t, ch)) add(nxt, j + 1);
+            break;
+          case ONE:
+            if (ch !== '/') add(nxt, j + 1);
+            break;
+          case CLS:
+            if (ch !== '/' && inClass(t, ch, fold)) add(nxt, j + 1);
+            break;
+          case STAR:
+            if (ch !== '/') add(nxt, j);
+            break;
+          case ALL:
+            add(nxt, j);
+            break;
+          case DIRS_BODY:
+            add(nxt, j);
+            if (ch === '/') add(nxt, j + 1);
+            break;
+        }
+      }
+      if (!nxt.length) return false;
+      [cur, nxt] = [nxt, cur];
+    }
+    return mark[m] === gen;
+  };
+}
 
 /** Serialised rule set (structured-clone friendly: sent from the indexer worker to the watcher). */
 export interface IgnoreSet {
   base: string;
   prefix: string;
-  rules: Array<{ source: string; flags: string; negate: boolean; dirOnly: boolean }>;
+  rules: Array<{ glob: string; anchored: boolean; negate: boolean; dirOnly: boolean }>;
 }
 
 interface RuleSet {
@@ -101,12 +262,17 @@ export class IgnoreStack {
   }
 
   toJSON(): IgnoreSet[] {
-    return this.sets.map((s) => ({ base: s.base, prefix: s.prefix, rules: s.rules.map((r) => ({ source: r.re.source, flags: r.re.flags, negate: r.negate, dirOnly: r.dirOnly })) }));
+    return this.sets.map((s) => ({ base: s.base, prefix: s.prefix, rules: s.rules.map((r) => ({ glob: r.glob, anchored: r.anchored, negate: r.negate, dirOnly: r.dirOnly })) }));
   }
 
+  /** The worker's rules, compiled again here (main): patterns, never a regex source, cross the boundary. */
   static fromJSON(sets: IgnoreSet[], foldCase = false): IgnoreStack {
     const st = new IgnoreStack(foldCase);
-    st.sets = sets.map((s) => ({ base: s.base, prefix: s.prefix, rules: s.rules.map((r) => ({ re: new RegExp(r.source, r.flags), negate: r.negate, dirOnly: r.dirOnly })) }));
+    st.sets = sets.map((s) => ({
+      base: s.base,
+      prefix: s.prefix,
+      rules: s.rules.flatMap((r) => compileRule(String(r.glob), !!r.anchored, !!r.negate, !!r.dirOnly, foldCase) ?? []),
+    }));
     return st;
   }
 
@@ -136,7 +302,7 @@ export class IgnoreStack {
       else continue;
       for (const r of s.rules) {
         if (r.dirOnly && !isDir) continue;
-        if (r.re.test(sub)) result = !r.negate;
+        if (r.test(sub)) result = !r.negate;
       }
     }
     return result;

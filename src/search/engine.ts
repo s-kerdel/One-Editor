@@ -431,13 +431,8 @@ export class SearchEngine {
         } else scanIn(e.lower, undefined, e.content, cb);
         if (!loose || any || e.s.mode !== 'markdown') return;
         const hay = cs ? e.content : e.lower;
-        if (hay.indexOf(loose.first) === -1) return; // cheap reject before running the regex
-        loose.re.lastIndex = 0;
-        for (let m = loose.re.exec(hay); m; m = loose.re.exec(hay)) {
-          const en = m.index + m[0].length;
-          if (ww && !isWholeWord(e.content, m.index, en)) continue;
-          if (cb0(m.index, en) === false) return;
-        }
+        if (hay.indexOf(loose.first) === -1) return; // cheap reject before the scan
+        loose.scan(hay, (s, en) => (ww && !isWholeWord(e.content, s, en) ? undefined : cb0(s, en)));
       },
       pathRanges: (e) => {
         const out: MatchRange[] = [];
@@ -859,13 +854,92 @@ export function compareHeadings(a: HeadingHit, b: HeadingHit) {
 
 // ------------------------------------------------------------------ helpers
 
-const INLINE_MARKS = '[`*_~=]{0,3}';
+/** Inline Markdown markers a phrase may step over at a word gap: `code`, **bold**, _em_, ~~strike~~, ==hl==. */
+const isInlineMark = (c: number) => c === 96 || c === 42 || c === 95 || c === 126 || c === 61;
+const isGapBlank = (c: number) => c === 32 || c === 9;
+/** Per document: positions past a phrase's first word the loose scan may try. Normal text needs a few per hit;
+ *  a crafted note + query stops here instead of burning the CPU (MCP: the server ignores off / revoke meanwhile). */
+const LOOSE_STEPS = 1_000_000;
 
-/** Regex for a phrase whose word gaps may also contain inline Markdown markers (`code`, **bold**, _em_, ==hl==). */
-function loosePhrase(needle: string): { re: RegExp; first: string } {
+export interface LoosePhrase {
+  /** The first word: a document without it cannot match (cheap reject). */
+  first: string;
+  /** Every match in `hay`, left to right, not overlapping, until `cb` returns false. */
+  scan(hay: string, cb: (start: number, end: number) => boolean | void): void;
+}
+
+/**
+ * A phrase whose word gaps may also hold inline Markdown markers ("build before pushing" finds
+ * "`npm run build` before pushing"): each gap is up to 3 markers, spaces / tabs, up to 3 markers. A scanner,
+ * not a RegExp: words made only of marker characters ("** ** **") made the regex form
+ * (`w[`*_~=]{0,3}[ \t]+[`*_~=]{0,3}w…`) backtrack exponentially on a note full of marker runs, in the MCP
+ * server and the desktop search alike. Same matches as that regex: the leftmost start, then its own (greedy)
+ * order of gap splits; a (word, position) is tried once per start, and a document gets LOOSE_STEPS at most.
+ */
+export function loosePhrase(needle: string): LoosePhrase {
   const words = needle.trim().split(/\s+/);
-  const esc = (w: string) => w.replace(/[.*+?^${}()|[\]\\\/]/g, '\\$&');
-  return { re: new RegExp(words.map(esc).join(`${INLINE_MARKS}[ \\t]+${INLINE_MARKS}`), 'g'), first: words[0] };
+  const last = words.length - 1;
+  const marksAt = (hay: string, i: number, max: number) => {
+    let n = 0;
+    while (n < max && i + n < hay.length && isInlineMark(hay.charCodeAt(i + n))) n++;
+    return n;
+  };
+  return {
+    first: words[0],
+    scan(hay, cb) {
+      const n = hay.length;
+      let budget = LOOSE_STEPS;
+      const seen = new Set<number>();
+      /** Where the gap after a word ending at `q` ends (the next word starts there or up to 3 markers on), or -1. */
+      const gapEnd = (q: number) => {
+        const a = marksAt(hay, q, 4);
+        if (a > 3) return -1;
+        let s = q + a;
+        if (s >= n || !isGapBlank(hay.charCodeAt(s))) return -1; // the blank run is never split: words hold no blank
+        while (s < n && isGapBlank(hay.charCodeAt(s))) s++;
+        return s;
+      };
+      /** End of the phrase whose first word is at `start`, -1 = none, -2 = out of steps. Depth first, gap
+       *  markers greedy (3 before 0) like the regex; a state already tried for this start failed. */
+      const from = (start: number): number => {
+        const q0 = start + words[0].length;
+        if (!last) return q0;
+        const s0 = gapEnd(q0);
+        if (s0 === -1) return -1;
+        if (seen.size) seen.clear();
+        const stack: number[] = [];
+        const push = (k: number, s: number) => {
+          const mb = marksAt(hay, s, 3);
+          for (let b = 0; b <= mb; b++) stack.push(k, s + b); // b = mb ends on top: tried first
+        };
+        push(1, s0);
+        while (stack.length) {
+          if (--budget < 0) return -2;
+          const at = stack.pop()!;
+          const k = stack.pop()!;
+          const key = k * (n + 1) + at;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          if (!hay.startsWith(words[k], at)) continue;
+          const q = at + words[k].length;
+          if (k === last) return q;
+          const s = gapEnd(q);
+          if (s !== -1) push(k + 1, s);
+        }
+        return -1;
+      };
+      for (let i = hay.indexOf(words[0]); i !== -1; ) {
+        const end = from(i);
+        if (end === -2) return;
+        if (end === -1) {
+          i = hay.indexOf(words[0], i + 1);
+          continue;
+        }
+        if (cb(i, end) === false) return;
+        i = hay.indexOf(words[0], end);
+      }
+    },
+  };
 }
 
 function now() {

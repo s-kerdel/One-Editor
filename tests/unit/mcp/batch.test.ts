@@ -1,7 +1,7 @@
 // Fewer calls: replace_text all, replace_in_files (preview, then apply: one undo group), batch move
 // (paths + to_folder) and batch delete (paths: one undo group for the files). Sweeping ones ask the user
 // first: a batch with a folder or over MCP_CONFIRM_OVER items, a replace over MCP_CONFIRM_OVER files; the
-// question is bound to the exact operation. Trash: a fake one (never the real bin).
+// question is bound to the exact operation; a client that cannot ask is refused them. Trash: a fake one.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -74,7 +74,14 @@ async function rig(o: { era?: 'legacy' | 'modern'; elicit?: boolean; quota?: Wri
   const revert = async (group: string) => revertGroup(s.pool.list()[0], path.join(cfg, JOURNAL_DIR), group, async () => {});
   return { root, s, out, put, get, call, raw, rows, revert, trashed };
 }
-const codeOf = (t: string) => /· confirm: (\S+)$/.exec(t)![1];
+/** The next elicitation/create the server sent (legacy era), once it is there. */
+async function asked(r: { out: any[] }) {
+  for (let i = 0; i < 400 && !r.out.some((m) => m.method === 'elicitation/create'); i++) await new Promise((res) => setTimeout(res, 5));
+  const req = r.out.find((m) => m.method === 'elicitation/create');
+  r.out.splice(r.out.indexOf(req), 1);
+  return req;
+}
+const accept = { action: 'accept', content: { confirm: true } };
 const notes = (k: number, text = 'old name here\n') => Object.fromEntries(Array.from({ length: k }, (_, i) => [`n/${String(i).padStart(2, '0')}.md`, text]));
 
 describe('replace_text all', () => {
@@ -126,29 +133,28 @@ describe('replace_in_files', () => {
     expect(t).toMatch(/^Replaced 3 in 2 files · skipped 1: c\.md \(EQUOTA\)/);
   });
 
-  it(`${MCP_CONFIRM_OVER} files apply at once; ${MCP_CONFIRM_OVER + 1} ask first (two steps), bound to that exact replace`, async () => {
+  it(`${MCP_CONFIRM_OVER} files apply at once; ${MCP_CONFIRM_OVER + 1} need the user's OK: refused for a client that cannot ask (no code in the answer)`, async () => {
     const r = await rig({ files: { ...notes(MCP_CONFIRM_OVER), 'm/x.md': 'old name here\n' } });
     expect((await r.call('replace_in_files', { find: 'old name', replace: 'new name', query: 'path:n/' })).text).toMatch(/^Replaced 10 in 10 files/);
     r.put('n/10.md', 'new name here\n');
     await expect.poll(async () => (await r.call('replace_in_files', { find: 'new name', replace: 'x', query: 'path:n/', preview: true })).text, { timeout: 8000 }).toMatch(/^11 matches in 11 files/);
-    // 11 files now: asked, nothing changed.
-    const ask = await r.call('replace_in_files', { find: 'new name', replace: 'final', query: 'path:n/' });
-    expect(ask.isError).toBe(false);
-    expect(ask.text).toMatch(/^Replace "new name" with "final" in 11 files \(11 matches\): "n\/00\.md", "n\/01\.md", "n\/02\.md" and 8 more\? .* · confirm: \S+$/);
+    // 11 files now: refused, nothing changed, and nothing the model could send back as the user's yes.
+    const no = await r.call('replace_in_files', { find: 'new name', replace: 'final', query: 'path:n/' });
+    expect(no.isError).toBe(true);
+    expect(no.text).toBe("ENOTSUP: Not replaced: replacing in more than 10 files needs the user's OK, and this app cannot ask for it. The user can do it in One, or in an AI app that can ask (MCP form elicitation).");
     expect(r.get('n/00.md')).toBe('new name here\n');
-    const code = codeOf(ask.text);
-    // A code for this replace cannot apply another one.
-    expect((await r.call('replace_in_files', { find: 'new name', replace: 'OTHER', query: 'path:n/', confirm: code })).text).toMatch(/^ECONFIRM: Not replaced: that confirm code is for something else/);
-    expect((await r.call('replace_in_files', { find: 'new name', replace: 'final', query: 'path:n/', confirm: code })).text).toMatch(/^Replaced 11 in 11 files/);
-    expect(r.get('n/05.md')).toBe('final here\n');
+    expect((await r.call('replace_in_files', { find: 'new name', replace: 'final', query: 'path:n/', confirm: 'AAAA-BBBB' })).text).toMatch(/^EINVAL: Unknown parameter "confirm"/);
+    expect(r.get('n/05.md')).toBe('new name here\n');
     expect(r.get('m/x.md')).toBe('old name here\n');
   });
 
-  it('a file changed since the summary → refused with a new one', async () => {
-    const r = await rig({ files: notes(MCP_CONFIRM_OVER + 1) });
-    const code = codeOf((await r.call('replace_in_files', { find: 'old', replace: 'new' })).text);
+  it('a file changed while the user was asked → not replaced', async () => {
+    const r = await rig({ elicit: true, files: notes(MCP_CONFIRM_OVER + 1) });
+    const pending = r.call('replace_in_files', { find: 'old', replace: 'new' });
+    const req = await asked(r);
     r.put('n/03.md', 'old name here, edited\n');
-    expect((await r.call('replace_in_files', { find: 'old', replace: 'new', confirm: code })).text).toMatch(/^ECONFIRM: Not replaced: the files changed since the summary\. Replace "old" with "new" in 11 files/);
+    await r.s.protocol.handle({ jsonrpc: '2.0', id: req.id, result: accept });
+    expect((await pending).text).toBe('EXTERNAL_CHANGE: Not replaced: the files changed while the user was asked. Try again.');
     expect(r.get('n/00.md')).toBe('old name here\n');
   });
 
@@ -213,16 +219,19 @@ describe('batch delete (paths)', () => {
     expect(r.get('n/04.md')).toBe('old name here\n');
   });
 
-  it(`${MCP_CONFIRM_OVER + 1} files ask first (one question with totals and the first names); the code is bound to the set`, async () => {
-    const r = await rig({ files: notes(MCP_CONFIRM_OVER + 2) });
-    const all = Object.keys(notes(MCP_CONFIRM_OVER + 2));
-    const list = all.slice(0, MCP_CONFIRM_OVER + 1);
-    const ask = (await r.call('delete', { paths: list })).text;
-    expect(ask).toMatch(/^Delete 11 files: "n\/00\.md", "n\/01\.md", "n\/02\.md" and 8 more\? 11 files, 0 folders, 154 B in all\. It goes to the (?:Recycle Bin|Trash)\. .* · confirm: \S+$/);
+  it(`${MCP_CONFIRM_OVER + 1} files ask first (one question with totals and the first names); refused for a client that cannot ask`, async () => {
+    const files = notes(MCP_CONFIRM_OVER + 2);
+    const list = Object.keys(files).slice(0, MCP_CONFIRM_OVER + 1);
+    const no = await rig({ files });
+    expect((await no.call('delete', { paths: list })).text).toBe("ENOTSUP: Not deleted: deleting more than 10 items at once needs the user's OK, and this app cannot ask for it. The user can do it in One, or in an AI app that can ask (MCP form elicitation).");
+    expect(no.trashed).toEqual([]);
+    const r = await rig({ elicit: true, files });
+    const pending = r.call('delete', { paths: list });
+    const req = await asked(r);
+    expect(req.params.message).toBe('Delete 11 files: "n/00.md", "n/01.md", "n/02.md" and 8 more? 11 files, 0 folders, 154 B in all. It goes to the ' + BIN + '.');
     expect(r.trashed).toEqual([]);
-    const code = codeOf(ask);
-    expect((await r.call('delete', { paths: all.slice(1), confirm: code })).text).toMatch(/^ECONFIRM: Not deleted: that confirm code is for something else/);
-    expect((await r.call('delete', { paths: list, confirm: code })).text).toMatch(/^Deleted 11 of 11 items/);
+    await r.s.protocol.handle({ jsonrpc: '2.0', id: req.id, result: accept });
+    expect((await pending).text).toMatch(/^Deleted 11 of 11 items/);
   });
 
   it('a batch with a folder asks once for everything; then folders go whole, files keep undo copies', async () => {

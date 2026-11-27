@@ -1,6 +1,6 @@
 // Folder deletes over stdio with the official SDK client: the built server asks the user through MCP
-// elicitation (the client's handler answers accept / decline / cancel / confirm=false, or never), and falls
-// back to the two-step summary + code for a client without elicitation. Trash: SEC_EDIT_TRASH_DIR inside
+// elicitation (the client's handler answers accept / decline / cancel / confirm=false, or never), and refuses
+// a client without elicitation (no code the model could send back for the user). Trash: SEC_EDIT_TRASH_DIR inside
 // the run folder (a test hook, dead when packaged). No browser: E2E_SKIP_BUILD=1 skips the renderer build.
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
@@ -81,18 +81,16 @@ for (const [label, answer, want, deleted] of [
   });
 }
 
-test('no elicitation: a summary and a code first; the code deletes once; a file delete asks nothing', async () => {
+test('no elicitation: a folder delete is refused (no code, nothing deleted); a file delete asks nothing', async () => {
   const r = await connect(null);
   try {
     const first = await r.call({ path: 'proj' });
-    expect(first.startsWith(SUMMARY)).toBe(true);
-    const code = /· confirm: (\S+)$/.exec(first)![1];
+    expect(first).toBe("ENOTSUP: Not deleted: deleting a folder needs the user's OK, and this app cannot ask for it. The user can do it in One, or in an AI app that can ask (MCP form elicitation).");
+    expect(fs.existsSync(path.join(r.ws, 'proj/.git/config'))).toBe(true);
+    expect(await r.call({ path: 'proj', confirm: 'ZZZZ-ZZZZ' })).toMatch(/^EINVAL: Unknown parameter "confirm"/);
     expect(fs.existsSync(path.join(r.ws, 'proj'))).toBe(true);
-    expect(await r.call({ path: 'proj', confirm: 'ZZZZ-ZZZZ' })).toMatch(/^ECONFIRM: Not deleted: that confirm code is not valid/);
-    expect(await r.call({ path: 'proj', confirm: code })).toMatch(/^Deleted folder proj/);
-    expect(fs.existsSync(path.join(r.ws, 'proj'))).toBe(false);
     expect(await r.call({ path: 'keep.md' })).toMatch(/^Deleted keep\.md \(Recycle Bin\) · undo: /);
-    expect(fs.readdirSync(path.join(r.dir, 'trash')).sort()).toEqual(['keep.md', 'proj']);
+    expect(fs.readdirSync(path.join(r.dir, 'trash')).sort()).toEqual(['keep.md']);
   } finally {
     await r.client.close();
   }

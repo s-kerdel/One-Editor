@@ -116,10 +116,17 @@ describe('setupSnippets', () => {
     expect(tomlString('a"b\\c\'')).toBe('"a\\"b\\\\c\'"');
   });
 
-  it('Claude Code: one command line with quoted paths', () => {
-    const lin = setupSnippets({ command: '/opt/One App/one', args: ['/opt/One App/resources/app.asar.unpacked/dist/mcp/cli.mjs', '--stdio'], env: { ELECTRON_RUN_AS_NODE: '1' } }, 'linux');
-    expect(lin[3].text).toBe('claude mcp add --scope user --env ELECTRON_RUN_AS_NODE=1 one -- "/opt/One App/one" "/opt/One App/resources/app.asar.unpacked/dist/mcp/cli.mjs" --stdio');
+  it('Claude Code: a ~/.claude.json "mcpServers" entry, never a command line (the token would stay in shell history)', () => {
+    const launch = { command: '/opt/One App/one', args: ['/opt/One App/resources/app.asar.unpacked/dist/mcp/cli.mjs', '--stdio'], env: { ELECTRON_RUN_AS_NODE: '1', ONE_MCP_TOKEN: 'one_secret' } };
+    const lin = setupSnippets(launch, 'linux');
+    expect(lin[3]).toMatchObject({ id: 'claude-code', lang: 'json' });
+    expect(JSON.parse(lin[3].text)).toEqual({ mcpServers: { one: { type: 'stdio', ...launch } } });
+    expect(lin[3].text).not.toMatch(/claude mcp|--env/);
+    expect(lin[3].where).toMatch(/^~\/\.claude\.json: quit Claude Code/);
+    expect(setupSnippets(launch, 'win32')[3].where).toMatch(/^%USERPROFILE%\\\.claude\.json/);
     expect(lin[0].where).toContain('~/.lmstudio/mcp.json');
+    // No snippet is a shell command any more.
+    for (const p of ['linux', 'win32', 'darwin']) expect(setupSnippets(launch, p).map((x) => x.lang)).not.toContain('shell');
   });
 });
 

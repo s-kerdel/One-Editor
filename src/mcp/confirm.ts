@@ -1,25 +1,18 @@
-// Folder deletes need the user's OK, asked through MCP itself (no OS dialog):
-//  - clients with elicitation: the question goes to the user (protocol.ts CallContext.confirm);
-//  - others: two steps. The first `delete` deletes nothing and answers a summary plus a one-time code
-//    (random, bound to the folder and its current contents, 5 minutes); a second call with that code deletes.
+// Sweeping or unrevertable changes (folder deletes, big batch deletes, replace_in_files over
+// MCP_CONFIRM_OVER files) need the user's OK, asked through MCP itself (no OS dialog): the client shows the
+// question to the user (protocol.ts CallContext.confirm: elicitation / input_required). A client that cannot
+// ask is refused (tools/write.ts askUser): the answer never carries anything the model could use to say yes
+// for the user (the one-time code it once did let a prompt-injected model confirm its own deletes).
 // What the user is shown is built here: the folder-relative path and a few hidden names, sanitized
 // (no control / bidi / zero-width characters, quotes that cannot close the quoted path, long names cut).
 import crypto from 'node:crypto';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { ToolError, binWord } from './protocol';
+import { INVISIBLE } from '../shared/mcp';
 
-export const CONFIRM_TTL_MS = 5 * 60_000;
-const MAX_CODES = 32;
 /** A walk this big is refused (the answer would take too long): delete it in One. */
 export const MAX_SURVEY_ENTRIES = 1_000_000;
-const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // Crockford: no I, L, O, U
-
-// Unicode's own classes instead of a hand list: controls (Cc), format characters (Cf: bidi, zero-width, soft
-// hyphen, tag characters) and every default-ignorable code point (fillers, variation selectors, U+034F, \u2026), plus
-// the line/paragraph separators and the specials block. A run of them becomes one visible "\ufffd" rather than
-// vanishing: "photos" + hidden tag characters must not look exactly like the real "photos" folder.
-const INVISIBLE = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029\ufff0-\ufffb]+/gu;
 
 /** One name as the user sees it: visible characters only, no quote that could end the quoted path. */
 export function shownName(s: string, max: number): string {
@@ -119,36 +112,4 @@ export function batchSummary(items: Array<{ key: string; survey: Survey | null; 
   const first = items.slice(0, 3).map((i) => `"${shownPath(i.key)}"`).join(', ') + (items.length > 3 ? ` and ${items.length - 3} more` : '');
   const what = [folders.length && `${count(folders.length, 'folder')} with everything in them`, files && count(files, 'file')].filter(Boolean).join(' and ');
   return `Delete ${what}: ${first}? ${count(inAll.files, 'file')}, ${count(inAll.folders, 'folder')}, ${sizeText(bytes)} in all${hiddenPart(hidden, hiddenCount)}. ${whereItGoes(platform)}`;
-}
-
-export type CodeCheck = 'ok' | 'unknown' | 'expired' | 'used' | 'other' | 'changed';
-
-/** One-time codes for the two-step folder delete (per server process: one client). */
-export class ConfirmCodes {
-  private codes = new Map<string, { target: string; fingerprint: string; exp: number; used: boolean }>();
-
-  constructor(private readonly now: () => number = Date.now) {}
-
-  mint(target: string, fingerprint: string): string {
-    const t = this.now();
-    for (const [c, v] of this.codes) if (v.exp < t) this.codes.delete(c); // used ones stay until then: "used already"
-    while (this.codes.size >= MAX_CODES) this.codes.delete(this.codes.keys().next().value!);
-    const bytes = crypto.randomBytes(8);
-    const code = Array.from(bytes, (b) => CODE_ALPHABET[b & 31]).join('');
-    this.codes.set(code, { target, fingerprint, exp: t + CONFIRM_TTL_MS, used: false });
-    return `${code.slice(0, 4)}-${code.slice(4)}`;
-  }
-
-  /** Spends the code when it fits: the same folder, unchanged, in time, never used. */
-  take(raw: string, target: string, fingerprint: string): CodeCheck {
-    const code = raw.toUpperCase().replace(/[\s-]/g, '');
-    const v = this.codes.get(code);
-    if (!v) return 'unknown';
-    if (v.used) return 'used';
-    if (this.now() > v.exp) return 'expired';
-    if (v.target !== target) return 'other';
-    v.used = true; // spent either way: a changed folder needs a new summary and code
-    if (v.fingerprint !== fingerprint) return 'changed';
-    return 'ok';
-  }
 }

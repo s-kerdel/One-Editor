@@ -82,20 +82,20 @@ grep -n "keyword" docs/llm/09-reference*.md
   - Copying again asks first: "Copy setup with the access token?".
   - Any copy is cleared after 2 minutes if the clipboard still holds it.
   - `McpStatus.tokens` carries names, dates, the hint.
-- Clients pass it in `env` (`ONE_MCP_TOKEN`), **never argv** (every snippet; the CLI refuses any argument containing `one_` + 20 token characters, and no CLI message repeats an argument).
+- Clients pass it in `env` (`ONE_MCP_TOKEN`), **never argv** (every snippet is a config file, Claude Code's too: a `~/.claude.json` `mcpServers` entry, not `claude mcp add --env …`, which shell history keeps; the CLI refuses any argument containing `one_` + 20 token characters, and no CLI message repeats an argument).
 - `cli.ts` hashes it at startup and compares with `timingSafeEqual` against every stored hash.
   - It refuses (one stderr line, exit 1, no stdout) when the token is missing / unknown / revoked.
   - It drops it from `process.env`.
   - It exits when it is revoked while running.
   - Audit rows carry the token's id and name. `lastUsed` is set by main from the activity log.
-- Refused folders (`src/mcp/grant.ts` `folderProblem`): a drive root, the home folder itself, anything around the app data folder — checked by main when adding **and by the server for every mcp.json entry** (the file is not trusted).
+- Refused folders (`src/mcp/grant.ts` `folderProblem`): a drive root, the home folder itself, anything inside or around the app data folder, its text cache (`defaultCacheDir`: `%LOCALAPPDATA%\sec-edit` on Windows) or One's program folders (`oneInstallDirs`: the executable's folder, `process.resourcesPath`, a macOS bundle's `Contents`; in a dev run that is `node_modules/electron/dist`, so the checkout itself is refused) — checked by main when adding **and by the server for every mcp.json entry** (the file is not trusted). The MCP workspace also denies the cache folder (`deny`).
 - The server refuses to run while off or while settings.json exists but cannot be parsed (at run time it keeps the last good settings: exclusions never fail open), exits once switched off (it polls mcp.json); a removed folder fails every call in flight at its next disk step and never wakes again.
 
 ## One resolver
 
 - **One resolver** for every path a tool or resource takes: `Folder.resolve()` (`src/mcp/folders.ts`). It checks in this order:
-  1. **String rules first** (`cleanPath`): no `..`, no absolute / drive / UNC / `\\?\` paths, `/` only, no control characters, no Unicode look-alikes, Windows name rules incl. 8.3 short names on Windows.
-  2. **Then the one visibility rule** (`Visibility`): dot segments and `KEY_FILE_GLOBS` built in (never from settings.json), plus the user's excludeGlobs. It is case-, NFC- and NFKC-insensitive.
+  1. **String rules first** (`cleanPath`): no `..`, no absolute / drive / UNC / `\\?\` paths, `/` only, no control characters, no Unicode look-alikes, Windows name rules on Windows, 8.3 short names (`GIT~1`) on **every** platform (Linux / WSL reach FAT and NTFS volumes too, and realpath keeps the short spelling there).
+  2. **Then the one visibility rule** (`Visibility`): dot segments and `KEY_FILE_GLOBS` built in (never from settings.json: keys, key stores, `.asc`, `.ovpn`, `.tfvars`, `.tfstate`, netrc, kubeconfigs…), plus the user's excludeGlobs. It is case-, NFC- and NFKC-insensitive.
   3. **Then `Workspace.real()`.**
   4. **Then no links at all:**
      - the MCP workspace runs with `links: 'skip'` (links are not listed, watched, indexed or followed);
@@ -104,7 +104,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 - Reads re-check at the moment of the read (`readResolved`).
 - Settings changes swap the visibility at once and drop the indexes (totals, tags, typo corrections never outlive an exclusion).
 - Hidden answers `ENOENT` exactly like missing; messages carry the folder-relative path only — never a raw exception message (Node's carry host paths).
-- Searches never run a regex (`noRegex`; `path:` globs use `globSearch`, a state-set matcher); structure parsing (`shared/markdown-lines.ts`, `knowledge/sections.ts`) is linear and skips lines over 10k characters — keep it that way, the desktop app parses the same notes.
+- Searches never run a regex (`noRegex`; `path:` globs use `globSearch`, a state-set matcher; a phrase across inline markers uses `loosePhrase`, a scanner with a per-document step budget; `.gitignore` patterns use `globMatcher`, a state-set matcher); structure parsing (`shared/markdown-lines.ts`, `knowledge/sections.ts`) is linear and skips lines over 10k characters — keep it that way, the desktop app parses the same notes.
 - At most 4 calls run at once; JSON-RPC batches are refused.
 - Never imports `src/main/vault*`, never reads `vault.json`, never resolves `{{variables}}`;
   - no git, terminal, settings writes, network (stdio only) or processes of its own;

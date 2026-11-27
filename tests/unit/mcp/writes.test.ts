@@ -237,9 +237,9 @@ describe('move, create_folder, delete', () => {
     await ok('delete', { path: 'trash-me.md' });
     expect(fs.existsSync(abs('trash-me.md'))).toBe(false);
     expect(fs.readdirSync(trashDir).some((n) => n.startsWith('trash-me.md'))).toBe(true);
-    const asked = await call('delete', { path: 'sub' }); // no elicitation here: a summary and a code, nothing deleted
-    expect(asked.isError).toBe(false);
-    expect(asked.text).toMatch(/^Delete folder "sub" and everything in it\? .* · confirm: [0-9A-Z]{4}-[0-9A-Z]{4}$/);
+    const asked = await call('delete', { path: 'sub' }); // no elicitation here: refused, nothing deleted
+    expect(asked.isError).toBe(true);
+    expect(asked.text).toMatch(/^ENOTSUP: Not deleted: deleting a folder needs the user's OK/);
     expect(fs.existsSync(abs('sub'))).toBe(true);
     expect(await err('delete', { path: 'image.png' })).toMatch(/only notes/);
     expect(await err('delete', { path: 'bin.md' })).toMatch(/Binary/);

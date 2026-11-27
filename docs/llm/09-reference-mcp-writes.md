@@ -23,7 +23,8 @@ grep -n "keyword" docs/llm/09-reference*.md
 - **First, the resolver:** every target goes through `Folder.resolveTarget()`.
   - Hidden / key / excluded names, links, hard links and spelling aliases → one neutral `EACCES: Cannot change <path>`, so exclusions cannot be probed.
   - File types are checked by `writeTypeProblem`: notes `.md .markdown .txt` only, unless the folder has `allowCode` (mcp.json).
-  - `NEVER_EXTS` (shell / script / shortcut types incl. `.js` `.py`): never.
+  - Notes that other tools obey or run later need `allowCode` too (`OBEYED_NAMES`: `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `SKILL.md`, `*.instructions.md` / `*.prompt.md`…, `CMakeLists.txt`, `requirements*.txt` and `requirements/*.txt`). Not `NEVER`: keeping them current is ordinary work once code changes are allowed.
+  - `NEVER_EXTS` (shell / script / shortcut / auto-run types incl. `.js` `.py` `.sh` `.bash` `.zsh` `.rb` `.pl` `.pth` `.inf`): never.
   - No part may be a link.
   - The existing part must be spelled exactly as asked.
 - **Then the existing `Workspace` write path**, with `folder.guard()` as its `WriteGuard`.
@@ -80,8 +81,9 @@ grep -n "keyword" docs/llm/09-reference*.md
 - **How the question is asked depends on the client:**
   - Legacy clients that declared form elicitation (2025-06-18+) get `elicitation/create` (our ids `one-ask-N`, 120 s, then `notifications/cancelled`).
   - 2026-07-28 clients that declared it get `resultType: "input_required"` (MRTR) with an HMAC-sealed, expiring, single-use `requestState`.
-  - Others get two steps: a summary plus a one-time code (random, 5 min, spent on use).
-- Answer and code are bound to the exact operation (`target`: tool, folder, path set or find + replace + scope + case) and a fingerprint of the contents (every entry / file stamp): anything else or changed contents asks again.
+  - **Others are refused** (`ENOTSUP`: "… needs the user's OK, and this app cannot ask for it. The user can do it in One, or in an AI app that can ask"). Nothing in that answer lets the model say yes: the former two-step one-time code reached the model, so a prompt-injected model confirmed its own deletes (audit H5). There is no `confirm` parameter.
+  - Operations that never asked (a file delete, a batch of up to 10 files, `replace_in_files` on up to 10 files) work as before for every client.
+- The answer is bound to the exact operation (`target`: tool, folder, path set or find + replace + scope + case) and a fingerprint of the contents (every entry / file stamp): anything else or changed contents asks again.
 - Only `accept` with `confirm: true` proceeds, after a re-survey.
 - Folder trash: one call per folder, no journal copy (hidden contents are never read): audit row `delete (folder)`, note "restore from the Recycle Bin", no Revert.
 - **Windows: by the user's choice no Recycle-Bin pre-check and no Windows prompt (`OnlyErrorDialogs`).**

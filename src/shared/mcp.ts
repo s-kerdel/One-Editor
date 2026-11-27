@@ -167,7 +167,8 @@ export const EMPTY_MCP_CONFIG: McpConfig = { version: 1, enabled: false, folders
 /** Grants live in mcp.json (main, behind native dialogs). A page may set only the result limits under `mcp.`;
  *  every other `mcp.*` key (mcp.allowCode, mcp.journal… of earlier builds) is refused (deny by default). */
 /** Sweeping MCP actions ask the user first (folder deletes always): a batch delete of more items than this, a
- *  replace_in_files over more files. Revert covers everything else; this is what it cannot, or what reaches wide. */
+ *  replace_in_files over more files. Revert covers everything else; this is what it cannot, or what reaches wide.
+ *  A client that cannot ask (no form elicitation) is refused them: the user does them in One. */
 export const MCP_CONFIRM_OVER = 10;
 
 export const isMainOwnedKey = (k: string) => k.startsWith('mcp.') && k !== 'mcp.maxReadKB' && k !== 'mcp.maxResults';
@@ -305,7 +306,16 @@ export interface McpActivity {
   items?: number | null;
 }
 
-const short = (v: unknown, max: number): string | null => (typeof v === 'string' && v ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max) : null);
+// Unicode's own classes instead of a hand list: controls (Cc), format characters (Cf: bidi, zero-width, soft
+// hyphen, tag characters) and every default-ignorable code point (fillers, variation selectors, U+034F, \u2026), plus
+// the line/paragraph separators and the specials block. A run of them becomes one visible "\ufffd" rather than
+// vanishing: "photos" + hidden tag characters must not look exactly like the real "photos" folder.
+// Used for what the user reads: confirmation questions (mcp/confirm.ts) and activity rows (parseActivityLine).
+export const INVISIBLE = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029\ufff0-\ufffb]+/gu;
+
+/** A text field of a row: C0 controls dropped, other invisible runs (bidi overrides, zero-width…) shown as one
+ *  visible mark, so a file name cannot read as another one in Recent activity. */
+const short = (v: unknown, max: number): string | null => (typeof v === 'string' && v ? v.replace(/[\u0000-\u001f\u007f]/g, '').replace(INVISIBLE, '\uFFFD').slice(0, max) : null);
 
 /** One audit line → a row, or null. The file is written by another process: every field is checked. */
 export function parseActivityLine(line: string): McpActivity | null {
@@ -355,10 +365,8 @@ export function tomlString(s: string): string {
   return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\u0000-\u001f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)}"`;
 }
 
-/** Quotes one argument for the Claude Code command line (POSIX shell / PowerShell / cmd alike for plain paths). */
-const shellArg = (s: string) => (/^[\w./:=@%+-]+$/.test(s) ? s : `"${s.replace(/(["$`\\])/g, (c) => (c === '\\' ? '\\' : `\\${c}`))}"`);
-
-/** Ready-to-paste configs. LM Studio and Codex first (the main clients), then Claude. */
+/** Ready-to-paste configs. LM Studio and Codex first (the main clients), then Claude. Every one is a config
+ *  file (the token sits in its env block): never a command line, which shell history and process lists keep. */
 export function setupSnippets(l: McpLaunch, platform: string): SetupSnippet[] {
   const server = { command: l.command, args: l.args, env: l.env };
   const json = JSON.stringify({ mcpServers: { one: server } }, null, 2);
@@ -372,12 +380,14 @@ export function setupSnippets(l: McpLaunch, platform: string): SetupSnippet[] {
     `args = [${l.args.map(tomlString).join(', ')}]`,
     ...(env.length ? [`env = { ${env.map(([k, v]) => `${k} = ${tomlString(v)}`).join(', ')} }`] : []),
   ].join('\n');
-  const claudeCode = ['claude mcp add --scope user', ...env.map(([k, v]) => `--env ${k}=${shellArg(v)}`), 'one --', shellArg(l.command), ...l.args.map(shellArg)].join(' ');
+  // Claude Code: its user-scope servers live in ~/.claude.json ("mcpServers"); `claude mcp add --env …` would
+  // put the token on a command line.
+  const claudeCode = JSON.stringify({ mcpServers: { one: { type: 'stdio', ...server } } }, null, 2);
   const desktopWhere = win ? '%APPDATA%\\Claude\\claude_desktop_config.json' : platform === 'darwin' ? '~/Library/Application Support/Claude/claude_desktop_config.json' : 'claude_desktop_config.json (Claude Desktop settings → Developer → Edit config)';
   return [
     { id: 'lmstudio', title: 'LM Studio', where: `${home}${sep}.lmstudio${sep}mcp.json (LM Studio → Program → Install → Edit mcp.json)`, lang: 'json', text: json },
     { id: 'codex', title: 'Codex CLI', where: `${home}${sep}.codex${sep}config.toml`, lang: 'toml', text: codex },
     { id: 'claude-desktop', title: 'Claude Desktop', where: desktopWhere, lang: 'json', text: json },
-    { id: 'claude-code', title: 'Claude Code', where: 'Run once in a terminal', lang: 'shell', text: claudeCode },
+    { id: 'claude-code', title: 'Claude Code', where: `${home}${sep}.claude.json: quit Claude Code, then add "one" to its top-level "mcpServers" (all projects)`, lang: 'json', text: claudeCode },
   ];
 }

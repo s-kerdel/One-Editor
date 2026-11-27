@@ -1,7 +1,8 @@
 // Folder delete and move (`delete`, `move`): a folder delete takes everything (hidden items too) to the
-// Recycle Bin after the user's OK, asked through MCP itself: legacy elicitation (a request to the client),
-// 2026-07-28 input_required (MRTR), or two steps with a one-time code. No OS dialog anywhere. Folder moves
-// take hidden items along and keep every entry's visibility. Trash: a fake one (never the real bin).
+// Recycle Bin after the user's OK, asked through MCP itself: legacy elicitation (a request to the client) or
+// 2026-07-28 input_required (MRTR). A client that cannot ask is refused (audit H5: a one-time code in the
+// answer let the model confirm for the user). No OS dialog anywhere. Folder moves take hidden items along
+// and keep every entry's visibility. Trash: a fake one (never the real bin).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +10,7 @@ import crypto from 'node:crypto';
 import { DEFAULT_SETTINGS, type Settings } from '../../../src/shared/api';
 import { OneMcpServer } from '../../../src/mcp/server';
 import { WriteQuota } from '../../../src/mcp/writes';
-import { binWord, CONFIRM_TTL_MS, ConfirmCodes, folderSummary, shownName, shownPath } from '../../../src/mcp/confirm';
+import { binWord, folderSummary, shownName, shownPath } from '../../../src/mcp/confirm';
 import { trashTimeout, windowsTrashCall } from '../../../src/backend/trash';
 import { parseActivityLine } from '../../../src/shared/mcp';
 
@@ -51,7 +52,7 @@ interface Rig {
   rpc(method: string, params?: Record<string, unknown>): Promise<any>;
   call(name: string, args: Record<string, unknown>, extra?: Record<string, unknown>): Promise<any>;
 }
-async function rig(o: { era: 'legacy' | 'modern'; elicit: boolean; timeoutMs?: number; codes?: ConfirmCodes; settings?: Partial<Settings>; quota?: WriteQuota; trash?: (root: string, p: string) => Promise<void> }): Promise<Rig> {
+async function rig(o: { era: 'legacy' | 'modern'; elicit: boolean; timeoutMs?: number; settings?: Partial<Settings>; quota?: WriteQuota; trash?: (root: string, p: string) => Promise<void> }): Promise<Rig> {
   const root = fixture();
   const trashed: string[] = [];
   const s = new OneMcpServer({
@@ -67,7 +68,6 @@ async function rig(o: { era: 'legacy' | 'modern'; elicit: boolean; timeoutMs?: n
     },
     quota: o.quota ?? new WriteQuota({ session: 10_000, perMinute: 10_000 }),
     elicitTimeoutMs: o.timeoutMs,
-    confirmCodes: o.codes,
   });
   cleanup.push(() => s.dispose());
   s.applyConfig({ version: 1, enabled: true, folders: [{ id: 'aaaaaaaa', alias: 'notes', path: root, mode: 'write' }] });
@@ -92,6 +92,15 @@ async function answer(r: Rig, reply: Record<string, unknown> | null) {
   if (reply) await r.s.protocol.handle({ jsonrpc: '2.0', id: req.id, result: reply });
   return req;
 }
+
+/** A legacy-era call the user says yes to (elicitation accept, confirm=true). */
+async function yes(r: Rig, args: Record<string, unknown>) {
+  const pending = r.call('delete', args);
+  await answer(r, { action: 'accept', content: { confirm: true } });
+  return pending;
+}
+/** What a client that cannot ask gets: a refusal, and nothing the model could send back as the user's yes. */
+const REFUSED = /^ENOTSUP: Not deleted: deleting a folder needs the user's OK, and this app cannot ask for it\. The user can do it in One, or in an AI app that can ask \(MCP form elicitation\)\.$/;
 
 describe('the summary the user sees (sanitized)', () => {
   it('counts files and folders, names a few hidden items, says where it goes', () => {
@@ -120,66 +129,57 @@ describe('the summary the user sees (sanitized)', () => {
   });
 });
 
-describe('two steps (a client without elicitation)', () => {
+describe('a trash call that fails (after the user’s OK)', () => {
   it('a trash call that fails half-way says what is left, not "nothing was deleted" (review round 6)', async () => {
     // The fake bin moves one file, then fails (like a Windows trash call killed or cancelled mid-way).
-    const r = await rig({ era: 'legacy', elicit: false, trash: async (root) => { fs.rmSync(path.join(root, 'proj/a.md')); throw new Error('killed'); } });
-    const code = /confirm: (\S+)$/.exec(text(await r.call('delete', { path: 'proj' })))![1];
-    const b = await r.call('delete', { path: 'proj', confirm: code });
+    const r = await rig({ era: 'legacy', elicit: true, trash: async (root) => { fs.rmSync(path.join(root, 'proj/a.md')); throw new Error('killed'); } });
+    const b = await yes(r, { path: 'proj' });
     expect(b.result.isError).toBe(true);
     expect(text(b)).toMatch(/^EPARTIAL: Partly deleted: 1 item of 7 went to the (?:Recycle Bin|Trash); 6 items are still in proj\.$/);
     expect(exists(r, 'proj/sub/b.md')).toBe(true);
   });
 
   it('a trash call that fails before touching anything still says nothing was deleted', async () => {
-    const r = await rig({ era: 'legacy', elicit: false, trash: async () => { throw new Error('no bin'); } });
-    const code = /confirm: (\S+)$/.exec(text(await r.call('delete', { path: 'proj' })))![1];
-    const b = await r.call('delete', { path: 'proj', confirm: code });
+    const r = await rig({ era: 'legacy', elicit: true, trash: async () => { throw new Error('no bin'); } });
+    const b = await yes(r, { path: 'proj' });
     expect(text(b)).toMatch(/Nothing was deleted/);
     expect(exists(r, 'proj/a.md')).toBe(true);
   });
 
-  it('first call: a summary and a code, nothing deleted, no quota used; second call with the code: all of it to the bin', async () => {
+});
+
+describe('a client that cannot ask (no form elicitation): refused', () => {
+  it('a folder delete is refused: nothing deleted, no quota used, no code or summary in the answer (audit H5)', async () => {
     const quota = new WriteQuota({ session: 1, perMinute: 10 });
+    for (const era of ['legacy', 'modern'] as const) {
+      const r = await rig({ era, elicit: false, quota });
+      const a = await r.call('delete', { path: 'proj' });
+      expect(a.result.isError).toBe(true);
+      expect(a.result.resultType ?? 'complete').toBe('complete'); // no input_required either
+      expect(text(a)).toMatch(REFUSED);
+      expect(text(a)).not.toMatch(/confirm:|[0-9A-Z]{4}-[0-9A-Z]{4}|Delete folder/);
+      expect(r.trashed).toEqual([]);
+      expect(exists(r, 'proj/.git/config')).toBe(true);
+      // The old second step is no parameter any more: a made-up code changes nothing.
+      expect(text(await r.call('delete', { path: 'proj', confirm: 'AAAA-BBBB' }))).toMatch(/^EINVAL: Unknown parameter "confirm"/);
+      expect(exists(r, 'proj/a.md')).toBe(true);
+    }
+    // The quota (1) is still there: a single file delete (no question) uses it.
     const r = await rig({ era: 'legacy', elicit: false, quota });
-    const a = text(await r.call('delete', { path: 'proj' }));
-    expect(a).toMatch(/^Delete folder "proj" and everything in it\? 5 files, 2 folders, 27 B \(including hidden items such as \.env, \.git, id_rsa\)\. It goes to the (?:Recycle Bin|Trash)\. .* · confirm: ([0-9A-Z]{4}-[0-9A-Z]{4})$/);
-    expect(exists(r, 'proj/.git/config')).toBe(true);
-    const code = /confirm: (\S+)$/.exec(a)![1];
-    const b = await r.call('delete', { path: 'proj', confirm: code });
+    expect(text(await r.call('delete', { path: 'keep.md' }))).toMatch(/^Deleted keep\.md/);
+  });
+
+  it('with the user’s OK (elicitation) it goes, once, and uses the quota once', async () => {
+    const quota = new WriteQuota({ session: 1, perMinute: 10 });
+    const r = await rig({ era: 'legacy', elicit: true, quota });
+    const b = await yes(r, { path: 'proj' });
     expect(b.result.isError).toBeFalsy();
     expect(text(b)).toMatch(/^Deleted folder proj \(5 files, 2 folders, 27 B\) to the (?:Recycle Bin|Trash): restore it from there/);
     expect(r.trashed).toEqual(['proj']); // one trash call for the folder
     expect(exists(r, 'proj')).toBe(false);
     expect(exists(r, 'keep.md')).toBe(true);
-    // Used once: the same code again is refused (with a fresh summary and code); the quota (1) was spent once.
     put(r.root, 'proj/c.md');
-    const again = await r.call('delete', { path: 'proj', confirm: code });
-    expect(text(again)).toMatch(/^EQUOTA|^ECONFIRM/);
-  });
-
-  it('a reused, wrong-folder, expired or invented code, or a folder changed since: refused, a new summary + code', async () => {
-    let now = 1_000_000;
-    const r = await rig({ era: 'legacy', elicit: false, codes: new ConfirmCodes(() => now) });
-    put(r.root, 'other/x.md');
-    const ask = async (p: string) => /confirm: (\S+)$/.exec(text(await r.call('delete', { path: p })))![1];
-    // wrong folder
-    const c1 = await ask('proj');
-    let t = text(await r.call('delete', { path: 'other', confirm: c1 }));
-    expect(t).toMatch(/^ECONFIRM: Not deleted: that confirm code is for something else\. Delete folder "other" .* · confirm: \S+$/);
-    // expired
-    now += CONFIRM_TTL_MS + 1;
-    t = text(await r.call('delete', { path: 'proj', confirm: c1 }));
-    expect(t).toMatch(/^ECONFIRM: Not deleted: that confirm code expired/);
-    // invented
-    expect(text(await r.call('delete', { path: 'proj', confirm: 'AAAA-BBBB' }))).toMatch(/^ECONFIRM: Not deleted: that confirm code is not valid/);
-    // changed since the summary (then the code is spent)
-    const c2 = await ask('proj');
-    put(r.root, 'proj/new.md');
-    expect(text(await r.call('delete', { path: 'proj', confirm: c2 }))).toMatch(/^ECONFIRM: Not deleted: the folder changed since the summary/);
-    expect(text(await r.call('delete', { path: 'proj', confirm: c2 }))).toMatch(/^ECONFIRM: Not deleted: that confirm code was used already/);
-    expect(r.trashed).toEqual([]);
-    expect(exists(r, 'proj/.git/config')).toBe(true);
+    expect(text(await yes(r, { path: 'proj' }))).toMatch(/^EQUOTA/);
   });
 
   it('a single file delete is unchanged: no question, an undo copy, the bin', async () => {
@@ -232,11 +232,12 @@ describe('elicitation, legacy era (a request to the client, matched by id)', () 
     expect(exists(r, 'proj/planted.md')).toBe(true);
   });
 
-  it('an older client (2025-03-26) cannot be asked: two steps', async () => {
+  it('an older client (2025-03-26) cannot be asked: refused', async () => {
     const r = await rig({ era: 'legacy', elicit: false });
     await r.rpc('initialize', { protocolVersion: '2025-03-26', capabilities: { elicitation: {} }, clientInfo: { name: 'old' } });
-    expect(text(await r.call('delete', { path: 'proj' }))).toMatch(/· confirm: \S+$/);
+    expect(text(await r.call('delete', { path: 'proj' }))).toMatch(REFUSED);
     expect(r.out.some((m) => m.method === 'elicitation/create')).toBe(false);
+    expect(exists(r, 'proj/a.md')).toBe(true);
   });
 });
 
@@ -273,23 +274,27 @@ describe('elicitation, 2026-07-28 (Multi Round-Trip Requests)', () => {
     expect(exists(r, 'proj/.git/config')).toBe(true);
   });
 
-  it('a modern client without elicitation gets the two steps (no input_required)', async () => {
+  it('a modern client without elicitation is refused (no input_required, no code)', async () => {
     const r = await rig({ era: 'modern', elicit: false });
     const a = await r.call('delete', { path: 'proj' });
     expect(a.result.resultType).toBe('complete');
-    expect(text(a)).toMatch(/· confirm: \S+$/);
+    expect(text(a)).toMatch(REFUSED);
   });
 });
 
 describe('activity rows and the bin', () => {
-  it('"delete (folder)" with "restore from the Recycle Bin", no undo group', async () => {
-    const r = await rig({ era: 'legacy', elicit: false });
-    const code = /confirm: (\S+)$/.exec(text(await r.call('delete', { path: 'proj' })))![1];
-    await r.call('delete', { path: 'proj', confirm: code });
+  it('"delete (folder)" with "restore from the Recycle Bin", no undo group; a refusal is a failed "delete" row', async () => {
+    const no = await rig({ era: 'legacy', elicit: false });
+    await no.call('delete', { path: 'proj' });
+    const r = await rig({ era: 'legacy', elicit: true });
+    await yes(r, { path: 'proj' });
     await r.s.audit.flush();
-    const rows = fs.readFileSync(path.join(tmp, 'cfg', 'mcp-audit.jsonl'), 'utf8').trim().split('\n').map((l) => parseActivityLine(l)!).filter((x) => x.tool === 'delete (folder)');
-    expect(rows.at(-2)).toMatchObject({ ok: false, code: 'ASKED', note: 'waiting for the user', journal: null });
+    await no.s.audit.flush();
+    const all = fs.readFileSync(path.join(tmp, 'cfg', 'mcp-audit.jsonl'), 'utf8').trim().split('\n').map((l) => parseActivityLine(l)!);
+    const rows = all.filter((x) => x.tool === 'delete (folder)');
     expect(rows.at(-1)).toMatchObject({ ok: true, note: 'restore from the ' + BIN + '', journal: null, path: 'proj' });
+    expect(all.some((x) => x.code === 'ASKED')).toBe(false);
+    expect(all.filter((x) => x.tool === 'delete' && x.code === 'ENOTSUP').at(-1)).toMatchObject({ ok: false, path: 'proj', journal: null });
   });
 
   it('Windows: one constant script; the path and "ask before deleting for good" come only through the environment', () => {

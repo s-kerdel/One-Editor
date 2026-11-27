@@ -34,7 +34,7 @@ function workspace(files: Record<string, string>) {
   return { root, cfg: path.join(tmp, `cfg${n}`) };
 }
 
-async function server(w: { root: string; cfg: string }, mode: 'read' | 'write' = 'write') {
+async function server(w: { root: string; cfg: string }, mode: 'read' | 'write' = 'write', o: { yes?: boolean } = {}) {
   const s = new OneMcpServer({
     configDir: w.cfg,
     settings: { ...DEFAULT_SETTINGS },
@@ -48,7 +48,9 @@ async function server(w: { root: string; cfg: string }, mode: 'read' | 'write' =
   cleanup.push(() => s.dispose());
   s.applyConfig({ version: 1, enabled: true, folders: [{ id: 'aaaaaaaa', alias: 'notes', path: w.root, mode }] });
   let id = 1;
-  await s.protocol.handle({ jsonrpc: '2.0', id: id++, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'unit' } } });
+  // yes: a client with form elicitation whose user says yes to every question.
+  if (o.yes) s.protocol.attach((m: any) => m.method === 'elicitation/create' && queueMicrotask(() => void s.protocol.handle({ jsonrpc: '2.0', id: m.id, result: { action: 'accept', content: { confirm: true } } })));
+  await s.protocol.handle({ jsonrpc: '2.0', id: id++, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: o.yes ? { elicitation: {} } : {}, clientInfo: { name: 'unit' } } });
   const call = async (name: string, args: Record<string, unknown>) => {
     const r = (await s.protocol.handle({ jsonrpc: '2.0', id: id++, method: 'tools/call', params: { name, arguments: args } })) as any;
     return { isError: !!r.result?.isError, text: (r.result?.content?.[0]?.text ?? r.error?.message) as string };
@@ -112,15 +114,13 @@ describe('undo', () => {
 
   it('a folder delete keeps no copy: "restore it from the Recycle Bin"; files of the same batch do come back', async () => {
     const w = workspace({ 'proj/x.md': 'x\n', 'proj/.env': 'E=1\n', 'f.md': 'f\n' });
-    const t = await server(w);
-    // A batch of folders and files asks first (no elicitation here: two steps).
-    const ask = (await t.call('delete', { paths: ['proj'] })).text;
-    const only = (await t.call('delete', { paths: ['proj'], confirm: /confirm: (\S+)$/.exec(ask)![1] })).text;
+    // A batch of folders and files asks first: this client's user says yes.
+    const t = await server(w, 'write', { yes: true });
+    const only = (await t.call('delete', { paths: ['proj'] })).text;
     expect((await t.call('undo', { id: code(only) })).text).toBe('ENOTUNDOABLE: Not undoable here: restore proj from the ' + BIN + '');
     fs.mkdirSync(path.join(w.root, 'proj2'));
     fs.writeFileSync(path.join(w.root, 'proj2/y.md'), 'y\n');
-    const ask2 = (await t.call('delete', { paths: ['proj2', 'f.md'] })).text;
-    const mixed = (await t.call('delete', { paths: ['proj2', 'f.md'], confirm: /confirm: (\S+)$/.exec(ask2)![1] })).text;
+    const mixed = (await t.call('delete', { paths: ['proj2', 'f.md'] })).text;
     expect((await t.call('undo', { id: code(mixed) })).text).toBe('Undone: 1 file restored; folder proj2: restore from the ' + BIN + '');
     expect(t.get('f.md')).toBe('f\n');
   });

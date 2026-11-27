@@ -209,7 +209,7 @@ export function writeTools(env: ToolEnv): ToolDef[] {
     {
       name: 'replace_in_files',
       title: 'Replace in files',
-      description: "Replace exact text in many files; preview: true counts first. Over 10 files needs the user's OK, as delete.",
+      description: "Replace exact text in many files; preview: true counts first. Over 10 files: the user is asked first, as for delete.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -219,7 +219,6 @@ export function writeTools(env: ToolEnv): ToolDef[] {
           query: { type: 'string', description: 'Filters only: path: ext: tag: lang: file:', maxLength: 500 },
           case_sensitive: { type: 'boolean', description: 'Default: if find has capitals.' },
           preview: { type: 'boolean', description: 'Only count.' },
-          confirm: confirmParam,
         },
         required: ['find', 'replace'],
         additionalProperties: false,
@@ -323,7 +322,7 @@ export function writeTools(env: ToolEnv): ToolDef[] {
     {
       name: 'delete',
       title: 'Delete',
-      description: "Files or folders to the Recycle Bin. Folders or over 10 items need the user's OK: show the summary; call again with confirm only if they agree.",
+      description: "Files or folders to the Recycle Bin. Folders or over 10 items: the user is asked first (apps that cannot ask are refused).",
       inputSchema: {
         type: 'object',
         properties: {
@@ -331,7 +330,6 @@ export function writeTools(env: ToolEnv): ToolDef[] {
           path: P.path('File or folder'),
           paths: { type: 'array', items: { type: 'string', maxLength: 1024 }, maxItems: 100, description: 'Several (not with path).' },
           if_match: etagParam,
-          confirm: confirmParam,
         },
         additionalProperties: false,
       },
@@ -345,9 +343,9 @@ export function writeTools(env: ToolEnv): ToolDef[] {
           'delete',
           async (f, c) => {
             if ((a.path === undefined) === (a.paths === undefined)) throw new ToolError('EINVAL', 'Pass path (one item) or paths (several)');
-            if (a.paths !== undefined) return deleteMany(env, f, c, a.paths as string[], typeof a.confirm === 'string' ? a.confirm : null, ctx);
+            if (a.paths !== undefined) return deleteMany(env, f, c, a.paths as string[], ctx);
             const t = await f.resolveTarget(a.path, { kind: 'any', exists: 'must' });
-            if (t.st?.isDirectory()) return deleteFolder(env, f, c, t, typeof a.confirm === 'string' ? a.confirm : null, ctx);
+            if (t.st?.isDirectory()) return deleteFolder(env, f, c, t, ctx);
             env.quota.take();
             if (isVarsFile(t.key, c.varsFile)) throw new ToolError('ESECRET', `AI apps cannot delete variables files (${c.varsFile}).`);
             const read = await f.readText(t.key);
@@ -391,11 +389,11 @@ async function scan(key: string, realDir: string): Promise<{ all: string[]; dirs
 }
 
 /**
- * A folder and everything in it (hidden items too) to the Recycle Bin, after the user's OK: asked through
- * the client when it can (elicitation), else in two steps (a summary and a one-time code, confirm.ts). No
- * undo copy (hidden contents are never read): restored from the bin. One change in the quota, no size cap.
+ * A folder and everything in it (hidden items too) to the Recycle Bin, after the user's OK, asked through
+ * the client (askUser: refused when it cannot ask). No undo copy (hidden contents are never read): restored
+ * from the bin. One change in the quota, no size cap.
  */
-async function deleteFolder(env: ToolEnv, f: Folder, c: WriteCtx, t: Target, code: string | null, ctx: CallContext): Promise<ToolResult> {
+async function deleteFolder(env: ToolEnv, f: Folder, c: WriteCtx, t: Target, ctx: CallContext): Promise<ToolResult> {
   const realDir = await fs.promises.realpath(t.abs).catch((err) => {
     throw writeError(err, t.key);
   });
@@ -405,8 +403,7 @@ async function deleteFolder(env: ToolEnv, f: Folder, c: WriteCtx, t: Target, cod
     });
   const s = await survey();
   const audit = { tool: 'delete (folder)' };
-  const asked = await askUser(env, ctx, { tool: 'delete', summary: folderSummary(t.key, s), target: `delete\0${f.alias}\0${t.key}`, fingerprint: s.fingerprint, code, recheck: async () => (await survey()).fingerprint, audit, not: 'Not deleted', what: 'the folder' });
-  if (asked) return asked;
+  await askUser(ctx, { summary: folderSummary(t.key, s), target: `delete\0${f.alias}\0${t.key}`, fingerprint: s.fingerprint, recheck: async () => (await survey()).fingerprint, not: 'Not deleted', what: 'the folder', needs: 'deleting a folder' });
   env.quota.take();
   await trashFolderOrSay(c, f, t, realDir, s);
   return { content: [{ type: 'text', text: `Deleted folder ${t.key} (${many(s.files, 'file')}, ${many(s.folders, 'folder')}, ${sizeText(s.bytes)}) to the ${binWord()}: restore it from there (no undo copy)` }], audit: { ...audit, note: `restore from the ${binWord()}` } };
@@ -428,31 +425,16 @@ async function trashFolderOrSay(c: WriteCtx, f: Folder, t: Target, realDir: stri
 
 /**
  * The user's OK for what Revert cannot undo or what sweeps wide (folder deletes, big batches, replace_in_files
- * over MCP_CONFIRM_OVER files): through the client when it can ask (elicitation / input_required), else two
- * steps (this answer carries a one-time code; the next call with it proceeds). Bound to `target` + the
- * contents' `fingerprint`: a code or an answer for anything else, or for changed contents, asks again.
- * null = go ahead; a result = the question (nothing done); throws when the user said no.
+ * over MCP_CONFIRM_OVER files), asked through the client (elicitation / input_required), bound to `target` +
+ * the contents' `fingerprint`. Returns when the user said yes and nothing changed meanwhile; throws otherwise.
+ * A client that cannot ask is refused: nothing in the answer lets the model say yes for the user (a one-time
+ * code it could read and send back was exactly that: a prompt-injected model confirmed its own deletes).
  */
-async function askUser(
-  env: ToolEnv,
-  ctx: CallContext,
-  o: { tool: string; summary: string; target: string; fingerprint: string; code: string | null; recheck: () => Promise<string>; audit: Record<string, unknown>; not: string; what: string },
-): Promise<ToolResult | null> {
+async function askUser(ctx: CallContext, o: { summary: string; target: string; fingerprint: string; recheck: () => Promise<string>; not: string; what: string; needs: string }): Promise<void> {
   const asked = (await ctx.confirm?.({ message: o.summary, bind: `${o.target}\0${o.fingerprint}` })) ?? 'unsupported';
-  if (asked === 'unsupported') {
-    if (o.code === null || !o.code.trim()) {
-      const fresh = env.confirmCodes.mint(o.target, o.fingerprint);
-      return { content: [{ type: 'text', text: `${o.summary} Show this to the user; only if they agree, call ${o.tool} again with confirm. · confirm: ${fresh}` }], audit: { ...o.audit, ok: false, code: 'ASKED', note: 'waiting for the user' } };
-    }
-    const k = env.confirmCodes.take(o.code, o.target, o.fingerprint);
-    if (k === 'ok') return null;
-    const why = { unknown: 'that confirm code is not valid', expired: 'that confirm code expired', used: 'that confirm code was used already', other: 'that confirm code is for something else', changed: `${o.what} changed since the summary` }[k];
-    const fresh = env.confirmCodes.mint(o.target, o.fingerprint);
-    throw new ToolError('ECONFIRM', `${o.not}: ${why}. ${o.summary} Ask the user again; only if they agree, call ${o.tool} with confirm. · confirm: ${fresh}`);
-  }
+  if (asked === 'unsupported') throw new ToolError('ENOTSUP', `${o.not}: ${o.needs} needs the user's OK, and this app cannot ask for it. The user can do it in One, or in an AI app that can ask (MCP form elicitation).`);
   if (asked !== 'yes') throw new ToolError('ECANCELED', `${o.not}: the user ${asked === 'no' ? 'declined' : 'did not answer'}`);
   if ((await o.recheck()) !== o.fingerprint) throw new ToolError('EXTERNAL_CHANGE', `${o.not}: ${o.what} changed while the user was asked. Try again.`);
-  return null;
 }
 
 /** "a.md" or a cut, one-line version of what the client sent (answers only; never shown to the user as a question). */
@@ -463,7 +445,7 @@ const oneItem = (p: unknown) => String(p).replace(/[\u0000-\u001f\u007f]/g, '').
  * folders with everything in them. One question for the whole call when it holds a folder or more than
  * MCP_CONFIRM_OVER items. Each item on its own after that (a failure does not stop the rest).
  */
-async function deleteMany(env: ToolEnv, f: Folder, c: WriteCtx, paths: string[], code: string | null, ctx: CallContext): Promise<ToolResult> {
+async function deleteMany(env: ToolEnv, f: Folder, c: WriteCtx, paths: string[], ctx: CallContext): Promise<ToolResult> {
   type Item = { arg: string; t?: Target; realDir?: string; survey?: Survey; stamp?: { mtime: number; size: number }; err?: ToolError };
   const items: Item[] = [];
   const seen = new Set<string>();
@@ -505,8 +487,8 @@ async function deleteMany(env: ToolEnv, f: Folder, c: WriteCtx, paths: string[],
       }
       return print(again);
     };
-    const asked = await askUser(env, ctx, { tool: 'delete', summary, target: `delete-batch\0${f.alias}\0${[...keys].sort().join('\0')}`, fingerprint: print(ok), code, recheck, audit: { items: items.length }, not: 'Not deleted', what: 'the items' });
-    if (asked) return asked;
+    const needs = ok.some((i) => i.survey) ? 'deleting folders' : `deleting more than ${MCP_CONFIRM_OVER} items at once`;
+    await askUser(ctx, { summary, target: `delete-batch\0${f.alias}\0${[...keys].sort().join('\0')}`, fingerprint: print(ok), recheck, not: 'Not deleted', what: 'the items', needs });
   }
   const group = env.journal.newGroup();
   const rows: string[] = [];
@@ -588,8 +570,7 @@ async function replaceInFiles(env: ToolEnv, f: Folder, c: WriteCtx, a: Record<st
     const summary = `Replace "${shownName(find, 60)}" with "${shownName(replace, 60)}" in ${many(hits.length, 'file')} (${many(total, 'match').replace('matchs', 'matches')}): ${first}?`;
     const stampOf = (p: string) => fs.promises.stat(path.join(f.root, ...p.split('/'))).then((st) => ({ mtime: st.mtimeMs, size: st.size }), () => ({ mtime: -1, size: -1 }));
     const recheck = async () => print(await Promise.all(hits.map(async (h) => ({ path: h.path, ...(await stampOf(h.path)) }))));
-    const asked = await askUser(env, ctx, { tool: 'replace_in_files', summary, target: `replace\0${f.alias}\0${find}\0${replace}\0${query}\0${cs}`, fingerprint: now, code: typeof a.confirm === 'string' ? a.confirm : null, recheck, audit: { items: hits.length }, not: 'Not replaced', what: 'the files' });
-    if (asked) return asked;
+    await askUser(ctx, { summary, target: `replace\0${f.alias}\0${find}\0${replace}\0${query}\0${cs}`, fingerprint: now, recheck, not: 'Not replaced', what: 'the files', needs: `replacing in more than ${MCP_CONFIRM_OVER} files` });
   }
   const group = env.journal.newGroup();
   let changed = 0;
@@ -614,8 +595,6 @@ async function replaceInFiles(env: ToolEnv, f: Folder, c: WriteCtx, a: Record<st
   return { content: [{ type: 'text', text: head }], journal: changed && env.journal.enabled ? group : undefined, isError: changed === 0, audit: { items: changed } };
 }
 
-const confirmParam = { type: 'string' as const, description: 'Code, once the user agreed.', maxLength: 20 };
-
 /** Non-overlapping occurrences of `old` (as split/join replaces them). */
 function countLiteral(text: string, old: string): number {
   let n = 0;
@@ -624,12 +603,18 @@ function countLiteral(text: string, old: string): number {
 }
 
 /** The 0-based lines each occurrence of `old` spans (plus the line after when it ends with a newline). */
-function matchLines(text: string, old: string): number[][] {
+export function matchLines(text: string, old: string): number[][] {
   const out: number[][] = [];
+  // One pass: positions only grow (start, end, next start ≥ end), so each newline is found and counted once
+  // (counting from the start for every match was quadratic in a big file).
+  let seen = 0;
+  let next = text.indexOf('\n');
   const lineAt = (pos: number) => {
-    let n = 0;
-    for (let i = text.indexOf('\n'); i !== -1 && i < pos; i = text.indexOf('\n', i + 1)) n++;
-    return n;
+    while (next !== -1 && next < pos) {
+      seen++;
+      next = text.indexOf('\n', next + 1);
+    }
+    return seen;
   };
   for (let i = text.indexOf(old); i !== -1 && out.length < 1000; i = text.indexOf(old, i + old.length)) {
     const a = lineAt(i);

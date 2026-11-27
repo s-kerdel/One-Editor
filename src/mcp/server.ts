@@ -4,7 +4,6 @@ import path from 'node:path';
 import type { Settings } from '../shared/api';
 import { MCP_AUDIT_FILE, MCP_WRITES_ENABLED, UNDO_DAYS, limitsFromSettings, type McpConfig, type McpUndo } from '../shared/mcp';
 import { platformTrash, type TrashOptions } from '../backend/trash';
-import { ConfirmCodes } from './confirm';
 import { JOURNAL_DIR, Journal } from './journal';
 import { WriteQuota } from './writes';
 import { AuditLog } from './audit';
@@ -44,8 +43,6 @@ export interface ServerOptions {
   trash?: (abs: string, o?: TrashOptions) => Promise<void>;
   /** Tests: how long a question to the user (elicitation) stays open. */
   elicitTimeoutMs?: number;
-  /** Tests: the two-step confirmation codes (a clock of their own). */
-  confirmCodes?: ConfirmCodes;
   /** After every answered call (the live file's "last call"; throttled there). */
   onActivity?: () => void;
   /** Tests: other write limits. */
@@ -78,7 +75,7 @@ export class OneMcpServer {
     this.audit = new AuditLog(path.join(o.configDir, MCP_AUDIT_FILE));
     this.journal = new Journal(path.join(o.configDir, JOURNAL_DIR), { enabled: () => this.undo.on, maxAgeMs: () => this.undo.days * 24 * 3600_000 });
     void this.journal.prune(true).catch(() => {}); // copies past their age go, even while new ones are off
-    const env: ToolEnv = { pool: this.pool, limits: () => limitsFromSettings(this.settings), indexWaitMs: o.indexWaitMs ?? 8000, settings: () => this.settings, journal: this.journal, trash: o.trash ?? platformTrash, quota: o.quota ?? new WriteQuota(), confirmCodes: o.confirmCodes ?? new ConfirmCodes() };
+    const env: ToolEnv = { pool: this.pool, limits: () => limitsFromSettings(this.settings), indexWaitMs: o.indexWaitMs ?? 8000, settings: () => this.settings, journal: this.journal, trash: o.trash ?? platformTrash, quota: o.quota ?? new WriteQuota() };
     // Stable order (clients cache the list). Write tools (`write: true`) are listed only while some folder may be written.
     this.tools = [...readTools(env), ...searchTools(env), ...linkTools(env), ...writeTools(env)];
     this.protocol = new McpProtocol({
