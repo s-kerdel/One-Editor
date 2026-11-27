@@ -1,7 +1,7 @@
 // The real server CLI in `--ipc` mode (what the desktop app's "Start web server" runs): the handshake
 // arrives as data, nothing with the token is printed, 'stop' and a vanished parent both end it.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { execFileSync, fork, type ChildProcess } from 'node:child_process';
+import { execFileSync, fork, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -27,11 +27,17 @@ afterAll(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+const env = (PATH = process.env.PATH ?? '') => ({ PATH, HOME: dir, TMPDIR: path.join(dir, 'tmp'), SEC_EDIT_CONFIG_DIR: path.join(dir, 'config'), SEC_EDIT_RENDERER_DIR: renderer });
+const launchDir = () => path.join(dir, 'config', 'launch');
+const mode = (p: string) => fs.statSync(p).mode & 0o777;
+const rpc = (base: string, token: string, method: string, args: unknown[]) =>
+  fetch(`${base}api/rpc/${method}`, { method: 'POST', headers: { 'x-sec-edit-token': token }, body: JSON.stringify({ args }) }).then((r) => r.json() as Promise<any>);
+
 function start(args: string[]) {
   const out: string[] = [];
   const child = fork(cli, [ws, '--ipc', ...args], {
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-    env: { PATH: process.env.PATH ?? '', HOME: dir, TMPDIR: path.join(dir, 'tmp'), SEC_EDIT_CONFIG_DIR: path.join(dir, 'config'), SEC_EDIT_RENDERER_DIR: renderer },
+    env: env(),
   });
   kids.push(child);
   child.stdout!.on('data', (d) => out.push(String(d)));
@@ -119,5 +125,77 @@ describe('cli --ipc', () => {
     expect(m?.type).toBe('ready');
     r.child.disconnect();
     expect(await r.exited).toBe(0);
+  });
+});
+
+describe('cli: every server is pinned; the browser gets a file, never the launch code', () => {
+  it('--ipc { type: launch, file: true }: a 0600 redirect page in a 0700 folder of the app data, gone once spent or stopped', async () => {
+    const r = start(['--host', '127.0.0.1']);
+    const m = parseChildMessage(await r.message);
+    if (m?.type !== 'ready') throw new Error('not ready');
+    const base = `http://127.0.0.1:${m.port}/`;
+    const ask = () => {
+      r.child.send({ type: 'launch', file: true });
+      return new Promise<any>((res) => r.child.once('message', res));
+    };
+    const first = await ask();
+    expect(first).toEqual({ type: 'launch', file: expect.any(String) });
+    expect(path.dirname(first.file)).toBe(launchDir());
+    if (process.platform !== 'win32') {
+      expect(mode(launchDir())).toBe(0o700);
+      expect(mode(first.file)).toBe(0o600);
+    }
+    const html = fs.readFileSync(first.file, 'utf8');
+    const code = /\?launch=([a-f0-9]{32})/.exec(html)?.[1];
+    expect(html).toContain(`url=${base}?launch=${code}`);
+    expect(html).not.toContain(m.token);
+    const res = await fetch(`${base}api/launch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }) });
+    expect(((await res.json()) as { token: string }).token).toBe(m.token);
+    await expect.poll(() => fs.existsSync(first.file)).toBe(false);
+    // Never opened: removed when the server stops.
+    const second = await ask();
+    expect(fs.existsSync(second.file)).toBe(true);
+    r.child.send({ type: 'stop' });
+    expect(await r.exited).toBe(0);
+    expect(fs.existsSync(second.file)).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('a plain local serve of two folders with --open: pinned to them; the opener gets a file path only', async () => {
+    const ws2 = path.join(dir, 'ws2');
+    fs.mkdirSync(ws2, { recursive: true });
+    // Stand-ins for xdg-open / open: record what the browser would have been given.
+    const bin = path.join(dir, 'fakebin');
+    const log = path.join(dir, 'opened.txt');
+    fs.mkdirSync(bin, { recursive: true });
+    for (const name of ['xdg-open', 'open']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\nprintf '%s\\n' "$@" >> ${JSON.stringify(log)}\n`, { mode: 0o755 });
+    const out: string[] = [];
+    const child = spawn(process.execPath, [cli, ws, ws2, '--open', '--host', '127.0.0.1'], { stdio: ['ignore', 'pipe', 'pipe'], env: env(`${bin}${path.delimiter}${process.env.PATH ?? ''}`) });
+    kids.push(child);
+    child.stdout!.on('data', (d) => out.push(String(d)));
+    child.stderr!.on('data', (d) => out.push(String(d)));
+    const exited = new Promise<number | null>((resolve) => child.once('exit', (c) => resolve(c)));
+    await expect.poll(() => /→ (http:\/\/\S+)/.test(out.join('')), { timeout: 15000 }).toBe(true);
+    const link = new URL(/→ (http:\/\/\S+)/.exec(out.join(''))![1]);
+    const base = `${link.origin}/`;
+    const token = link.searchParams.get('token')!;
+
+    await expect.poll(() => fs.existsSync(log), { timeout: 10000 }).toBe(true);
+    const argv = fs.readFileSync(log, 'utf8').trim().split('\n');
+    expect(argv).toHaveLength(1);
+    expect(argv[0]).not.toMatch(/launch=|token=|^http/);
+    expect(path.dirname(argv[0])).toBe(launchDir());
+    expect(mode(argv[0])).toBe(0o600);
+    expect(fs.readFileSync(argv[0], 'utf8')).toMatch(new RegExp(`url=${base.replace(/[.]/g, '\\.')}\\?launch=[a-f0-9]{32}`));
+
+    // No --ipc, loopback only: still pinned. The other given folder and folders inside them only.
+    expect((await rpc(base, token, 'openWorkspace', [dir])).error.code).toBe('EACCES');
+    expect((await rpc(base, token, 'openWorkspace', [ws2])).result.root).toBe(ws2);
+    expect((await rpc(base, token, 'recentWorkspaces', [])).result).toEqual([ws, ws2]);
+    // Local: the OS version stays (only a shared server hides the machine).
+    expect((await rpc(base, token, 'osVersion', [])).ok).toBe(true);
+
+    child.kill('SIGTERM');
+    expect(await exited).toBe(0);
+    expect(fs.existsSync(argv[0])).toBe(false);
   });
 });

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // sec-edit CLI
 //   sec-edit [folder|file ...]                     open in the desktop app (returns immediately)
-//   sec-edit serve [folder] [--port N] [--open]    browser mode (prints a URL with an access token)
+//   sec-edit serve [folder ...] [--port N] [--open]  browser mode (prints a URL with an access token); the page
+//                                                    opens only these folders and folders inside them
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -18,7 +19,7 @@ const need = (file, what) => {
 };
 
 if (args[0] === '-h' || args[0] === '--help') {
-  console.log('Usage:\n  sec-edit [folder|file ...]                   open in the desktop app\n  sec-edit serve [folder] [--port N] [--open]  browser mode');
+  console.log('Usage:\n  sec-edit [folder|file ...]                   open in the desktop app\n  sec-edit serve [folder ...] [--port N] [--open]  browser mode');
   process.exit(0);
 }
 

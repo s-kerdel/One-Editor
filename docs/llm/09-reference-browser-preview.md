@@ -30,8 +30,18 @@ grep -n "keyword" docs/llm/09-reference*.md
 - Media GETs carry a **per-file capability** instead: `fileUrl()` → `/api/file?path=…&m=HMAC(mediaKey, root + path)` (key from `bootstrap()`, `platform/hmac.ts` = server's `mediaMac`), the event stream `eventsUrl()` → `ev=`.
 - A new GET endpoint for `<img>` / EventSource uses the same scheme, never `?token=`.
 - `/api/file` resolves links with `Workspace.real()` (no way out of the folder).
-- `--open` / `launchUrl()` pass a one-time `?launch=` code.
+- `--open` / `launchUrl()` pass a one-time `?launch=` code, and never on a command line: `--open` writes it into a **0600 redirect page** (`server/launch-file.ts`, `<app data>/launch/`, folder 0700) and opens that file (Jupyter's pattern; Windows: `explorer.exe`). The file goes once the code is redeemed (`launchUrl(used)`), after `LAUNCH_TTL_MS` (2 min) or when the server exits; leftovers of a killed server are swept on the next write.
+- Response headers: index.html `no-store`, `Referrer-Policy: no-referrer`, `X-DNS-Prefetch-Control: off`, `frame-ancestors 'none'`; `/api/file` `no-store` + sandbox CSP. Token / capability compares go through `safeEqual` (byte lengths first).
 - Script CSP: only the build's `assets/` + `theme-boot.js` (index.html for `app://`, rewritten per origin by the server, `'self'` under the Vite dev server).
+
+## Pinned servers (every server `cli.ts` starts)
+
+- `cli.ts` always passes `pinRoot: true` and `roots` = **its own folder arguments** (`serve a b`; the first one opens). `startServer` without `pinRoot` is the test harness only.
+- `openWorkspace` from the page: only a folder of `roots` or a folder inside one (the switcher, "Open as project", "Open parent folder"). Decided lexically first (an outside path, `\\host\share` too, is never touched), then on the real path (a link leading out is `EACCES`, One's data / cache folder is `EACCES`, a missing folder `ENOENT`), re-checked after the open (a link renamed into place: back to the previous folder).
+- `resolvePath` answers only for the open folder; `recentWorkspaces` / `forgetRecent` / `bootstrap().recent` = `roots` when there are several, else `[]`.
+- **Settings writes = allowlist** `WEB_SETTINGS` (`server.ts`): the browser build's rows of `settings-registry.ts` minus `preview.remoteImages`. Desktop-only and privacy keys (`terminal.*`, `claude.follow`, `opencode.follow`, `webserver.*`, `mcp.*`, `updates.check`, `zoom`, `windowFrame`, `export.pdfPageNumbers`) are dropped, the rest still saves; one value is at most 64 KB of JSON (`ETOOBIG`), the whole call 256 KB. **A new browser setting adds its key to `WEB_SETTINGS`** (`tests/unit/webserver/server-pin.test.ts` compares it with the registry).
+- Every HTTP server (pinned or not): `git('trust')` is `ENOTSUP` (trust comes from the desktop app only; `untrust` works), `revealInFolder` only for a request from loopback (`fromLoopback`), terminal names and PDF export `ENOTSUP`.
+- `shared` (default = `pinRoot`; `cli.ts`: `--ipc` or a non-loopback `--host`): also no process list, no OS version. A local `serve` keeps both.
 
 ## Browser state per origin
 
@@ -50,8 +60,8 @@ grep -n "keyword" docs/llm/09-reference*.md
 - Handshake = Node IPC message `{ type: 'ready', port, token }` / `{ type: 'error' }`, never a parsed log line; `{ type: 'stop' }` or an IPC disconnect (app quit / crash) ends it.
 - One server for the whole app (all windows show the same status), never auto-started. It serves the folder of the window that started it; a start for another folder is refused (`EBUSY`). Stopped on quit and once no window has its folder open any more (`rootsChanged`).
 - Bridge `secEditBridge.webServer` = `status / start / stop / open / onChange` over `webserver:*` channels (`src/shared/web-server.ts`), re-validated in `src/main/web-server.ts` like the vault; `open` only accepts a link of the running server.
-- The token stays out of logs and the activity log (UI shows the address only; Copy uses the full link; Open asks the child for a one-time link, `{ type: 'launch' }` → `{ type: 'launch', url }`, so no browser command line holds the key).
-- `--ipc` and any non-loopback `--host` start the server **pinned** (`pinRoot`): it refuses `openWorkspace` / `resolvePath` outside its folder, lists no recents, no process list, no `terminal.*` / `webserver.*` settings writes.
+- The token stays out of logs and the activity log (UI shows the address only; Copy uses the full link). Open asks the child for the redirect file: `{ type: 'launch', file: true }` → `{ type: 'launch', file }` (absolute path of the 0600 page, see "Browser-mode access") or `{ type: 'launch', error }`; main opens that file. The older `{ type: 'launch' }` → `{ type: 'launch', url }` still answers.
+- The child is **pinned** like every `cli.ts` server (see "Pinned servers") and **shared** (`--ipc`): no process list, no OS version either.
 - The renderer chunk loads after the idle Popups chunk (zero startup bytes but the slot); browser mode has no bridge, so neither commands nor the Settings section (`SectionDef.desktopOnly`) exist there.
 
 ## Note content: sanitizer contract

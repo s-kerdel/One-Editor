@@ -1,9 +1,10 @@
 // Git trust: a repository the user has not trusted gets no git at all (the server refuses), the Source
-// control panel asks, "Trust" switches git on, "Stop trusting this folder" switches it off again.
+// control panel asks; trust comes from the desktop app only (the browser server refuses it), "Stop
+// trusting this folder" switches it off again.
 import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect } from './harness';
-import { git, gitReady, isolateGit } from './git-helpers';
+import { git, gitReady, isolateGit, trustRepo } from './git-helpers';
 
 const row = (page: import('@playwright/test').Page, p: string) => page.locator(`.se-tree-row[data-path="${p}"]`);
 
@@ -50,15 +51,24 @@ test('untrusted repository: no marks, no branch, no change bars → panel prompt
   await expect(page.getByTestId('scm')).toHaveCount(0);
   expect(fs.existsSync(marker)).toBe(false);
 
-  // Trust: status, marks, branch item and the pane are there (remembered on the server, not in the page).
-  await page.getByTestId('git-trust-yes').click();
+  // A page never grants trust (the folder's .git/config could run programs): only the desktop app's own
+  // dialog does. Here the desktop's answer is written the way it would be, then the page looks again.
+  const trustFile = path.join(path.dirname(ws.root), 'config', 'git-trust.json');
+  expect(await page.evaluate(() => (window as any).__secEdit.backend.git('trust').then(() => 'ok', (e: { code?: string }) => e.code))).toBe('ENOTSUP');
+  expect(fs.existsSync(trustFile) ? JSON.parse(fs.readFileSync(trustFile, 'utf8')).trusted : []).toEqual([]);
+  expect(fs.existsSync(marker)).toBe(false);
+  trustRepo(ws.root, path.dirname(trustFile));
+  await page.reload();
+  await page.waitForSelector('html[data-ready="true"]');
+
+  // Trusted: status, marks, branch item and the pane are there (remembered on the server, not in the page).
   await gitReady(page);
+  await page.evaluate(() => ((window as any).__secEdit.sidebarPanel.value = 'git'));
   await expect(page.getByTestId('scm')).toBeVisible();
   await expect(page.getByTestId('git-branch')).toContainText('main');
   await expect(page.getByTestId('git-untrusted')).toHaveCount(0);
   await page.evaluate(() => ((window as any).__secEdit.sidebarPanel.value = 'files'));
   await expect(row(page, 'new.md').locator('.se-git-letter')).toHaveText('U');
-  const trustFile = path.join(path.dirname(ws.root), 'config', 'git-trust.json');
   expect(JSON.parse(fs.readFileSync(trustFile, 'utf8')).trusted).toEqual([fs.realpathSync(ws.root)]);
   expect(await page.evaluate(() => Object.keys(localStorage).filter((k) => /trust/i.test(k)))).toEqual([]);
   // A reload keeps it.

@@ -8,8 +8,11 @@
 //    page shows. index.html is a static shell: the renderer keeps the token in sessionStorage;
 //  - media GETs (<img>, PDF bytes) carry `m` = HMAC(mediaKey, root + path), the event stream `ev`: a leaked
 //    image URL opens that one file of that folder, read-only (links leading outside are refused);
-//  - `pinRoot` (desktop "Start web server", any non-loopback bind): the server serves its folder only;
-//  - `--open` passes a one-time launch code, not the token (command lines are visible to other processes);
+//  - `pinRoot` (every server cli.ts starts): the page opens only the folders the server was started for and
+//    folders inside them, and writes only the settings the browser build shows (WEB_SETTINGS);
+//  - `shared` (desktop "Start web server", any non-loopback bind): nothing about the machine either;
+//  - the page never grants git trust (desktop only), a LAN client never opens a file manager here;
+//  - `--open` hands the browser a one-time launch code in a 0600 file (launch-file.ts), never a command line;
 //  - workspace files are served sandboxed, so an HTML/SVG file in a note folder cannot script our origin.
 import http from 'node:http';
 import fs from 'node:fs';
@@ -21,6 +24,8 @@ import { isTerminalMethod } from '../shared/terminal';
 import { PDF_WORKER_CSP, isPdfWorkerAsset } from '../shared/pdf';
 import { BackendService, type ServiceHooks } from '../backend/service';
 import { BackendFailure, type WorkspaceOptions } from '../backend/workspace';
+import { isInsideDir } from '../backend/pathsafe';
+import { defaultCacheDir } from '../backend/appdata';
 
 export interface ServerOptions {
   root?: string; // folder to open
@@ -29,8 +34,12 @@ export interface ServerOptions {
   rendererDir: string; // built renderer (vite build output)
   configDir?: string;
   token?: string;
-  /** Serve the opened folder only: no other folder, no recent list, no process list (see PINNED). */
+  /** Serve `roots` (and folders inside them) only, write only WEB_SETTINGS (see PINNED). */
   pinRoot?: boolean;
+  /** Pinned: the folders the page may open, besides folders inside them (default: `root`). The CLI's own arguments only, never a path from a page. */
+  roots?: string[];
+  /** Others may hold the link (desktop "Start web server", a LAN bind): no process list, no OS version either. Default: `pinRoot`. */
+  shared?: boolean;
   hooks?: ServiceHooks;
   workspaceOptions?: Pick<WorkspaceOptions, 'watchMode' | 'debounceMs' | 'pollMs'>;
 }
@@ -46,8 +55,8 @@ export interface RunningServer {
   mediaKey: string;
   /** `/api/file?…` path for a workspace file, with its capability (tests, tools). */
   mediaPath(rel: string): string;
-  /** Link with a one-time launch code instead of the token (valid 2 minutes, once). */
-  launchUrl(): string;
+  /** Link with a one-time launch code instead of the token (valid 2 minutes, once). `used`: called when the code is redeemed. */
+  launchUrl(used?: () => void): string;
   service: BackendService;
   close(): Promise<void>;
 }
@@ -87,20 +96,47 @@ const MAX_BODY = 96 * 1024 * 1024; // a 48 MB text file (MAX_OPEN_BYTES) plus JS
 /** Per-method body caps. writeBinary carries base64 (4/3 of the bytes) plus the JSON framing. */
 const BODY_LIMITS: Record<string, { bytes: number; message: string }> = {
   writeBinary: { bytes: Math.ceil(MAX_BINARY_BYTES / 3) * 4 + 64 * 1024, message: `File is too large (the limit is ${MAX_BINARY_BYTES / 1048576} MB)` },
+  saveSettings: { bytes: 256 * 1024, message: 'Settings change too large' },
 };
 const DEFAULT_LIMIT = { bytes: MAX_BODY, message: 'Request too large' };
 /** Need Electron (hidden print window, native dialogs): refused before the (possibly huge) body is read. */
 const DESKTOP_ONLY = new Set(['exportPdf', 'showExportedFile']);
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
-/** A pinned server's settings writes never touch these (shared with the desktop app; browser mode has neither). */
-const DESKTOP_SETTING = /^(terminal|webserver|mcp)\./;
-const LAUNCH_TTL_MS = 120_000;
+/**
+ * The settings a pinned server's page may write (settings.json is shared with the desktop app): what the
+ * browser build shows (settings-registry.ts without desktop-only rows). Left out on purpose: desktop-only
+ * keys (terminal.*, claude.follow, opencode.follow, webserver.*, mcp.*, updates.check, zoom, windowFrame,
+ * export.pdfPageNumbers) and preview.remoteImages (a page must not turn on remote images for every folder).
+ * A new browser setting adds its key here (tests/unit/webserver/server-pin.test.ts checks the registry).
+ */
+export const WEB_SETTINGS: ReadonlySet<string> = new Set([
+  'theme', 'accentColor', 'sidebarStyle', 'sidebar.panels', 'tree.folderColors', 'tree.folderColor', 'cornerStyle', 'uiDensity',
+  'fontSize', 'editorFont', 'editorLineHeight', 'contentWidth', 'nav.buttons', 'zen.fullScreen', 'zen.keepStatusBar', 'zen.keepTerminal',
+  'viewMode', 'formatToolbar', 'markdownLineNumbers', 'wordWrap', 'spellcheck', 'editor.focusMode', 'editor.typewriter', 'editor.smartPaste',
+  'compare.enabled', 'editor.trimPaste.markdown', 'editor.trimPaste.code', 'editor.trimOnSave.markdown', 'editor.trimOnSave.code',
+  'editor.trimOnSave.keepMarkdownBreaks', 'autosave', 'autosaveDelayMs', 'showHiddenFiles', 'excludeGlobs', 'files.associations', 'confirmDelete',
+  'git.enabled', 'git.changeBars', 'git.treeColors', 'git.wslRouting', 'git.refreshIndex',
+  'search.indexing', 'search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'search.workers',
+  'formatOnSave', 'format.printWidth', 'format.tabWidth', 'format.useTabs', 'format.singleQuote', 'format.phpVersion', 'format.sqlKeywordCase',
+  'links.updateOnRename', 'links.hoverPreview', 'daily.folder', 'daily.format', 'daily.template', 'templates.folder', 'templates.dateFormat',
+  'templates.timeFormat', 'attachments.location', 'attachments.folder', 'preview.lineBreaks', 'export.pdfPageSize', 'export.pdfMargins',
+  'variables.showValues', 'variables.fileName', 'variables.dangerEnvs', 'variables.resolveOnExport',
+]);
+/** One setting's value as JSON, at most (the biggest real ones, folder colours or associations, stay far below). */
+const MAX_SETTING_CHARS = 64 * 1024;
+export const LAUNCH_TTL_MS = 120_000;
 const EVENTS_SUBJECT = '\u0000events';
 
 function safeEqual(a: string | undefined | null, b: string) {
-  if (!a || a.length !== b.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  if (!a) return false;
+  // Byte lengths: "é" is one character but two bytes (timingSafeEqual throws on a length mismatch).
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
+
+/** The request comes from this computer (127.0.0.0/8, ::1, IPv4-mapped): not from a LAN client. */
+export const fromLoopback = (addr: string | undefined) => !!addr && (addr === '::1' || /^(::ffff:)?127\./i.test(addr));
 
 /** What a media capability names: a file of one folder (a URL kept from another folder opens nothing). */
 export const mediaSubject = (root: string, rel: string) => `${root}\u0000${rel}`;
@@ -113,7 +149,7 @@ export function mediaMac(key: string, subject: string): string {
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const token = opts.token ?? crypto.randomBytes(18).toString('hex');
   const mediaKey = crypto.randomBytes(32).toString('hex');
-  const launchCodes = new Map<string, number>();
+  const launchCodes = new Map<string, { until: number; used?: () => void }>();
   // Browser clients keep their own per-folder session (open tabs, tree, layout): see ServiceHooks.sessionKind.
   const service = new BackendService(opts.configDir, { sessionKind: 'web', ...opts.hooks }, opts.workspaceOptions ?? {});
   if (opts.root) await service.openWorkspace(opts.root);
@@ -125,37 +161,76 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const host = opts.host ?? '127.0.0.1';
   const loopbackOnly = LOOPBACK.has(host);
   const pinned = !!opts.pinRoot;
+  const shared = opts.shared ?? pinned;
+  const roots = [...new Set((opts.roots ?? (opts.root ? [opts.root] : [])).map((r) => path.resolve(r)))];
+  /** Several folders were given: the switcher lists them (one folder: nothing else to switch to). */
+  const listed = () => (roots.length > 1 ? [...roots] : []);
+  const foldCase = process.platform !== 'linux';
+  /** Lexically inside a folder of `roots`: decided without touching the disk (a \\host\share path is never looked at). */
+  const underRoots = (abs: string) => roots.some((r) => isInsideDir(abs, r, path, foldCase));
+  /** Where `abs` really is (links resolved, the file system's own spelling): inside `roots` and not One's own data. */
+  const whereIs = async (abs: string): Promise<'in' | 'out' | 'missing'> => {
+    const real = await fsp.realpath(abs).catch(() => null);
+    if (!real) return 'missing';
+    const [realRoots, data] = await Promise.all([
+      Promise.all(roots.map((r) => fsp.realpath(r).catch(() => null))),
+      Promise.all([service.configDir, defaultCacheDir(service.configDir)].map((d) => fsp.realpath(d).catch(() => null))),
+    ]);
+    if (!realRoots.some((r) => r && isInsideDir(real, r, path, false))) return 'out';
+    return data.some((d) => d && isInsideDir(real, d, path, false)) ? 'out' : 'in';
+  };
+  const notServed = () => new BackendFailure('EACCES', 'This web server only serves the folders it was started for');
+  const pagePath = (p: unknown) => (typeof p === 'string' && p && !p.includes('\0') ? path.resolve(p) : '');
   const headerToken = (req: http.IncomingMessage) => {
     const t = req.headers['x-sec-edit-token'];
     return safeEqual(typeof t === 'string' ? t : null, token);
   };
-  /** Pinned servers: the one folder they were started for; everything else about the machine stays out. */
+  /** Pinned servers: the folders they were started for (and folders inside them), never one the page names. */
   const PINNED: Record<string, (args: unknown[]) => Promise<unknown>> = {
     async openWorkspace([p]) {
-      const ws = service.workspace;
-      const want = typeof p === 'string' ? path.resolve(p) : '';
-      if (ws && (ws.foldsCase ? want.toLowerCase() === ws.root.toLowerCase() : want === ws.root)) return ws.info();
-      throw new BackendFailure('EACCES', 'This web server only serves the folder it was started for');
+      const want = pagePath(p);
+      if (!want || !underRoots(want)) throw notServed();
+      const where = await whereIs(want);
+      if (where === 'missing') throw new BackendFailure('ENOENT', `Not a folder: ${want}`);
+      if (where === 'out') throw notServed();
+      const before = service.workspace?.root ?? null;
+      const info = await service.openWorkspace(want);
+      // A link renamed into its place between the check and the open: back to the folder it came from.
+      if ((await whereIs(service.workspace?.root ?? want)) !== 'in') {
+        await service.openWorkspace(before ?? roots[0]).catch(() => {});
+        throw notServed();
+      }
+      return info;
     },
     async resolvePath([p]) {
-      const r = await service.resolvePath(String(p));
+      const abs = pagePath(p);
+      if (!abs || !underRoots(abs)) return null;
+      const r = await service.resolvePath(abs);
       return r && r.rel !== null ? r : null;
     },
-    recentWorkspaces: async () => [],
-    forgetRecent: async () => [],
+    recentWorkspaces: async () => listed(),
+    forgetRecent: async () => listed(),
+    async saveSettings([patch]) {
+      const clean: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(patch && typeof patch === 'object' ? patch : {})) {
+        if (!WEB_SETTINGS.has(k)) continue; // desktop-only and privacy keys: dropped, the rest still saves
+        if ((JSON.stringify(v) ?? '').length > MAX_SETTING_CHARS) throw new BackendFailure('ETOOBIG', `The value of ${k} is too large`);
+        clean[k] = v;
+      }
+      return service.saveSettings(clean);
+    },
+    async bootstrap() {
+      return { ...(await service.bootstrap()), recent: listed() };
+    },
+  };
+  /** Shared servers: everything else about the machine stays out too. */
+  const SHARED: Record<string, (args: unknown[]) => Promise<unknown>> = {
     async processes() {
       throw new BackendFailure('ENOTSUP', 'Not available from a shared web server');
     },
     // The OS build number / distro says more about this machine than the platform name the page already has.
     async osVersion() {
       throw new BackendFailure('ENOTSUP', 'Not available from a shared web server');
-    },
-    async saveSettings([patch]) {
-      const clean = Object.fromEntries(Object.entries(patch && typeof patch === 'object' ? patch : {}).filter(([k]) => !DESKTOP_SETTING.test(k)));
-      return service.saveSettings(clean);
-    },
-    async bootstrap() {
-      return { ...(await service.bootstrap()), recent: [] };
     },
   };
 
@@ -187,9 +262,12 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
           try {
             c = String(JSON.parse(body)?.code ?? '');
           } catch {}
-          const until = launchCodes.get(c);
+          const entry = launchCodes.get(c);
           launchCodes.delete(c);
-          const ok = until !== undefined && until > Date.now();
+          const ok = entry !== undefined && entry.until > Date.now();
+          try {
+            entry?.used?.(); // spent: its redirect file goes (cli.ts)
+          } catch {}
           res.writeHead(ok ? 200 : 403, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(ok ? { token } : { error: 'expired' }));
           return;
         }
@@ -226,7 +304,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
           res.writeHead(200, {
             'content-type': MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream',
             'content-length': String(st.size),
-            'cache-control': 'no-cache',
+            'cache-control': 'no-store',
             'x-content-type-options': 'nosniff',
             'content-security-policy': "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
             // Other local origins must not even embed workspace files (only our own preview may).
@@ -260,6 +338,11 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
           req.resume();
           throw new BackendFailure('ENOTSUP', 'The terminal needs the desktop app');
         }
+        // Reveal opens a file manager on this computer's screen: never for a client on the network.
+        if (m && m[1] === 'revealInFolder' && !fromLoopback(req.socket.remoteAddress)) {
+          req.resume();
+          throw new BackendFailure('ENOTSUP', 'Reveal in file manager works only on the computer that runs One');
+        }
         if (m && req.method === 'POST' && DESKTOP_ONLY.has(m[1])) {
           req.resume(); // discard the body
           throw new BackendFailure('ENOTSUP', 'PDF export needs the desktop app. In the browser use Print and pick "Save as PDF"');
@@ -269,7 +352,9 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
           const parsed = body ? JSON.parse(body) : null;
           const args: unknown = parsed?.args ?? [];
           if (!Array.isArray(args)) throw new BackendFailure('EINVAL', 'args must be an array');
-          const pin = pinned ? PINNED[m[1]] : undefined;
+          // Trust lets the folder's own .git/config run programs: only the desktop app's own dialog grants it.
+          if (m[1] === 'git' && args[0] === 'trust') throw new BackendFailure('ENOTSUP', 'Trust this folder for git in the desktop app (Source control panel): a browser page cannot grant it');
+          const pin = (shared ? SHARED[m[1]] : undefined) ?? (pinned ? PINNED[m[1]] : undefined);
           let result = pin ? await pin(args) : await (service as any)[m[1]](...args);
           // The renderer signs media URLs with this (platform/web.ts): it arrives with the first round-trip.
           if (m[1] === 'bootstrap' && result && typeof result === 'object') result = { ...result, mediaKey };
@@ -306,11 +391,11 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     token,
     mediaKey,
     mediaPath: (rel) => `/api/file?path=${encodeURIComponent(rel)}&m=${mediaMac(mediaKey, mediaSubject(service.workspace?.root ?? '', rel))}`,
-    launchUrl() {
+    launchUrl(used) {
       const now = Date.now();
-      for (const [c, until] of launchCodes) if (until <= now) launchCodes.delete(c);
+      for (const [c, e] of launchCodes) if (e.until <= now) launchCodes.delete(c);
       const code = crypto.randomBytes(16).toString('hex');
-      launchCodes.set(code, now + LAUNCH_TTL_MS);
+      launchCodes.set(code, { until: now + LAUNCH_TTL_MS, used });
       return `${origin}?launch=${code}`;
     },
     service,
@@ -442,6 +527,7 @@ async function serveStatic(dir: string, url: URL, host: string | undefined, res:
       'content-type': MIME['.html'],
       'cache-control': 'no-store',
       'referrer-policy': 'no-referrer',
+      'x-dns-prefetch-control': 'off', // link hosts in a note are not looked up ahead
       // Any page on http://127.0.0.1:<other port> is "same-site": it must not frame the app (clickjacking).
       // frame-ancestors can't be set from the <meta> CSP.
       'content-security-policy': "frame-ancestors 'none'",
