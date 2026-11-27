@@ -2,7 +2,7 @@
 // consumer (ReadPool) and cut into pages in path order. A full pass also streams a fresh persistent
 // cache; with a loaded cache, unchanged files are only stat'ed, never opened.
 import type { FileData } from '../shared/api';
-import type { ReadPool, ReadResult } from './readpool';
+import type { ReadCheck, ReadPool, ReadResult } from './readpool';
 import { CacheWriter, TextCache, encodeRecord } from './indexcache';
 
 /** Files per worker message: amortises messaging without making any one batch slow. */
@@ -26,6 +26,10 @@ export const nameOnlyFile = (path: string, mtime: number, size?: number): FileDa
 
 export interface PassHost {
   abs(rel: string): string;
+  /** Below a link (or one itself): the reader checks where it really is before using it (ReadJob.v). */
+  needsCheck?(rel: string): boolean;
+  /** What that check compares against (null = cannot tell: such files are not read). */
+  check?(): ReadCheck | null;
   /** Bytes → indexable text (null: binary); records the file's stamp in the workspace index. */
   decode(rel: string, bytes: Uint8Array, mtime: number, size: number): FileData | null;
   /** A cache hit: records the stamp, returns the cached text (null: remembered as not indexable). */
@@ -87,11 +91,14 @@ export class TextPass {
       this.issued += rels.length;
       this.inflight++;
       const epoch = this.epoch;
+      let checked = false;
       const jobs = rels.map((rel) => {
         const st = this.cache?.stamp(rel);
-        return st ? { abs: this.host.abs(rel), mtime: st.mtime, size: st.size } : { abs: this.host.abs(rel) };
+        const job: { abs: string; mtime?: number; size?: number; v?: 1 } = st ? { abs: this.host.abs(rel), mtime: st.mtime, size: st.size } : { abs: this.host.abs(rel) };
+        if (this.host.needsCheck?.(rel)) (job.v = 1), (checked = true);
+        return job;
       });
-      this.pool.read(jobs, this.maxBytes).then(
+      this.pool.read(jobs, this.maxBytes, checked ? (this.host.check?.() ?? null) : null).then(
         (out) => {
           this.inflight--;
           if (this.closed || epoch !== this.epoch) return this.pump();

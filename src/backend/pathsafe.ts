@@ -31,6 +31,28 @@ export function windowsNameProblem(name: string): string | null {
   return null;
 }
 
+// Code points HFS+ ignores in names (git's is_hfs_dotgit list): ".g‌it" is ".git" there.
+const HFS_IGNORABLE = /[​-‏‪-‮⁪-⁯﻿]/g;
+
+/**
+ * Is this one path segment git's own folder? `.git` (case-folded where the folder folds case; NTFS also folds
+ * "ı" to "I", hence the upper-case compare) or its 8.3 short name `GIT~1` (any platform: a Linux build reaches
+ * NTFS / FAT through drvfs and mounts). Writing there hands git hooks, filters and `core.fsmonitor`.
+ */
+export function isGitDirName(seg: string, foldCase: boolean): boolean {
+  const s = seg.replace(HFS_IGNORABLE, '');
+  if (s === '.git' || /^git~\d+$/i.test(s)) return true;
+  return foldCase && (s.toLowerCase() === '.git' || s.toUpperCase() === '.GIT');
+}
+
+/**
+ * Windows: a UNC or device path (`\\server\share`, `//server/share`, `\\?\…`, `\\.\…`). Looking one up opens an
+ * SMB connection and sends the user's NTLM hash to that server, so a path from the page is never touched on disk.
+ */
+export function isUncOrDevicePath(p: string, win: boolean): boolean {
+  return win && /^[\\/]{2}/.test(p);
+}
+
 /** Workspace-relative path → absolute native path, refusing anything outside `root`. */
 export function resolveInside(root: string, rel: string, p: PlatformPath, win: boolean): string {
   const clean = normalize(rel);

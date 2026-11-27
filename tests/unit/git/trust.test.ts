@@ -21,7 +21,8 @@ async function spyGit(): Promise<{ gitPath: string; calls: () => string[] }> {
 }
 async function service(gitPath: string, cfg?: string) {
   const configDir = cfg ?? (await tmpDir('cfg'));
-  const s = new BackendService(configDir, {}, { cacheDir: '' }, { env: testEnv(), gitPath });
+  // confirmTrust: main's native "Trust this folder?" dialog, answered yes (without the hook trust is refused).
+  const s = new BackendService(configDir, { confirmTrust: async () => true }, { cacheDir: '' }, { env: testEnv(), gitPath });
   services.push(s);
   return { s, configDir };
 }

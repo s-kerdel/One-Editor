@@ -23,7 +23,7 @@ describe('responsiveness while git runs', () => {
     const fake = path.join(BASE, 'big-status-git.sh');
     fs.writeFileSync(fake, `#!/bin/sh\nfor a in "$@"; do if [ "$a" = status ]; then dd if='${big}' bs=262144 2>/dev/null; exit 0; fi; done\nexec git "$@"\n`, { mode: 0o755 });
     const cfg = path.join(BASE, 'responsive-cfg');
-    const s = new BackendService(cfg, {}, {}, { env: testEnv(), gitPath: fake });
+    const s = new BackendService(cfg, { confirmTrust: async () => true }, {}, { env: testEnv(), gitPath: fake });
     services.push(s);
     await s.openWorkspace(dir);
     await s.git('trust'); // the user's "Trust" in the Source control panel: no git runs without it

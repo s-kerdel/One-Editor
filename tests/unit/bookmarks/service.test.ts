@@ -28,7 +28,8 @@ async function service(kind?: 'desktop' | 'web') {
   await s.openWorkspace(root);
   return s;
 }
-const file = () => path.join(cfg, 'bookmarks', `${rootId(open[0]?.workspace?.root ?? path.resolve(root))}.json`);
+// The folder's own case rule (before a service opened it: the old folded id, which a case-sensitive folder still reads).
+const file = () => path.join(cfg, 'bookmarks', `${rootId(open[0]?.workspace?.root ?? path.resolve(root), open[0]?.workspace?.foldsCase ?? true)}.json`);
 
 describe('bookmarks storage', () => {
   it('lives in app data (per folder), shared by desktop and browser mode; the folder stays untouched', async () => {

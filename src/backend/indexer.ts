@@ -9,7 +9,7 @@ import path from 'node:path';
 import type { FileData, TextPage } from '../shared/api';
 import { decode, detectEol, toLf } from './textcodec';
 import { IgnoreStack, globalExcludesPath, isLockfile, isMinified, type IgnoreSet } from './gitignore';
-import { ReadPool, type ReadResult } from './readpool';
+import { ReadPool, type ReadCheck, type ReadResult } from './readpool';
 import { TextPass, upperBound, nameOnlyFile } from './textpass';
 import { CacheWriter, TextCache } from './indexcache';
 import { isProbablyTextName } from './textnames';
@@ -40,6 +40,11 @@ export interface IndexerConfig {
   readThreads: number;
   index: Required<IndexOptions>;
   foldCase: boolean;
+  /** One's data folder (absolute, as given and resolved) and, by identity, root-relative: never read. */
+  deny?: string[];
+  denyRels?: string[];
+  /** The root itself is inside a deny folder: nothing below a link is read. */
+  denyAll?: boolean;
 }
 
 /** What the workspace knows about its files (paths from the tree walk; folders with ignore files). */
@@ -48,6 +53,9 @@ export interface PathSnapshot {
   files: string[];
   ignoreDirs: string[];
   repoDirs: string[];
+  /** Entries that are links (they led inside the folder when listed): files at or below one are read only after
+   *  checking where they really are now — a page can move a link, and a relative one then leads elsewhere. */
+  links?: string[];
 }
 
 /** mtime + size of every file a page examined (the workspace keeps them for change detection). */
@@ -69,14 +77,63 @@ const PASS_IDLE_MS = 30_000;
 const O_READ = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const depthOf = (rel: string) => (rel ? rel.split('/').length : 0);
+const parentOf = (rel: string) => {
+  const i = rel.lastIndexOf('/');
+  return i === -1 ? '' : rel.slice(0, i);
+};
 
-function readSmallText(abs: string): string | null {
+const within = (child: string, parent: string, fold: boolean) => {
+  const r = path.relative(fold ? parent.toLowerCase() : parent, fold ? child.toLowerCase() : child);
+  return !(r === '..' || r.startsWith('..' + path.sep) || path.isAbsolute(r));
+};
+/** The real path of `abs` when it is inside `c.root` and not denied (null: outside, denied, gone, or no `c`). */
+function realInside(abs: string, c: ReadCheck | null): string | null {
+  if (!c) return null;
+  let real: string;
   try {
-    fsDelay();
-    const st = fs.statSync(abs);
-    return st.isFile() && st.size <= 1 << 20 ? fs.readFileSync(abs, 'utf8') : null;
+    real = fs.realpathSync.native(abs);
   } catch {
     return null;
+  }
+  return within(real, c.root, c.fold) && !c.deny.some((d) => within(real, d, c.fold)) ? real : null;
+}
+/** After the open: `real` is the opened file (no link swapped in between the check and the open). */
+function isOpened(fd: number, real: string): boolean {
+  try {
+    const a = fs.fstatSync(fd, { bigint: true });
+    const b = fs.statSync(real, { bigint: true });
+    return a.dev === b.dev && a.ino === b.ino && (a.ino !== 0n || (a.birthtimeNs === b.birthtimeNs && a.size === b.size));
+  } catch {
+    return false;
+  }
+}
+
+/** A small text file (ignore rules); `check`: below a link, read only where it really is inside (ReadJob.v). */
+function readSmallText(abs: string, check?: ReadCheck | null): string | null {
+  let fd = -1;
+  try {
+    fsDelay();
+    if (check !== undefined && !realInside(abs, check)) return null;
+    // Opened without waiting (a FIFO in its place never blocks this thread), then checked by the handle.
+    fd = fs.openSync(abs, O_READ);
+    if (check !== undefined) {
+      const real = realInside(abs, check);
+      if (!real || !isOpened(fd, real)) return null;
+    }
+    const st = fs.fstatSync(fd);
+    if (!st.isFile() || st.size > 1 << 20) return null;
+    const buf = Buffer.alloc(st.size);
+    let n = 0;
+    while (n < st.size) {
+      const r = fs.readSync(fd, buf, n, st.size - n, n);
+      if (!r) break;
+      n += r;
+    }
+    return buf.toString('utf8', 0, n);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== -1) fs.closeSync(fd);
   }
 }
 
@@ -134,10 +191,58 @@ export class Indexer {
     this.snap = s;
     this.list = null;
     this.nameList = null;
+    this.linkSet = new Set(s.links ?? []);
+    this.underLink.clear();
   }
 
   private abs(rel: string) {
     return rel ? path.join(this.cfg.root, ...rel.split('/')) : this.cfg.root;
+  }
+
+  // ---- containment below links --------------------------------------------------------------------
+  // The walk listed only links that led inside, but a page can move a link afterwards (a relative one then leads
+  // elsewhere) or move a link that leads outside in place of a folder another link points to. Files at or below
+  // a listed link are therefore read only after checking where they really are, right then (no folder cache:
+  // the check must be newer than the move); everything else is read as before, at no extra cost.
+
+  private linkSet = new Set<string>();
+  /** Folder → at or below a listed link (per snapshot). */
+  private underLink = new Map<string, boolean>();
+  private checkInfo: ReadCheck | null = null;
+
+  private dirUnderLink(dir: string): boolean {
+    if (!dir) return false;
+    let v = this.underLink.get(dir);
+    if (v === undefined) {
+      v = this.linkSet.has(dir) || this.dirUnderLink(parentOf(dir));
+      this.underLink.set(dir, v);
+    }
+    return v;
+  }
+
+  /** `rel` is a listed link or below one. */
+  needsCheck(rel: string): boolean {
+    return this.linkSet.size > 0 && (this.linkSet.has(rel) || this.dirUnderLink(parentOf(rel)));
+  }
+
+  /** The root without links + the deny folders (null: realpath fails here, or the root is denied: fail closed).
+   *  Only a success is kept. */
+  check(): ReadCheck | null {
+    if (this.checkInfo || this.cfg.denyAll) return this.checkInfo;
+    let root: string;
+    try {
+      root = fs.realpathSync.native(this.cfg.root);
+    } catch {
+      return null;
+    }
+    const deny = [...(this.cfg.deny ?? []), ...(this.cfg.denyRels ?? []).map((r) => path.join(root, ...r.split('/')))];
+    return (this.checkInfo = { root, deny, fold: this.cfg.foldCase });
+  }
+
+  /** In-thread check of an opened file (the reader threads do the same, readpool.ts). */
+  private contained(rel: string, fd: number): boolean {
+    const real = realInside(this.abs(rel), this.check());
+    return !!real && isOpened(fd, real);
   }
 
   // ---- what gets indexed ----------------------------------------------------------------------
@@ -269,12 +374,13 @@ export class Indexer {
       for (const r of repos) if (r) stack.add(r, global);
     }
     for (const f of outer?.files ?? []) if (f.prefix && !f.prefix.startsWith('../')) stack.add('', f.text, f.prefix);
+    const checkFor = (dir: string) => (this.linkSet.size && this.dirUnderLink(dir) ? this.check() : undefined);
     for (const r of repos) {
-      const t = readSmallText(path.join(this.abs(r), '.git', 'info', 'exclude'));
+      const t = readSmallText(path.join(this.abs(r), '.git', 'info', 'exclude'), checkFor(r));
       if (t) stack.add(r, t);
     }
     for (const d of [...this.snap.ignoreDirs].sort((a, b) => depthOf(a) - depthOf(b))) {
-      const t = readSmallText(path.join(this.abs(d), '.gitignore'));
+      const t = readSmallText(path.join(this.abs(d), '.gitignore'), checkFor(d));
       if (t) stack.add(d, t);
     }
     this.ignore = { version: this.snap.version, stack };
@@ -301,7 +407,10 @@ export class Indexer {
     let fd = -1;
     try {
       fsDelay();
+      const check = this.needsCheck(rel);
+      if (check && !realInside(this.abs(rel), this.check())) return { kind: 'error' };
       fd = fs.openSync(this.abs(rel), O_READ);
+      if (check && !this.contained(rel, fd)) return { kind: 'error' };
       const st = fs.fstatSync(fd); // of the opened object: no stat→open race
       if (!st.isFile() || st.size > this.opts.maxFileBytes) return { kind: 'skip', mtime: st.mtimeMs, size: st.size };
       const buf = new Uint8Array(st.size);
@@ -323,7 +432,11 @@ export class Indexer {
     if (this.pool?.available) {
       try {
         const batches: Promise<ReadResult[]>[] = [];
-        for (let i = 0; i < rels.length; i += 24) batches.push(this.pool.read(rels.slice(i, i + 24).map((r) => ({ abs: this.abs(r) })), this.opts.maxFileBytes));
+        for (let i = 0; i < rels.length; i += 24) {
+          const part = rels.slice(i, i + 24);
+          const jobs = part.map((r) => (this.needsCheck(r) ? { abs: this.abs(r), v: 1 as const } : { abs: this.abs(r) }));
+          batches.push(this.pool.read(jobs, this.opts.maxFileBytes, jobs.some((j) => 'v' in j) ? this.check() : null));
+        }
         return (await Promise.all(batches)).flat();
       } catch {
         // threads unavailable: read in this thread below
@@ -334,6 +447,8 @@ export class Indexer {
 
   private readonly passHost = {
     abs: (rel: string) => this.abs(rel),
+    needsCheck: (rel: string) => this.needsCheck(rel),
+    check: () => this.check(),
     decode: (rel: string, bytes: Uint8Array, mtime: number, size: number) => this.decodeFile(rel, bytes, mtime, size),
     fromCache: (rel: string, mtime: number, size: number, cache: TextCache): FileData | null => {
       const c = cache.get(rel);
@@ -445,6 +560,7 @@ export class Indexer {
   private probe(rel: string): { mtime: number; size: number } | null {
     try {
       fsDelay();
+      if (this.needsCheck(rel) && !realInside(this.abs(rel), this.check())) return null;
       const st = fs.statSync(this.abs(rel));
       return st.isFile() ? { mtime: st.mtimeMs, size: st.size } : null;
     } catch {

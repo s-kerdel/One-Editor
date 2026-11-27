@@ -85,7 +85,7 @@ describe('git gives no answer in time', () => {
   it('Retry through the RPC: a fresh status looks at the folder again (the failure used to stay until the folder was reopened)', async () => {
     const dir = await makeRepo('t-retry', { 'a.md': 'a\n' });
     const fake = hangingGit('hang-retry', 'rev-parse');
-    const s = new BackendService(path.join(BASE, 't-retry-cfg'), {}, {}, { env: testEnv(), gitPath: fake.exe, timeouts: { discover: 300 } });
+    const s = new BackendService(path.join(BASE, 't-retry-cfg'), { confirmTrust: async () => true }, {}, { env: testEnv(), gitPath: fake.exe, timeouts: { discover: 300 } });
     services.push(s);
     await s.openWorkspace(dir);
     await s.git('trust');

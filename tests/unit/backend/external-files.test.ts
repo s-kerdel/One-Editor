@@ -140,14 +140,14 @@ describe('ExternalFiles allow-list', () => {
 describe('ExternalFiles poller', () => {
   /** Counts fs.promises.stat calls on `real`; `hold()` makes the next ones wait until `release()`. */
   function statsOf(real: string) {
-    const realStat = fs.promises.stat.bind(fs.promises) as (p: fs.PathLike) => Promise<fs.Stats>;
+    const realStat = fs.promises.stat.bind(fs.promises) as (p: fs.PathLike, o?: fs.StatOptions) => Promise<fs.Stats>;
     const c = { calls: 0, gate: null as Promise<void> | null, release: () => {} };
-    vi.spyOn(fs.promises, 'stat').mockImplementation((async (f: fs.PathLike) => {
+    vi.spyOn(fs.promises, 'stat').mockImplementation((async (f: fs.PathLike, o?: fs.StatOptions) => {
       if (f === real) {
         c.calls++;
         if (c.gate) await c.gate;
       }
-      return realStat(f);
+      return realStat(f, o);
     }) as never);
     const hold = () => (c.gate = new Promise<void>((r) => (c.release = () => ((c.gate = null), r()))));
     return Object.assign(c, { hold });

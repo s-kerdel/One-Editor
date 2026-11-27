@@ -158,7 +158,7 @@ describe('index refresh through the backend (setting git.refreshIndex)', () => {
     const dir = await makeRepo(`refresh-setting-${setting}`, all);
     makeStale(dir, Object.keys(all));
     const cfg = await tmpDir('refresh-cfg');
-    const s = new BackendService(cfg, { trash: async () => {}, trashIsAuthoritative: true }, {}, { env: testEnv() });
+    const s = new BackendService(cfg, { trash: async () => {}, trashIsAuthoritative: true, confirmTrust: async () => true }, {}, { env: testEnv() });
     services.push(s);
     if (setting !== undefined) await s.saveSettings({ 'git.refreshIndex': setting } as any);
     const events: GitMonitorEvent[] = [];

@@ -10,6 +10,15 @@ export interface ReadJob {
   /** Cached stamp: when a plain stat (no open → no antivirus scan) still matches, nothing is read. */
   mtime?: number;
   size?: number;
+  /** Below a link: read only when its real path is inside `ReadCheck.root` (not denied) and is the opened file. */
+  v?: 1;
+}
+
+/** Where files may really be (the root without links) and where not (One's data folder). */
+export interface ReadCheck {
+  root: string;
+  deny: string[];
+  fold: boolean;
 }
 
 export type ReadResult =
@@ -20,10 +29,30 @@ export type ReadResult =
   | { kind: 'error' };
 
 // Self-contained (eval'd): works unchanged from the Electron main bundle and the server CLI.
+// Containment of a job marked v (below a link; Indexer.contained is the same check in-thread): its real path
+// inside the root and not denied, and — once opened — that path is the opened file (a link swapped in between
+// fails). No check info = fail closed.
 const WORKER_SRC = `
 const { parentPort } = require('node:worker_threads');
 const fs = require('node:fs');
+const path = require('node:path');
 const O = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0);
+const within = (child, parent, fold) => {
+  const r = path.relative(fold ? parent.toLowerCase() : parent, fold ? child.toLowerCase() : child);
+  return !(r === '..' || r.startsWith('..' + path.sep) || path.isAbsolute(r));
+};
+const realInside = (abs, c) => {
+  if (!c) return null;
+  let real;
+  try { real = fs.realpathSync.native(abs); } catch { return null; }
+  if (!within(real, c.root, c.fold) || c.deny.some((d) => within(real, d, c.fold))) return null;
+  return real;
+};
+const sameFile = (fd, real) => {
+  const a = fs.fstatSync(fd, { bigint: true });
+  const b = fs.statSync(real, { bigint: true });
+  return a.dev === b.dev && a.ino === b.ino && (a.ino !== 0n || (a.birthtimeNs === b.birthtimeNs && a.size === b.size));
+};
 // Tests: latency injection on every stat / open (9P bridge to WSL, antivirus scanning), see fsdelay.ts.
 const DELAY = Number(process.env.SEC_EDIT_TEST_FS_LATENCY_MS || process.env.SEC_EDIT_TEST_OPEN_DELAY_MS) || 0;
 const nap = DELAY ? new Int32Array(new SharedArrayBuffer(4)) : null;
@@ -32,6 +61,7 @@ parentPort.on('message', (m) => {
   const transfer = [];
   for (const j of m.jobs) {
     try {
+      if (j.v && !realInside(j.abs, m.check)) { out.push({ kind: 'error' }); continue; }
       if (j.mtime !== undefined) {
         if (nap) Atomics.wait(nap, 0, 0, DELAY);
         const st = fs.statSync(j.abs);
@@ -40,6 +70,7 @@ parentPort.on('message', (m) => {
       if (nap) Atomics.wait(nap, 0, 0, DELAY);
       const fd = fs.openSync(j.abs, O);
       try {
+        if (j.v) { const real = realInside(j.abs, m.check); if (!real || !sameFile(fd, real)) { out.push({ kind: 'error' }); continue; } }
         const st = fs.fstatSync(fd);
         if (!st.isFile() || st.size > m.max) { out.push({ kind: 'skip', mtime: st.mtimeMs, size: st.size }); continue; }
         const buf = new Uint8Array(st.size);
@@ -157,8 +188,8 @@ export class ReadPool {
     this.idleTimer?.unref();
   }
 
-  /** Reads a batch on an idle (or new, or the least busy) thread; results in job order. */
-  read(jobs: ReadJob[], maxBytes: number): Promise<ReadResult[]> {
+  /** Reads a batch on an idle (or new, or the least busy) thread; results in job order. `check`: for jobs marked `v`. */
+  read(jobs: ReadJob[], maxBytes: number, check: ReadCheck | null = null): Promise<ReadResult[]> {
     if (!this.available) return Promise.reject(new Error('read pool unavailable'));
     let i: number;
     try {
@@ -174,7 +205,7 @@ export class ReadPool {
     this.load[i]++;
     return new Promise((resolve, reject) => {
       this.waiting.set(id, { resolve, reject, worker: w });
-      w.postMessage({ id, jobs, max: maxBytes });
+      w.postMessage({ id, jobs, max: maxBytes, check });
     });
   }
 

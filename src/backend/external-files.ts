@@ -11,11 +11,24 @@ import { MAX_AS_TEXT_BYTES, MAX_AS_TEXT_FULL_BYTES, type FileData, type FsEvent,
 import { EXT_PREFIX, extAbsOf, extIdOf, isExtPath } from '../shared/external';
 import { BackendFailure } from './errors';
 import { decode, decodeBestEffort, detectEol, encode, toLf, withEol } from './textcodec';
-import { atomicWrite, readHead } from './workspace';
+import { atomicWrite } from './workspace';
 
 const MAX_ALLOWED = 200;
 const MAX_OPEN_BYTES = 64 * 1024 * 1024;
 const POLL_MS = 1200;
+const O_READ = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0);
+
+/** The first `bytes` of an opened file. */
+async function readHeadFh(fh: fsp.FileHandle, bytes: number): Promise<Buffer> {
+  const buf = Buffer.allocUnsafe(Math.max(0, bytes));
+  let n = 0;
+  while (n < bytes) {
+    const { bytesRead } = await fh.read(buf, n, bytes - n, n);
+    if (!bytesRead) break;
+    n += bytesRead;
+  }
+  return buf.subarray(0, n);
+}
 
 interface Entry {
   id: string;
@@ -90,17 +103,44 @@ export class ExternalFiles {
     return e;
   }
 
+  /**
+   * Opens the allowed file and checks the handle: a regular file, the one at its real path (target() just checked
+   * that path is still no link), so a FIFO or link swapped in between is never read (O_NONBLOCK: never waits).
+   */
+  private async openChecked(e: Entry): Promise<{ fh: fsp.FileHandle; st: fs.Stats }> {
+    const fh = await fsp.open(e.real, O_READ);
+    try {
+      const [st, big, there, real] = await Promise.all([fh.stat(), fh.stat({ bigint: true }), fsp.stat(e.real, { bigint: true }).catch(() => null), fsp.realpath(e.real).catch(() => null)]);
+      if (!st.isFile()) throw new BackendFailure('EINVAL', `Not a regular file: ${e.real}`);
+      if (!there || real === null || this.key(real) !== this.key(e.real) || there.dev !== big.dev || there.ino !== big.ino) throw new BackendFailure('EACCES', 'The file is now a link to somewhere else');
+      return { fh, st };
+    } catch (err) {
+      await fh.close().catch(() => {});
+      throw err;
+    }
+  }
+
   async read(id: string, opts: { maxBytes?: number; asText?: true | 'full' } = {}): Promise<FileData> {
     const e = await this.target(id);
-    const st = await fsp.stat(e.real);
-    if (!st.isFile()) throw new BackendFailure('EINVAL', `Not a regular file: ${e.real}`);
+    const pre = await fsp.stat(e.real);
+    // FIFOs / devices are refused before anything opens them.
+    if (!pre.isFile()) throw new BackendFailure('EINVAL', `Not a regular file: ${e.real}`);
+    const { fh, st } = await this.openChecked(e);
+    try {
+      return await this.readOpen(id, e, fh, st, opts);
+    } finally {
+      await fh.close().catch(() => {});
+    }
+  }
+
+  private async readOpen(id: string, e: Entry, fh: fsp.FileHandle, st: fs.Stats, opts: { maxBytes?: number; asText?: true | 'full' }): Promise<FileData> {
     if (st.size > MAX_OPEN_BYTES) throw new BackendFailure('ETOOBIG', `File is too large to open (${Math.round(st.size / 1048576)} MB)`);
     if (opts.maxBytes !== undefined && st.size > opts.maxBytes) throw new BackendFailure('ETOOBIG', `File is larger than ${opts.maxBytes} bytes`);
     // asText: a window / the whole file of a file decode() refuses; it stays flagged binary (see Workspace.readFile).
     if (opts.asText === 'full' && st.size > MAX_AS_TEXT_FULL_BYTES)
       throw new BackendFailure('ETOOBIG', `File is too large to open as text (${Math.round(st.size / 1048576)} MB; the limit is ${MAX_AS_TEXT_FULL_BYTES / 1048576} MB)`);
     const window = opts.asText === 'full' ? st.size : MAX_AS_TEXT_BYTES;
-    const buf = opts.asText ? await readHead(e.real, Math.min(st.size, window)) : await fsp.readFile(e.real);
+    const buf = opts.asText ? await readHeadFh(fh, Math.min(st.size, window)) : await fh.readFile();
     const d = opts.asText ? decodeBestEffort(buf) : decode(buf);
     this.note(e, st.mtimeMs, st.size);
     e.open = true; // read = opened in a tab (again)
@@ -119,7 +159,16 @@ export class ExternalFiles {
     if (st && !(st.mode & 0o200)) throw new BackendFailure('EACCES', `File is read-only: ${e.real}`);
     let { eol, bom, encoding } = opts as Pick<WriteOptions, 'eol' | 'bom' | 'encoding'>;
     if (st && (eol === undefined || bom === undefined || encoding === undefined)) {
-      const d = decode(await fsp.readFile(e.real));
+      // Bounded (what read() serves at most) and through the checked handle.
+      if (st.size > MAX_OPEN_BYTES) throw new BackendFailure('ETOOBIG', `File is too large to replace without its line endings and encoding (${Math.round(st.size / 1048576)} MB)`);
+      const { fh, st: now } = await this.openChecked(e);
+      let bytes: Buffer;
+      try {
+        bytes = await readHeadFh(fh, Math.min(now.size, MAX_OPEN_BYTES));
+      } finally {
+        await fh.close().catch(() => {});
+      }
+      const d = decode(bytes);
       eol ??= detectEol(d.text);
       bom ??= d.bom;
       encoding ??= d.encoding;

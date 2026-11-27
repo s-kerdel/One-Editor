@@ -22,7 +22,8 @@ import type { PdfExportResult, PdfLayout } from '../shared/pdf';
 import { stem } from '../shared/paths';
 import { isExtPath } from '../shared/external';
 import { ExternalFiles } from './external-files';
-import { BackendFailure, MAX_INDEX_BYTES, Workspace, retryWin, type IndexOptions, type WorkspaceOptions } from './workspace';
+import { BackendFailure, MAX_INDEX_BYTES, Workspace, insideAnyFolder, retryWin, type IndexOptions, type WorkspaceOptions } from './workspace';
+import { isUncOrDevicePath } from './pathsafe';
 import { platformTrash } from './trash';
 import { withFileLock } from './filelock';
 import { checkPdfRequest, looksLikePdf, withPdfExtension, writeFileAtomic } from './pdf-export';
@@ -77,8 +78,13 @@ export function writeJson(file: string, data: unknown): Promise<void> {
 
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 
-/** Stable per-folder id for config files (sessions, export folders). */
-export const rootId = (root: string) => crypto.createHash('sha1').update(root.toLowerCase()).digest('hex').slice(0, 16);
+/** Stable per-folder id for config files (sessions, export folders, bookmarks). `foldCase`: the folder's own case
+ *  rule (Workspace.foldsCase, as git trust uses): folding roots keep the id they always had; on a case-sensitive
+ *  disk "Proj" and "proj" are two folders with two ids. */
+export const rootId = (root: string, foldCase = true) => crypto.createHash('sha1').update(foldCase ? root.toLowerCase() : root).digest('hex').slice(0, 16);
+
+/** One value of a settings patch, as JSON: settings are small (the largest, file type associations, is a few kB). */
+const MAX_SETTING_VALUE_CHARS = 64 * 1024;
 
 const INDEX_KEYS = ['search.respectGitignore', 'search.skipLockfiles', 'search.skipMinified', 'search.maxFileSizeKB', 'files.associations'];
 /** The app's index options: a name the user's file type associations cover is text too (search, symbols).
@@ -121,6 +127,19 @@ export interface ServiceHooks {
   sessionKind?: 'desktop' | 'web';
   /** Desktop main only: files the user opened outside the open folder may be served (backend/external-files.ts). Server mode never sets it. */
   externalFiles?: boolean;
+  /**
+   * Desktop main only: the user's answer in a native "Trust this folder?" dialog for `root` (the open folder, as
+   * BackendService has it). Trusting lets git run the folder's own hooks, filters and `core.fsmonitor`, so a page
+   * must never be able to say yes itself. Absent (browser mode, every HTTP server, MCP, tests without it):
+   * git('trust') is refused (EACCES). Only true counts as yes; a throw counts as no.
+   */
+  confirmTrust?: (root: string) => Promise<boolean>;
+  /**
+   * Desktop main only: may resolvePath look up this UNC / device path outside the open folder (main saw it itself:
+   * launch arguments, a drop, a dialog)? Synchronous, no disk access. Absent: never (a lookup sends the user's
+   * NTLM hash to that server).
+   */
+  remotePathOk?: (absPath: string) => boolean;
 }
 
 export class BackendService {
@@ -192,8 +211,23 @@ export class BackendService {
   private get recentFile() {
     return path.join(this.configDir, 'recent.json');
   }
-  private sessionFile(root: string, kind = this.hooks.sessionKind ?? 'desktop') {
-    return path.join(this.configDir, 'sessions', `${rootId(root)}${kind === 'web' ? '@web' : ''}.json`);
+  private sessionFile(root: string, kind = this.hooks.sessionKind ?? 'desktop', foldCase = this.foldsCase(root)) {
+    return path.join(this.configDir, 'sessions', `${rootId(root, foldCase)}${kind === 'web' ? '@web' : ''}.json`);
+  }
+
+  /** The open folder's case rule for its config ids (another root: the old, folded rule). */
+  private foldsCase(root: string): boolean {
+    return this.workspace?.root === root ? this.workspace.foldsCase : true;
+  }
+
+  /**
+   * A per-folder config file under its id; on a case-sensitive root whose id changed (L15: it used to be folded),
+   * the file under the old id is read until this folder writes its own (no session or bookmark lost on update).
+   */
+  private async readPerFolder<T>(file: (foldCase: boolean) => string, root: string): Promise<T | null> {
+    const own = file(this.foldsCase(root));
+    if (this.foldsCase(root) || rootId(root, true) === rootId(root, false) || (await fsp.stat(own).then(() => true, () => false))) return readJson<T | null>(own, null);
+    return readJson<T | null>(file(true), null);
   }
   /** Last folder a PDF was saved to, per workspace. */
   private get exportDirsFile() {
@@ -246,18 +280,22 @@ export class BackendService {
     if (!st?.isDirectory()) throw new BackendFailure('ENOENT', `Not a folder: ${absPath}`);
     // A WSL root on Windows tells "Notes" from "notes": only fold where the open folder does.
     if (this.workspace && (this.workspace.foldsCase ? samePath(this.workspace.root, resolved) : this.workspace.root === resolved)) return this.workspace.info();
+    // The text cache lives with the app's data (never inside the folder); '' = off.
+    const cacheDir = this.workspaceOptions.cacheDir === undefined ? defaultCacheDir(this.configDir) : this.workspaceOptions.cacheDir || undefined;
+    // One's own data (settings, mcp.json, the vault, git trust, the text cache) is never served, even
+    // when the open folder contains it (the home folder on Windows: AppData is no dot name)...
+    const deny = [this.configDir, ...(cacheDir ? [cacheDir] : [])];
+    // ...and never opened itself: a root inside One's data folder (as written, where it really is, or by
+    // identity) would serve all of it. Refused before the open folder is let go.
+    if (await insideAnyFolder(resolved, deny)) throw new BackendFailure('EACCES', `One's own data folder cannot be opened as a folder: ${absPath}`);
     this.unwatch?.();
     this.workspace?.dispose();
     this.disposeGit();
     const s = await this.getSettings();
-    // The text cache lives with the app's data (never inside the folder); '' = off.
-    const cacheDir = this.workspaceOptions.cacheDir === undefined ? defaultCacheDir(this.configDir) : this.workspaceOptions.cacheDir || undefined;
     // search.indexing = onDemand: no indexer thread at open; the renderer's first consumer starts it.
     const warmIndexer = s['search.indexing'] !== 'onDemand';
-    // One's own data (settings, mcp.json, the vault, git trust, the text cache) is never served, even
-    // when the open folder contains it (the home folder on Windows: AppData is no dot name).
-    const deny = [this.configDir, ...(cacheDir ? [cacheDir] : [])];
-    this.workspace = new Workspace(resolved, { exclude: s.excludeGlobs, showHidden: s.showHiddenFiles, index: appIndexOptions(s), warmIndexer, ...this.workspaceOptions, cacheDir, deny });
+    // protectGitDir: a page taken over must not plant hooks or core.fsmonitor in a repository the user trusts.
+    this.workspace = new Workspace(resolved, { exclude: s.excludeGlobs, showHidden: s.showHiddenFiles, index: appIndexOptions(s), warmIndexer, ...this.workspaceOptions, cacheDir, deny, protectGitDir: true });
     this.unwatch = this.workspace.onEvents((e) => {
       this.fsListeners.forEach((l) => l(e));
       this.monitor?.trigger('fs', e.map((x) => x.path));
@@ -335,7 +373,13 @@ export class BackendService {
   }
 
   async resolvePath(absPath: string): Promise<ResolvedPath | null> {
+    if (typeof absPath !== 'string' || !absPath || absPath.includes('\0')) return null;
     let abs = path.resolve(absPath);
+    // Decided on the text first, before any disk access: a UNC or device path outside the open folder is never
+    // looked up (Windows would send the user's NTLM hash to that server), unless main saw it itself.
+    const win = process.platform === 'win32';
+    const lexIn = !!this.workspace && this.workspace.rel(abs) !== null;
+    if (!lexIn && (isUncOrDevicePath(absPath, win) || isUncOrDevicePath(abs, win)) && !this.hooks.remotePathOk?.(abs)) return null;
     const st = await fsp.stat(abs).catch(() => null);
     if (!st || !(st.isFile() || st.isDirectory())) return null;
     if (process.platform !== 'linux') {
@@ -469,8 +513,9 @@ export class BackendService {
     const { path: rel, noteAbs, html, layout } = await checkPdfRequest(req, (p) => ws.abs(p));
     const { renderPdf, pickSavePath } = this.hooks;
     if (!renderPdf || !pickSavePath) throw new BackendFailure('ENOTSUP', 'PDF export needs the desktop app. In the browser use Print and pick "Save as PDF"');
-    const key = rootId(ws.root);
-    const saved = this.exportDirs.get(key) ?? exportDirsOf(await readJson<unknown>(this.exportDirsFile, {}))[key];
+    const key = rootId(ws.root, ws.foldsCase);
+    const disk = exportDirsOf(await readJson<unknown>(this.exportDirsFile, {}));
+    const saved = this.exportDirs.get(key) ?? disk[key] ?? disk[rootId(ws.root)]; // the old (folded) id: see readPerFolder
     const last = typeof saved === 'string' ? saved : null;
     const dir = last && (await fsp.stat(last).then((st) => st.isDirectory(), () => false)) ? last : path.dirname(noteAbs);
     // Render while the dialog is open: the PDF is usually ready by the time "Save" is clicked.
@@ -526,6 +571,12 @@ export class BackendService {
   async saveSettings(patch: Partial<Settings>): Promise<Settings> {
     // Grants of the MCP server are main's (mcp.json, behind native dialogs): never set from a page.
     if (patch && typeof patch === 'object') patch = Object.fromEntries(Object.entries(patch).filter(([k]) => !isMainOwnedKey(k))) as Partial<Settings>;
+    // Size cap per value (settings.json is read whole by every window and server): before anything is applied.
+    if (patch && typeof patch === 'object')
+      for (const [k, v] of Object.entries(patch)) {
+        const size = v === undefined ? 0 : (JSON.stringify(v)?.length ?? 0);
+        if (size > MAX_SETTING_VALUE_CHARS) throw new BackendFailure('ETOOBIG', `Setting "${k}" is too large (${Math.round(size / 1024)} kB; the limit is ${MAX_SETTING_VALUE_CHARS / 1024} kB)`);
+      }
     await this.getSettings();
     // Merge into the *current* object after the await, so concurrent saves never drop each other's patch.
     const next = { ...this.settings!, ...patch } as Settings;
@@ -620,9 +671,9 @@ export class BackendService {
     const ws = this.workspace;
     if (!ws) return { openTabs: [], activeTab: null };
     const empty: SessionState = { openTabs: [], activeTab: null };
-    let s = this.sessionCache.get(ws.root) ?? (await readJson<SessionState | null>(this.sessionFile(ws.root), null));
+    let s = this.sessionCache.get(ws.root) ?? (await this.readPerFolder<SessionState>((f) => this.sessionFile(ws.root, undefined, f), ws.root));
     // First browser visit: start from the desktop's tabs (a read-only seed; saves go to the web file only).
-    if (!s && this.hooks.sessionKind === 'web') s = await readJson<SessionState | null>(this.sessionFile(ws.root, 'desktop'), null);
+    if (!s && this.hooks.sessionKind === 'web') s = await this.readPerFolder<SessionState>((f) => this.sessionFile(ws.root, 'desktop', f), ws.root);
     s = s && typeof s === 'object' ? s : empty;
     return { ...s, openTabs: Array.isArray(s.openTabs) ? s.openTabs : [], activeTab: s.activeTab ?? null };
   }
@@ -646,10 +697,12 @@ export class BackendService {
    * Bookmarks are data only: nothing here touches a bookmarked path.
    */
   async bookmarks(op?: unknown): Promise<Bookmark[]> {
-    const file = path.join(this.configDir, 'bookmarks', `${rootId(this.ws().root)}.json`);
+    const root = this.ws().root;
+    const fileOf = (foldCase: boolean) => path.join(this.configDir, 'bookmarks', `${rootId(root, foldCase)}.json`);
+    const file = fileOf(this.foldsCase(root));
     const change = op === undefined || op === null ? null : cleanOp(op);
     if (op != null && !change) throw new BackendFailure('EINVAL', 'Invalid bookmark change');
-    const read = async () => cleanList((await readJson<{ items?: unknown } | null>(file, null))?.items);
+    const read = async () => cleanList((await this.readPerFolder<{ items?: unknown }>(fileOf, root))?.items);
     const run = this.bookmarkChain.then(() =>
       change
         ? withFileLock(file, async () => {
@@ -730,6 +783,28 @@ export class BackendService {
     }
   }
 
+  /** One dialog per folder at a time: a page asking again while it is open gets the same answer. */
+  private trustAsk: { root: string; answer: Promise<boolean> } | null = null;
+
+  /**
+   * git('trust'): only through the native dialog (ServiceHooks.confirmTrust). Without it — browser mode, HTTP
+   * servers, MCP — EACCES: a page (or a link holder) must never grant itself git, which runs the folder's own
+   * hooks and filters. A no (or a throw) leaves the folder untrusted (false); so does a folder switch meanwhile.
+   */
+  private async grantGitTrust(): Promise<boolean> {
+    const ws = this.ws();
+    const ask = this.hooks.confirmTrust;
+    if (!ask) throw new BackendFailure('EACCES', 'Trust this folder in the desktop app');
+    if (this.trustAsk?.root !== ws.root) {
+      const mine = { root: ws.root, answer: Promise.resolve().then(() => ask(ws.root)).then((ok) => ok === true, () => false) };
+      this.trustAsk = mine;
+      void mine.answer.finally(() => this.trustAsk === mine && (this.trustAsk = null));
+    }
+    const yes = await this.trustAsk!.answer;
+    if (!yes || this.workspace !== ws) return false;
+    return this.setGitTrust(true);
+  }
+
   private async setGitTrust(on: boolean): Promise<boolean> {
     const ws = this.ws();
     await ws.detectCase();
@@ -808,8 +883,10 @@ export class BackendService {
       if (op === 'nudge' || op === 'visibility' || op === 'cancel') return null;
       throw new BackendFailure('NO_WORKSPACE', 'No folder is open');
     }
-    // The trust gate: before any GitService exists, so an untrusted folder never spawns git.
-    if (op === 'trust' || op === 'untrust') return this.setGitTrust(op === 'trust');
+    // The trust gate: before any GitService exists, so an untrusted folder never spawns git. Untrust only takes
+    // access away (always allowed); trust needs the user's yes in main's native dialog (ServiceHooks.confirmTrust).
+    if (op === 'untrust') return this.setGitTrust(false);
+    if (op === 'trust') return this.grantGitTrust();
     if (!(await this.gitTrusted())) return this.untrustedReply(op);
     const m = this.gitMonitor();
     await m.ready;

@@ -44,7 +44,9 @@ interface Slot {
   contentStart: number;
 }
 
-export const cacheFileFor = (dir: string, root: string) => path.join(dir, `${crypto.createHash('sha1').update(root.toLowerCase()).digest('hex').slice(0, 20)}.bin`);
+/** `foldCase`: the folder's own case rule (Workspace.foldsCase). Folding roots keep the name they always had; on a
+ *  case-sensitive disk "Proj" and "proj" are two folders and get two caches. */
+export const cacheFileFor = (dir: string, root: string, foldCase = true) => path.join(dir, `${crypto.createHash('sha1').update(foldCase ? root.toLowerCase() : root).digest('hex').slice(0, 20)}.bin`);
 
 /** A loaded cache: lookups decode lazily from one buffer. */
 export class TextCache {
