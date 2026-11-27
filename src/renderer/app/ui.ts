@@ -3,6 +3,7 @@ import { batch, signal } from '@preact/signals';
 import type { ComponentType } from 'preact';
 import type { Settings } from '@shared/api';
 import { isMarkdown } from '@shared/paths';
+import { app } from './app';
 
 export const SIDEBAR_DEFAULT = 260;
 export const sidebarWidth = signal(SIDEBAR_DEFAULT);
@@ -100,14 +101,18 @@ export const recentFolders = signal<string[]>([]);
 export const cursorInfo = signal<{ line: number; col: number; selectionLength: number } | null>(null);
 /** Bumped whenever a doc's metadata (eol, encoding) changes. */
 export const docMetaVersion = signal(0);
-/** Bumped when a binary doc is force-opened as text: the editor replaces the viewer screen. */
+/** Bumped when a binary doc is shown as text (or back as its card, or loaded in full): editor ↔ viewer, banner. */
 export const docAsTextVersion = signal(0);
 /** Per-file language overrides picked in the status bar (path → languages.ts id); saved with the session. */
 export const languageOverrides = signal<Record<string, string>>({});
 /** Bumped when a doc's language changes (status bar label). */
 export const languageVersion = signal(0);
-/** A .md file shown as Markdown (not switched to another language via the status bar). */
-export const isMarkdownView = (path: string | null | undefined) => !!path && isMarkdown(path) && (languageOverrides.value[path] ?? 'markdown') === 'markdown';
+/**
+ * A .md file shown as Markdown (not switched to another language via the status bar). Never a binary doc,
+ * also not one shown as text: it is read-only plain text, so no reading view, split or Markdown toolbar.
+ */
+export const isMarkdownView = (path: string | null | undefined) =>
+  !!path && isMarkdown(path) && !app.docs.get(path)?.binary && (languageOverrides.value[path] ?? 'markdown') === 'markdown';
 
 export function setIn<T>(sig: { value: Set<T> }, item: T, on: boolean) {
   const has = sig.value.has(item);

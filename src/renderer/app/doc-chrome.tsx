@@ -169,8 +169,11 @@ export function StatusDocStart({ path, crumbs }: { path: string; crumbs: boolean
   const conflict = ui.conflicts.value.has(path);
   const gone = ui.deletedOnDisk.value.has(path);
   const dirty = !!doc?.dirty.value;
+  ui.docAsTextVersion.value; // a binary doc shown as text / back to its card
   let state: { label: string; cls: string; icon?: string } | null = null;
-  if (doc && !doc.binary) {
+  // A binary file shown as text has no save state: it can never be saved.
+  if (doc?.asText) state = { label: 'Read only', cls: 'readonly', icon: 'lock' };
+  else if (doc && !doc.binary) {
     if (conflict) state = { label: 'Conflict', cls: 'warn', icon: 'alert' };
     else if (gone) state = { label: 'Deleted on disk', cls: 'warn', icon: 'alert' };
     else if (saving) state = { label: 'Saving…', cls: 'muted' };
@@ -205,7 +208,7 @@ export function StatusDocEnd({ path }: { path: string }) {
   const lang = viewer ? fileTypeLabel(path) : languageName(path);
   return (
     <>
-      {cur && doc && !doc.binary && (
+      {cur && doc && (!doc.binary || doc.asText) && (
         <span class="se-status-item" title="Line, column">
           Ln {cur.line + 1}, Col {cur.col + 1}
           {cur.selectionLength > 0 && <span class="se-status-sel"> ({cur.selectionLength} selected)</span>}

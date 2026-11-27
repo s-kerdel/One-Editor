@@ -141,6 +141,8 @@ export function buildEditorMenu(view: EditorView, opts: { markdown: boolean; tar
   const { state } = view;
   const hasSel = state.selection.ranges.some((r) => !r.empty);
   const head = state.selection.main.head;
+  // Read only (a binary file shown as text): no item that would edit it.
+  const ro = state.readOnly;
   const run = (fn: (v: EditorView) => unknown) => () => {
     view.focus();
     fn(view);
@@ -181,13 +183,14 @@ export function buildEditorMenu(view: EditorView, opts: { markdown: boolean; tar
     sep();
   }
 
-  items.push(
-    { label: 'Cut', icon: 'menuCut', keys: keys('Mod-x'), disabled: !hasSel, run: () => void copyOrCut(view, true) },
-    { label: 'Copy', icon: 'copy', keys: keys('Mod-c'), disabled: !hasSel, run: () => void copyOrCut(view, false) },
-    { label: 'Paste', icon: 'menuPaste', keys: keys('Mod-v'), run: () => void pasteFromClipboard(view) },
-    { label: 'Paste as plain text', icon: 'menuPastePlain', keys: keys('Mod-Shift-v'), run: run((v) => void pastePlainText(v)) },
-    { label: 'Select all', icon: 'menuSelectAll', keys: keys('Mod-a'), run: run((v) => v.dispatch({ selection: EditorSelection.single(0, v.state.doc.length), userEvent: 'select' })) },
-  );
+  if (!ro) items.push({ label: 'Cut', icon: 'menuCut', keys: keys('Mod-x'), disabled: !hasSel, run: () => void copyOrCut(view, true) });
+  items.push({ label: 'Copy', icon: 'copy', keys: keys('Mod-c'), disabled: !hasSel, run: () => void copyOrCut(view, false) });
+  if (!ro)
+    items.push(
+      { label: 'Paste', icon: 'menuPaste', keys: keys('Mod-v'), run: () => void pasteFromClipboard(view) },
+      { label: 'Paste as plain text', icon: 'menuPastePlain', keys: keys('Mod-Shift-v'), run: run((v) => void pastePlainText(v)) },
+    );
+  items.push({ label: 'Select all', icon: 'menuSelectAll', keys: keys('Mod-a'), run: run((v) => v.dispatch({ selection: EditorSelection.single(0, v.state.doc.length), userEvent: 'select' })) });
 
   if (hasSel && app.openSearch) {
     const text = selectedText(view).trim();
@@ -223,7 +226,7 @@ export function buildEditorMenu(view: EditorView, opts: { markdown: boolean; tar
         { label: 'Insert divider', icon: 'menuDivider', run: cmd(insertHorizontalRule) },
       );
     }
-  } else if (!opts.markdown) {
+  } else if (!opts.markdown && !ro) {
     sep();
     items.push({ label: 'Toggle comment', icon: 'menuComment', keys: keys('Mod-/'), run: run((v) => toggleComment(v)) });
   }
@@ -258,8 +261,8 @@ export function buildEditorMenu(view: EditorView, opts: { markdown: boolean; tar
 
   // Text clean-up: trailing whitespace (selection, else the file), then formatting.
   sep();
-  items.push({ label: hasSel ? 'Trim trailing whitespace in selection' : 'Trim trailing whitespace', run: run((v) => trimWhitespaceCommand(v)) });
-  const fmt = getCommand('format.document');
+  if (!ro) items.push({ label: hasSel ? 'Trim trailing whitespace in selection' : 'Trim trailing whitespace', run: run((v) => trimWhitespaceCommand(v)) });
+  const fmt = ro ? undefined : getCommand('format.document');
   if (fmt) items.push({ label: 'Format document', icon: 'braces', keys: keys('Shift-Alt-f'), disabled: !!fmt.when && !fmt.when(), run: run(() => void runCommand('format.document')) });
   if (opts.markdown && getCommand('preview.exportPdf')) {
     sep();

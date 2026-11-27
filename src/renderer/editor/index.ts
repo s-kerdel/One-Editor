@@ -87,8 +87,13 @@ export function createEditor(parent: HTMLElement): EditorController {
   const langCbs = new Set<(p: string) => void>();
   /** Per-doc language overrides (`languages.ts` ids); absent = by extension. */
   const langOverride = new Map<string, string>();
-  /** Markdown editing (live preview, toolbar, …) only for .md files whose language isn't overridden. */
-  const isMdView = (path: string) => isMarkdown(path) && !langOverride.has(path);
+  /** Read-only docs (a binary file shown as text): see `open()`'s `readOnly`. */
+  const readOnlyDocs = new Set<string>();
+  /**
+   * Markdown editing (live preview, toolbar, …) only for .md files whose language isn't overridden.
+   * A read-only doc is never one: that UI exists to edit, and a binary file rendered as Markdown is noise.
+   */
+  const isMdView = (path: string) => isMarkdown(path) && !langOverride.has(path) && !readOnlyDocs.has(path);
 
   const langComp = new Compartment();
   const pathComp = new Compartment();
@@ -99,6 +104,7 @@ export function createEditor(parent: HTMLElement): EditorController {
   const toolbarComp = new Compartment();
   const writingComp = new Compartment();
   const gitComp = new Compartment();
+  const readOnlyComp = new Compartment();
 
   /** While set, `of()` records each compartment's content (a full reconfigure keeps old contents otherwise). */
   let collected: Map<Compartment, Extension> | null = null;
@@ -119,6 +125,10 @@ export function createEditor(parent: HTMLElement): EditorController {
   const CODE_GUTTERS: Extension = [lineNumbers(), foldGutter({ markerDOM: foldMarker }), highlightActiveLineGutter()];
   const NONE: Extension = [];
   const NO_LANG: Extension = [];
+  // CodeMirror's own typing, paste, drop, cut, undo and replace honour EditorState.readOnly (the cursor and
+  // keyboard navigation stay: the content stays editable for the caret). The change filter stops every other
+  // edit (app keymaps, widgets, format, replace in files) at the state, so no command has to know.
+  const READ_ONLY: Extension = [EditorState.readOnly.of(true), EditorState.changeFilter.of(() => false)];
   const writingExts = new Map<string, Extension>();
   /** Markdown line numbers: source + split only (never live / reading), unless switched off. */
   const mdGutter = () => (mode === 'source' && settings?.markdownLineNumbers !== false ? MD_GUTTERS : NONE);
@@ -189,6 +199,7 @@ export function createEditor(parent: HTMLElement): EditorController {
   const commonExtensions = (path: string): Extension[] => [
     BASE_ATTRS,
     of(pathComp, docPath.of(path)),
+    of(readOnlyComp, readOnlyDocs.has(path) ? READ_ONLY : NONE),
     history(),
     drawSelection(),
     dropCursor(),
@@ -380,12 +391,14 @@ export function createEditor(parent: HTMLElement): EditorController {
   let highlight: ReturnType<typeof toSearchQuery> = null;
 
   const ctrl: EditorController = {
-    open(path, content) {
+    open(path, content, opts) {
       if (current === path && docs.has(path)) return;
       flushChange();
       stash();
       let rec = docs.get(path);
       if (!rec) {
+        if (opts?.readOnly) readOnlyDocs.add(path);
+        else readOnlyDocs.delete(path);
         rec = { state: createState(path, content), scroll: null, lang: autoLanguage(path).id };
         docs.set(path, rec);
         ensureLanguage(path);
@@ -403,6 +416,7 @@ export function createEditor(parent: HTMLElement): EditorController {
       if (pending?.path === path) flushChange();
       docs.delete(path);
       langOverride.delete(path); // the shell re-applies persisted overrides after open()
+      readOnlyDocs.delete(path); // the next open() says again
       if (current === path) {
         current = null;
         view.setState(emptyState());
@@ -457,6 +471,7 @@ export function createEditor(parent: HTMLElement): EditorController {
       const override = langOverride.get(from);
       langOverride.delete(from);
       if (override) langOverride.set(to, override);
+      if (readOnlyDocs.delete(from)) readOnlyDocs.add(to);
       const kindChanged = wasMd !== isMdView(to);
       if (kindChanged) rec.state = createState(to, state.doc.toString(), state.selection);
       else rec.state = state.update({ effects: pathComp.reconfigure(docPath.of(to)) }).state;

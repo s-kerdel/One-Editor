@@ -55,6 +55,13 @@ export function maxShards(): number {
   return Math.max(1, Math.min(8, hc - 1));
 }
 
+/**
+ * A binary file is a name-only entry (findable by name / path / ext, never by content), also while it is
+ * open and shown as text: its decoded bytes never reach the index. Open docs' text otherwise wins.
+ */
+const isBinaryDoc = (path: string) => !!app.docs.get(path)?.binary;
+const indexable = (path: string, content: string) => (isBinaryDoc(path) ? '' : content);
+
 export function shardsFor(files: number | undefined, max = maxShards()): number {
   if (!files) return 1;
   return Math.max(1, Math.min(max, Math.ceil(files / FILES_PER_SHARD)));
@@ -158,18 +165,18 @@ class SearchClient {
       if (this.shards) void this.reindex();
     });
     app.events.on('doc:changed', (path, content) => {
-      if (!this.shards || isExtPath(path)) return;
+      if (!this.shards || isExtPath(path) || isBinaryDoc(path)) return;
       this.edits.set(path, content);
       if (!this.editTimer) this.editTimer = setTimeout(() => this.flushEdits(), EDIT_DEBOUNCE_MS);
     });
-    app.events.on('doc:saved', (path, content) => this.upsert(path, content));
+    app.events.on('doc:saved', (path, content) => this.upsert(path, indexable(path, content)));
     app.events.on('file:updated', (path, content) => {
       if (!this.shards) return;
       if (content === undefined) return this.removePath(path);
       // An open, dirty doc's live text wins over the disk version.
       const doc = app.docs.get(path);
       if (doc?.dirty.value) return;
-      this.upsert(path, content);
+      this.upsert(path, indexable(path, content));
     });
     app.events.on('file:renamed', (from, to) => {
       if (!this.shards) return;
@@ -182,7 +189,7 @@ class SearchClient {
       if (this.feedSource()) return this.refreshPaths([path], 'doc-closed');
       app.backend
         .readFile(path)
-        .then((f) => this.upsert(path, f.content, f.mtime))
+        .then((f) => this.upsert(path, f.binary ? '' : f.content, f.mtime))
         .catch(() => this.removePath(path));
     });
     // Files changed on disk that are not open: re-read just those, coalesced (never a full pass).
@@ -498,6 +505,7 @@ class SearchClient {
       const epoch = () => this.portEpoch;
       const live = (path: string, content: string) => {
         const d = app.docs.get(path);
+        if (d?.binary) return ''; // shown as text or not: name-only
         return d ? (app.editor?.getContent(path) ?? d.content) : content;
       };
       const seen = new Set<string>();

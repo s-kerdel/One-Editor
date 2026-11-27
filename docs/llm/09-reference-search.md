@@ -14,7 +14,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 - **Indexing:** search + knowledge read the same paged text stream, `app/workspace-text.ts`.
   - The backend skips git-ignored files, lockfiles, `*.min.*` / `*.map` and files over `search.maxFileSizeKB` (`Workspace.textPaths()`; the tree still lists them).
-  - **Name-only entries** (`textpass.nameOnlyFile`: `content: ''`, `binary: true`): a file that exists but whose content cannot be indexed gets a path-metadata-only document, so `ext:pdf`, `file:report`, `path:` and a plain filename term find it — never a content term. Two ways it arises: a name that is not text (`isProbablyTextName` false, e.g. `.pdf` / `.png`) is added by `Indexer.nameOnlyPaths()` **without ever reading the bytes**; a text-named file that decodes to null (binary / NUL) or is over `maxFileSizeKB` becomes name-only inside the read pass. The `binary: true` flag is the existing FileData idiom, so MCP content search and the knowledge index skip these docs.
+  - **Name-only entries** (`textpass.nameOnlyFile`: `content: ''`, `binary: true`): a file that exists but whose content cannot be indexed gets a path-metadata-only document, so `ext:pdf`, `file:report`, `path:` and a plain filename term find it — never a content term. Two ways it arises: a name that is not text (`isProbablyTextName` false, e.g. `.pdf` / `.png`) is added by `Indexer.nameOnlyPaths()` **without ever reading the bytes**; a text-named file that decodes to null (binary / NUL) or is over `maxFileSizeKB` becomes name-only inside the read pass. The `binary: true` flag is the existing FileData idiom, so MCP content search and the knowledge index skip these docs. Pages stay in path order: name-only entries are merged into their page's `(cursor, nextCursor]` window, and the final page takes the tail.
   - **Never in the index, not even by name:** git-ignored files, lockfiles and `*.min.*` / `*.map` (the tree still lists them). Oversized is *not* in this list — it stays as a name-only entry.
 - **A term exclusion hides a file by name / path as well as content** (`report -"secret"` drops `secret-report.pdf`): `Plan.excludePaths` gates `n.pathRanges(e)` in `engine.matchSteps`. The ≤3-letter literal-flag rule is untouched (`query.ts` `looksLikeFlag`), so `-bar` stays a literal term (no exclusion). Negated *filters* (`-file:` / `-path:` / `-ext:`) already path-filter through `buildFileFilter` — a separate path from the `negative` clause list, so no double-apply. The whole-query **verbatim rescue still overrides an exclusion** (name or content alike), unchanged.
   - It reads in worker threads.
@@ -30,8 +30,13 @@ grep -n "keyword" docs/llm/09-reference*.md
 - `readFile(path, { asText: true })` = "Open as text anyway": the first `MAX_AS_TEXT_BYTES` (2 MB) of a file
   `decode()` refuses, decoded best-effort; `{ asText: 'full' }` reads the whole file but refuses (`ETOOBIG`)
   above `MAX_AS_TEXT_FULL_BYTES` (16 MB). Either way the result **keeps `binary: true`**, so it never reaches
-  the index and never becomes savable (the renderer's `doc.binary` guards all still apply; `doc.asText` only
-  switches the viewer screen for the editor).
+  the index and never becomes savable (the renderer's `doc.binary` guards all still apply; `doc.asText`
+  = `{ size, full }` only switches the viewer screen for the editor and feeds the read-only banner).
+  - **A binary doc stays name-only in the search index, shown as text or not** (`search/client.ts`
+    `isBinaryDoc` / `indexable`): `doc:changed` is skipped, `doc:saved` / `file:updated` / `doc:closed` upsert
+    `''`, a rebuild's open-doc overlay (`live()`) gives `''`, the fed build's overlay skips it.
+  - `noteEdited` returns early for a binary doc: never dirty, no autosave, no `doc:changed`.
+  - The editor opens it with `open(path, text, { readOnly: true })`: rules in `09-reference-app.md` ("Viewer docs").
 - The index may be built **on demand** (`search.indexing`).
   - A feature that reads it must ask for it: `searchClient.start()` / `(app as any).knowledge.ensure()` (search, mentions, headings already do).
   - It must show "Indexing… x / y" (`searchClient.progress`) instead of an empty state.

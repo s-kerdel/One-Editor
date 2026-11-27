@@ -266,7 +266,8 @@ let installed = false;
 export function installFormat() {
   if (installed) return;
   installed = true;
-  const hasDoc = () => !!app.activePath.value;
+  // A binary doc (card, or read-only text) is never formatted: the commands are not offered for it.
+  const hasDoc = () => !!app.activePath.value && !app.docs.get(app.activePath.value)?.binary;
   registerCommands([
     { id: 'format.document', title: 'Format document', category: 'Format', keys: ['Shift-Alt-f', 'Alt-Shift-f'], keywords: ['prettier', 'beautify', 'php', 'indent', 'pretty'], when: hasDoc, run: () => void formatDocument() },
     { id: 'format.selection', title: 'Format selection / code block at cursor', category: 'Format', keys: ['Mod-Alt-f'], keywords: ['prettier', 'beautify', 'fence'], when: hasDoc, run: () => void formatSelection() },

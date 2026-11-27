@@ -145,7 +145,7 @@ export async function openFile(path: string, reveal?: RevealTarget) {
   if (!doc.binary || doc.asText) {
     await editorReady;
     if (app.activePath.value !== path) return; // user moved on while the editor loaded
-    app.editor?.open(path, doc.content);
+    app.editor?.open(path, doc.content, doc.binary ? { readOnly: true } : undefined); // binary here = shown as text
     // Language picked in the status bar for this file (kept in the session).
     const lang = ui.languageOverrides.value[path];
     if (lang) app.editor?.setLanguage?.(path, lang);
@@ -197,7 +197,9 @@ export function discardDoc(path: string) {
 /** Called by the editor on every change. */
 export function noteEdited(path: string, content: string) {
   const doc = app.docs.get(path);
-  if (!doc) return;
+  // A binary doc shown as text is read only (the editor refuses edits): it never turns dirty, never
+  // autosaves, and its text never goes out as doc:changed (the search index keeps it name-only).
+  if (!doc || doc.binary) return;
   doc.content = content;
   doc.dirty.value = content !== doc.saved;
   app.events.emit('doc:changed', path, content);

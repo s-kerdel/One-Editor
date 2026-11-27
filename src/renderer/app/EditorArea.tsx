@@ -43,7 +43,7 @@ function trackCursor() {
   });
 }
 
-// Only needed in particular states (split mode, a conflict, a binary file): kept out of the startup chunk.
+// Only needed in particular states (split mode, a conflict, a binary file, one shown as text): kept out of the startup chunk.
 const loadExtras = () => import('./EditorExtras');
 const SplitSash = lazyComponent<{ area: { current: HTMLDivElement | null } }>(() => loadExtras().then((m) => m.SplitSash));
 const Banner = lazyComponent(() => loadExtras().then((m) => m.Banner));
@@ -95,7 +95,7 @@ export function EditorArea() {
       class={`se-editor-area mode-${effective}${active ? '' : ' empty'}${viewer ? ' viewer' : ''}`}
       style={{ '--split': String(ui.splitRatio.value) }}
     >
-      {active && (ui.conflicts.value.has(active) || ui.deletedOnDisk.value.has(active)) && <Banner />}
+      {active && (ui.conflicts.value.has(active) || ui.deletedOnDisk.value.has(active) || !!doc?.asText) && <Banner />}
       <div class="se-editor-panes">
         <div class="se-editor-host" ref={editorEl} />
         {effective === 'split' && !viewer && <SplitSash area={area} />}

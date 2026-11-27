@@ -19,8 +19,13 @@ export interface RevealTarget {
 }
 
 export interface EditorController {
-  /** Show the document for `path`, creating its state from `content` the first time. */
-  open(path: string, content: string): void;
+  /**
+   * Show the document for `path`, creating its state from `content` the first time.
+   * `readOnly` (a binary file shown as text; set on the open that creates the state): nothing changes its
+   * text — typing, paste, drop, cut, undo, replace, format, commands — while the cursor, selection, copy and
+   * Find still work. It is always a plain code view: no Markdown editing (live preview, toolbar, slash menu).
+   */
+  open(path: string, content: string, opts?: { readOnly?: boolean }): void;
   close(path: string): void;
   /** Current text of an open doc (defaults to active). */
   getContent(path?: string): string | undefined;
@@ -90,8 +95,11 @@ export interface DocState {
   encoding?: TextEncoding;
   /** Binary/image file: shown in a viewer, never written back. */
   binary?: boolean;
-  /** A binary file the user chose to read as text: shown in the editor, still never written back. */
-  asText?: boolean;
+  /**
+   * A binary file the user chose to read as text: shown read only in the editor, never written back.
+   * `size`: the file's bytes; `full`: all of it is shown (else the first MAX_AS_TEXT_BYTES).
+   */
+  asText?: { size: number; full: boolean };
   /** Viewer docs (PDF): where to go once the viewer is ready (openFile's reveal), consumed by the viewer. */
   reveal?: RevealTarget;
 }

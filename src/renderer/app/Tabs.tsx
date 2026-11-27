@@ -64,6 +64,7 @@ export function TabBar({ end }: { end?: ComponentChildren }) {
   const tabs = app.tabs.value;
   const active = app.activePath.value;
   const names = labels(tabs.map((t) => t.path));
+  ui.docAsTextVersion.value; // a binary doc shown as text: "read only" in its tooltip
 
   useEffect(() => {
     strip.current?.querySelector<HTMLElement>('.se-tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -124,14 +125,16 @@ export function TabBar({ end }: { end?: ComponentChildren }) {
           const hint = names.get(t.path);
           const conflict = ui.conflicts.value.has(t.path);
           const gone = ui.deletedOnDisk.value.has(t.path);
+          const ro = !!doc?.asText;
           return (
             <div
               key={t.path}
               class={`se-tab${isActive ? ' active' : ''}${dirty ? ' dirty' : ''}${gone ? ' deleted' : ''}${conflict ? ' conflict' : ''}${drop?.index === i ? ' drop-before' : ''}${drop?.index === tabs.length && i === tabs.length - 1 ? ' drop-after' : ''}`}
               role="tab"
               aria-selected={isActive}
-              title={gone ? `${shownPath(t.path)} (deleted on disk)` : shownPath(t.path)}
+              title={gone ? `${shownPath(t.path)} (deleted on disk)` : ro ? `${shownPath(t.path)} (read only, shown as text)` : shownPath(t.path)}
               data-path={t.path}
+              data-readonly={ro || undefined}
               draggable
               onDragStart={(e) => {
                 dragFrom.current = i;

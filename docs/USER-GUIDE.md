@@ -288,15 +288,20 @@ Hover an icon for details (MCP: which app, last call). Desktop app only.
 
 A binary file (`.zip`, a compiled file, a font) opens as a **card**, not as text.
 
-- **Open as text anyway** — the button on that card. The card says what you get: the **first 2 MB** as
-  best-effort text; bytes that are not text show as `�`.
-- **Load all (12.3 MB)** — a second step in the toast after opening, when the file is bigger. It asks first
-  ("One may become slow while a file this large is open"). Files over **16 MB** are never offered: too big
-  for the editor.
-- It is **never saved back**: saving stays blocked while the tab is open, so looking cannot corrupt the file.
-- Once it is open as text, the **language button** in the status bar works as usual, so you can highlight it
+- **Open as text anyway** — the button on that card. You get the **first 2 MB** as best-effort text;
+  bytes that are not text show as `�`.
+- It opens **read only**. A banner on top says so: `Read only · binary file shown as text · first 2 MB of 12.3 MB`.
+  - **Typing, paste, cut, undo, replace and Format do nothing.** The tab never shows unsaved changes.
+  - **Still works:** moving the cursor, selecting, copy, **Find** (`Ctrl+F`, no replace), go to line, scrolling.
+  - **Never saved back**, and closing the tab never asks "Save changes?". Looking cannot corrupt the file.
+- **Load all (12.3 MB)** — in the banner when the file is bigger than 2 MB. It asks first ("One may become
+  slow while a file this large is open"). The cursor stays where it was. Files over **16 MB** are never offered.
+- **Back to viewer** — in the banner: the card again, the text is dropped.
+- **Language:** the **language button** in the status bar works as usual, so you can highlight it
   (also palette → "Change language mode…").
-- Closing the tab forgets it: opening the file again shows the card again.
+- **Always plain text**, also for a binary `.md`: no reading view, split or Markdown toolbar (`Ctrl+E` / `Ctrl+\` do nothing).
+- **Search** finds it **by name only** (`ext:`, `file:`, the file name), never by its content.
+- Closing the tab forgets it. After a restart its tab shows the card again (nothing big is read at launch).
 
 ---
 

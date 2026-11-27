@@ -62,6 +62,13 @@ grep -n "keyword" docs/llm/09-reference*.md
 - Bytes come through the workspace file URL (`fileUrl`), never an RPC.
 - Keys a focused widget must keep from the global keymap can also use `addGlobalKeyFilter()` (stackable; the viewer's `Ctrl+±/F/G/0`).
 - PDF text is **not** indexed (no search / OCR) — by decision.
+- **A binary file shown as text** ("Open as text anyway", `EditorExtras.tsx`) is **read only**:
+  - `doc.binary` stays true, `doc.asText = { size, full }`; `ui.docAsTextVersion` bumps on every switch (editor ↔ card, Load all).
+  - `openFile` calls `editor.open(path, text, { readOnly: true })` for it. The editor's `readOnlyComp` holds `EditorState.readOnly` (CodeMirror's typing / paste / drop / cut / undo / replace refuse) **plus a `changeFilter` that drops every change** (app keymaps, widgets, format, replace in files). `EditorView.editable` stays on: cursor, selection, copy, Find, go to line keep working. Load all (`setContent(…, { resetHistory })`), a language change and a rename keep it; `close()` forgets it.
+  - **Never a Markdown view**, also a binary `.md`: `ui.isMarkdownView` is false and the editor gives it the code view. So `Mod-e` / `Mod-\` (`when: activeIsMarkdown`), the view-mode switch and word count are not there.
+  - `noteEdited` returns early (never dirty, no autosave, no `doc:changed`): closing the tab or the window never asks.
+  - UI: the lazy `Banner` shows `Read only · binary file shown as text[ · first 2 MB of N MB]` + **Load all** (when windowed and ≤ 16 MB) + **Back to viewer** (`editor.close`, text dropped, card again). Status bar save state = `Read only` (`data-state="readonly"`), Ln/Col shown; tab `data-readonly` + tooltip; the editor menu hides Cut / Paste / Toggle comment / Trim / Format.
+  - Not kept in the session: a restored tab shows the card again (no binary read at launch).
 
 ## Variables
 
