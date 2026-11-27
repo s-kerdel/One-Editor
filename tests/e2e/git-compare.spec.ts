@@ -36,26 +36,26 @@ test('select text for compare → compare with previous selection (across files)
 
   await selectLines(page, 1, 5);
   await (await menu(page, 'Select Text for Compare')).click();
-  await expect(page.locator('.se-toast')).toContainText('Selected for compare: left.ts · lines 1–5');
+  await expect(page.locator('.se-toast')).toContainText('Selected for compare: left.ts · lines 1-5');
 
   await open(page, 'right.ts');
   await expect(page.locator('.cm-content')).toContainText('export { f }');
   await (await menu(page, 'Compare Text with Previous Selection')).click();
   const diff = page.locator('.se-git-diff');
   await expect(diff.locator('.se-git-diff-name')).toHaveText('Compare text');
-  await expect(diff.locator('.se-git-diff-sub')).toContainText('left.ts · lines 1–5 ↔ right.ts');
+  await expect(diff.locator('.se-git-diff-sub')).toContainText('left.ts · lines 1-5 ↔ right.ts');
   await expect(diff.locator('.se-git-diff-engine')).toContainText('git diff --histogram');
   await expect(diff.getByTestId('git-diff-stats')).toHaveText('+3 −2');
 
   await diff.getByLabel('Ignore whitespace').check();
   await expect(diff.getByTestId('git-diff-stats')).toHaveText('+2 −1'); // the tab-indented line is equal now
   await diff.getByRole('button', { name: /Swap sides/ }).click();
-  await expect(diff.locator('.se-git-diff-sub')).toContainText('right.ts ↔ left.ts · lines 1–5');
+  await expect(diff.locator('.se-git-diff-sub')).toContainText('right.ts ↔ left.ts · lines 1-5');
   await expect(diff.getByTestId('git-diff-stats')).toHaveText('+1 −2');
 
   await diff.getByRole('button', { name: 'Copy as patch' }).click();
   const patch = await page.evaluate(() => navigator.clipboard.readText());
-  expect(patch).toContain('--- a/right.ts\n+++ b/left.ts · lines 1–5');
+  expect(patch).toContain('--- a/right.ts\n+++ b/left.ts · lines 1-5');
   expect(patch).toContain('-export { f };');
 
   await page.keyboard.press('Escape');

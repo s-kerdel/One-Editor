@@ -231,7 +231,7 @@ test('context menu paste without clipboard permission shows a hint instead of fa
   const line = (await page.locator('.cm-line', { hasText: 'abc' }).boundingBox())!;
   await page.mouse.click(line.x + 10, line.y + line.height / 2, { button: 'right' });
   await page.locator('.se-menu .se-menu-item', { hasText: /^Paste\s*Ctrl\+V$/ }).click();
-  await expect(page.locator('.se-toast')).toContainText('press Ctrl+V');
+  await expect(page.locator('.se-toast')).toContainText('Press Ctrl+V');
   expect(await content(page)).toBe('abc\n');
 });
 

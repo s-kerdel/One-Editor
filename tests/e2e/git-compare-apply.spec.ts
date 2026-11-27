@@ -228,7 +228,7 @@ test.describe('compare: apply a block to the other side', () => {
       v.dispatch({ selection: { anchor: 0, head: v.state.doc.line(4).to } });
     });
     await menu(page, 'Compare Text with Clipboard');
-    await expect(diff.locator('.se-git-diff-sub')).toContainText('left.txt · lines 1–4 ↔ Clipboard');
+    await expect(diff.locator('.se-git-diff-sub')).toContainText('left.txt · lines 1-4 ↔ Clipboard');
     await expect(diff.locator('.cm-mergeView .cm-editor')).toHaveCount(2);
     await expect(diff.locator('.se-git-revert')).toHaveCount(0);
     await expect(diff).not.toHaveAttribute('data-apply', /./);

@@ -260,7 +260,7 @@ test('compare text: a whole open file on the right can be edited; the clipboard 
   await expect(page.locator('.cm-content')).toContainText('export {}');
   await menu('Compare Text with Previous Selection');
   const diff = page.locator('.se-git-diff');
-  await expect(diff.locator('.se-git-diff-sub')).toContainText('left.ts · lines 1–2 ↔ right.ts');
+  await expect(diff.locator('.se-git-diff-sub')).toContainText('left.ts · lines 1-2 ↔ right.ts');
   await expect(diff).toHaveAttribute('data-editable', 'true');
   await expect(diff.getByTestId('git-diff-stats')).toHaveText('+2 −1');
   await endOf(page, 'const b = 3');
@@ -272,7 +272,7 @@ test('compare text: a whole open file on the right can be edited; the clipboard 
   // Swapped: the right side is now a selection, not a file → read-only; the edit made so far stays
   // in the picture (and in right.ts's document).
   await diff.getByRole('button', { name: /Swap sides/ }).click();
-  await expect(diff.locator('.se-git-diff-sub')).toContainText('right.ts ↔ left.ts · lines 1–2');
+  await expect(diff.locator('.se-git-diff-sub')).toContainText('right.ts ↔ left.ts · lines 1-2');
   await expect(diff.locator('.cm-content')).toHaveAttribute('aria-readonly', 'true');
   await expect(diff).not.toHaveAttribute('data-editable', 'true');
   await expect(diff.locator('.cm-deletedChunk')).toContainText('// why');
