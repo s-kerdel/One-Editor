@@ -656,9 +656,14 @@ export class McpService {
   }
 }
 
-/** The command a client runs: this executable in Node mode + cli.mjs; null when the build has no server. */
-export function mcpLaunch(o: { execPath: string; cli: string; exists: (p: string) => boolean }): McpLaunch | null {
-  return o.exists(o.cli) ? { command: o.execPath, args: [o.cli, '--stdio'], env: { ELECTRON_RUN_AS_NODE: '1' } } : null;
+/**
+ * The command a client runs: this executable with `--mcp-stdio` (a windowless server in One's own process; no Node
+ * mode: the RunAsNode fuse is off). Linux: `--ozone-platform=headless`, so it also starts without a display (SSH,
+ * a client running as a service). Unpackaged: electron <app dir> …. null when the build has no dist/mcp/cli.mjs.
+ */
+export function mcpLaunch(o: { execPath: string; appPath: string | null; platform: string; cli: string; exists: (p: string) => boolean }): McpLaunch | null {
+  if (!o.exists(o.cli)) return null;
+  return { command: o.execPath, args: [...(o.appPath ? [o.appPath] : []), ...(o.platform === 'linux' ? ['--ozone-platform=headless'] : []), '--mcp-stdio'], env: {} };
 }
 
 interface IpcLike {

@@ -8,11 +8,12 @@
 // app-level reads (theme, frame, recent folders) go through `appState`, a backend without a folder.
 import './env-boot'; // first: drops SEC_EDIT_* hooks in a packaged build before any module reads them
 import { appMenuTemplate, dockMenuTemplate } from './app-menu';
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, net, protocol, safeStorage, screen, session, shell, utilityProcess } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
+import { Readable } from 'node:stream';
 import crypto from 'node:crypto';
 import { RPC_METHODS, type Settings } from '../shared/api';
 import { BackendService, readJson, writeJson, type ServiceHooks } from '../backend/service';
@@ -20,14 +21,16 @@ import { BackendFailure } from '../backend/errors';
 import { isBridgeRoot } from '../backend/readpool';
 import { registerProcessSource } from '../backend/processes';
 import { electronProcessSource } from './process-rows';
-import { APP_ORIGIN, SCHEME, isAppNavigation, isExternalUrl, pathsFromArgs, routeAppUrl } from './protocol';
+import { APP_ORIGIN, SCHEME, isAppNavigation, isExternalUrl, pathsFromArgs, routeAppUrl, workspaceMediaType } from './protocol';
 import { renderPdf } from './pdf-window';
 import { PDF_WORKER_CSP, isPdfWorkerAsset } from '../shared/pdf';
 import { TerminalService, loadNodePty, registerTerminalIpc } from './terminal';
 import { VaultService, registerVaultIpc, sharedKeyMessage, type VaultScope, type VaultSharedKeyRequest } from './vault';
 import { OpenGate } from './open-gate';
 import { registerGpuIpc } from './gpu';
-import { WebServerService, childEnv, lanAddresses, registerWebServerIpc, spawnCli } from './web-server';
+import { WebServerService, childEnv, childOfUtility, lanAddresses, registerWebServerIpc } from './web-server';
+import { headlessMode, remoteDebuggingRefused, type HeadlessKind } from './launch-mode';
+import { runHeadless, serverProgram } from './headless';
 import { WEB_SERVER_CHANNELS } from '../shared/web-server';
 import { UpdateCheckService, registerUpdateCheckIpc } from './update-check';
 import { UPDATE_CHECK_CHANNELS, UPDATE_ENDPOINTS, isAllowedUpdateUrl } from '../shared/update-check';
@@ -39,17 +42,30 @@ import os from 'node:os';
 import { ZenFullScreen } from './zen-fullscreen';
 import { createRelaunch, frameOf, frameWindowOptions, initialOverlay, isDarkColor, parseOverlay, rememberOverlay, type TitleBarCache, type WindowFrame } from './frame';
 import { createInProcessBackend, type WindowBackend } from './window-backend';
-import { WindowRegistry, cascadeBounds, folderMatch, planLaunch, type LaunchPath, type LaunchStep } from './windows';
+import { WindowRegistry, cascadeBounds, crashReloads, folderMatch, planLaunch, type LaunchPath, type LaunchStep } from './windows';
 
 const tMainStart = performance.now(); // ms since process start (Node's timeOrigin)
+// Packaged: no DevTools port / pipe (another program would drive One's windows); a test package allows it.
+const debugRefused = remoteDebuggingRefused({ packaged: app.isPackaged, hasSwitch: (s) => app.commandLine.hasSwitch(s), testPackage: () => fs.existsSync(path.join(__dirname, 'test-package.txt')) });
+// `One --mcp-stdio` / `One --serve` (launch-mode.ts): a windowless server in this process. Decided first: nothing
+// below (profile override, thread pool, single-instance lock, windows) runs for it.
+const headless = debugRefused ? null : headlessMode(process.argv, { appPath: app.isPackaged ? null : app.getAppPath(), mcpCli: program('mcp-stdio'), serverCli: program('serve'), cwd: process.cwd(), p: path, foldCase: process.platform !== 'linux' });
+if (debugRefused) {
+  process.stderr.write('One: --remote-debugging-port / --remote-debugging-pipe are not available in this build.\n');
+  app.exit(1);
+} else if (headless) runHeadless(headless, program(headless.kind));
+function program(kind: HeadlessKind): string {
+  return serverProgram(kind, { packaged: app.isPackaged, resourcesPath: process.resourcesPath, mainDir: __dirname });
+}
 const isTest = !!process.env.SEC_EDIT_TEST;
 const logTimings = isTest || !!process.env.SEC_EDIT_TIMINGS;
-if (process.env.SEC_EDIT_USER_DATA) app.setPath('userData', process.env.SEC_EDIT_USER_DATA);
+const appLaunch = !debugRefused && !headless; // the app itself, with windows
+if (appLaunch && process.env.SEC_EDIT_USER_DATA) app.setPath('userData', process.env.SEC_EDIT_USER_DATA);
 // More libuv threads (default 4) only when this launch opens a slow folder (WSL / UNC / network):
 // there every readdir or open blocks one for ms, and a tree walk must not starve file opens. On a
 // local disk 16 threads only contend (the launch tree walk took ~2× as long). The pool size is fixed
 // when it starts, so it is decided here, before any async I/O, from the folder this launch opens.
-if (!process.env.UV_THREADPOOL_SIZE && (isBridgeRoot('') || launchFolders().some(isBridgeRoot))) process.env.UV_THREADPOOL_SIZE = '16';
+if (appLaunch && !process.env.UV_THREADPOOL_SIZE && (isBridgeRoot('') || launchFolders().some(isBridgeRoot))) process.env.UV_THREADPOOL_SIZE = '16';
 
 /** What this launch opens (argv / SEC_EDIT_OPEN, else the most recent folder): a sync guess. */
 function launchFolders(): string[] {
@@ -78,9 +94,11 @@ const CLAIM_MS = 30_000;
 // Single instance: a second launch hands its paths to the running app (feels instant).
 // Tests run many instances in parallel; they opt back in with SEC_EDIT_SINGLE_INSTANCE=1.
 const wantLock = !isTest || !!process.env.SEC_EDIT_SINGLE_INSTANCE;
-const gotLock = !wantLock || app.requestSingleInstanceLock();
-if (!gotLock) app.quit();
-else main();
+if (appLaunch) {
+  const gotLock = !wantLock || app.requestSingleInstanceLock();
+  if (!gotLock) app.quit();
+  else main();
+}
 
 /** argv → existing absolute paths (skips exe, Chromium/Playwright flags and, unpackaged, the app dir). */
 function pathsFromArgv(argv: string[], cwd = process.cwd()): string[] {
@@ -141,6 +159,12 @@ interface WindowCtx {
   readonly foldsCase: boolean | undefined;
   closing: 'idle' | 'requested' | 'acked';
   closeApproved: boolean;
+  /**
+   * The page that switched this window to another folder in place (rpc:openWorkspace from folder A to B) is not
+   * trusted any more: none of its IPC passes until a new page has loaded (did-navigate), so script a note of A ran
+   * cannot reach B. The renderer reloads itself; main reloads it when it did not (see staleRealmAfterSwitch).
+   */
+  staleRealm: boolean;
   queueSave: () => void;
   /** Settles once the window is shown (or closed). */
   shown: Promise<void>;
@@ -183,7 +207,25 @@ function main() {
   /** The registered window of a trusted IPC sender; null = not ours (refused). */
   function trustedCtx(e: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent): Live | null {
     if (!trustedSender(e)) return null;
-    return registry.get(e.sender.id) ?? null;
+    const c = registry.get(e.sender.id) ?? null;
+    return c && !c.staleRealm ? c : null; // the page of a folder this window left: nothing until it is reloaded
+  }
+  /** Grace for the renderer's own location.reload() after an in-place switch; then main reloads the page. */
+  const STALE_RELOAD_MS = 1500;
+  /**
+   * After an in-place switch to another folder: the old page is refused (trustedCtx) until a new one has loaded. The
+   * renderer reloads itself right away; a page that skipped that (rpc:openWorkspace called by script) is reloaded by
+   * main. Never twice: while a navigation is under way main only waits.
+   */
+  function staleRealmAfterSwitch(c: Live) {
+    c.staleRealm = true;
+    const check = () => {
+      if (!alive(c) || !c.staleRealm) return;
+      if (c.win.webContents.isLoading()) return void setTimeout(check, STALE_RELOAD_MS).unref();
+      c.win.webContents.reload();
+      setTimeout(check, STALE_RELOAD_MS * 2).unref(); // a reload the page itself stopped is tried again
+    };
+    setTimeout(check, STALE_RELOAD_MS).unref();
   }
   const alive = (c: Live) => !c.win.isDestroyed();
   /** Shared services' events: every window shows the same status (also fires while quitting). */
@@ -280,12 +322,42 @@ function main() {
 
   // "Start web server": browser mode for a window's folder in a child process (only on request, never at launch).
   // One server for the app: it serves the folder of the window that started it; every window sees its status.
-  const webServerCli = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'server', 'cli.mjs') : path.join(__dirname, '../server/cli.mjs');
+  const webServerCli = program('serve');
+  /** The window that last asked to start the web server: the LAN question goes on it. */
+  let webServerAsker: Live | null = null;
   const webServer = new WebServerService({
     getRoot: () => null, // unused: every start names the calling window's folder (rootOf below)
-    spawn: (args) => spawnCli(process.execPath, webServerCli, args, childEnv(process.env, userData)),
+    // A utilityProcess (no Node mode of the executable: the RunAsNode fuse is off); stdout (URL + token) discarded.
+    spawn: (args) =>
+      childOfUtility(
+        utilityProcess.fork(path.join(__dirname, 'web-server-child.cjs'), [webServerCli, ...args], { stdio: ['ignore', 'ignore', 'pipe'], env: childEnv(process.env, userData), serviceName: 'One web server' }),
+        process.platform === 'win32',
+      ),
     lanAddresses: () => lanAddresses(os.networkInterfaces()),
     openExternal: (url) => shell.openExternal(url),
+    // "Open": the child's redirect file (<userData>/launch, SEC_EDIT_CONFIG_DIR of the child), by its path only.
+    launchDir: path.join(userData, 'launch'),
+    openFile: async (file) => {
+      const err = await shell.openPath(file);
+      if (err) throw new Error(err);
+    },
+    // LAN: a native question the page cannot answer (local-only starts never ask). Tests: SEC_EDIT_TEST_WEBSERVER_LAN
+    // = allow | deny (default allow, so the LAN specs run; each box is logged as [sec-edit:webserver-confirm]).
+    confirmLan: async ({ root }) => {
+      const box = {
+        buttons: ['Start on network', 'Cancel'],
+        title: 'Share this folder on your network?',
+        message: `Let other devices on your network open “${path.basename(root) || root}”?`,
+        detail: `${root}\n\nAnyone on your network with the link can read, change and delete the files in this folder (git included) and change your app settings. Nothing outside this folder. The link holds a secret key: send it only to people you trust. Plain HTTP (not encrypted): use it on trusted networks only, not public Wi-Fi.`,
+      };
+      if (isTest) {
+        console.log(`[sec-edit:webserver-confirm] ${JSON.stringify(box)}`);
+        return process.env.SEC_EDIT_TEST_WEBSERVER_LAN !== 'deny';
+      }
+      const w = dialogParent(webServerAsker);
+      if (!w) return false;
+      return (await dialog.showMessageBox(w, { type: 'warning', defaultId: 1, cancelId: 1, noLink: true, ...box })).response === 0;
+    },
     onChange: (s) => broadcast(WEB_SERVER_CHANNELS.changed, s), // also fires while quitting
     log: (m) => console.log(m), // never the URL / token
   });
@@ -323,7 +395,7 @@ function main() {
 
   // Settings → MCP server: main owns mcp.json; nothing runs here (MCP clients start dist/mcp/cli.mjs
   // themselves). Turning it on, sharing a folder and allowing writes are native dialogs the page cannot answer.
-  const mcpCli = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', 'mcp', 'cli.mjs') : path.join(__dirname, '../mcp/cli.mjs');
+  const mcpCli = program('mcp-stdio');
   /** The window whose MCP request came last: its dialogs go on it (else the focused one). */
   let mcpAsker: Live | null = null;
   // Tests: SEC_EDIT_TEST_MCP_CONFIRM = allow | deny (default deny; each box is logged as [sec-edit:mcp-confirm]),
@@ -341,7 +413,7 @@ function main() {
     configDir: userData,
     homedir: os.homedir(),
     platform: process.platform,
-    launch: () => mcpLaunch({ execPath: process.execPath, cli: mcpCli, exists: (p) => fs.existsSync(p) }),
+    launch: () => mcpLaunch({ execPath: process.execPath, appPath: app.isPackaged ? null : app.getAppPath(), platform: process.platform, cli: mcpCli, exists: (p) => fs.existsSync(p) }),
     confirmEnable: () =>
       mcpConfirm({
         buttons: ['Turn on', 'Cancel'],
@@ -554,7 +626,29 @@ function main() {
         const err = await shell.openPath(abs);
         if (err) throw new BackendFailure('EIO', err);
       },
+      // git('trust'): only the user's yes in a native dialog on this window (a page must never trust a folder itself).
+      confirmTrust: (root) => confirmTrust(get(), root),
+      // resolvePath may look up a UNC / device path only when main saw that very path (launch, drop, dialog).
+      remotePathOk: (abs) => get().gate.seen(abs),
     };
+  }
+
+  // Tests: SEC_EDIT_TEST_GIT_TRUST = allow | deny (default allow: the git specs trust their folder; each box is logged
+  // as [sec-edit:git-trust]). Dead in a packaged build, like every SEC_EDIT_* hook.
+  async function confirmTrust(c: WindowCtx, root: string): Promise<boolean> {
+    const box = {
+      buttons: ['Trust', 'Not now'],
+      title: 'Trust this folder for git?',
+      message: `Trust “${path.basename(root) || root}” for git?`,
+      detail: `${root}\n\nThis folder is a git repository. Its settings can make git run programs (hooks, filters). Trust it only if you know where it came from. Until then git is off here: no status, marks or change bars.`,
+    };
+    if (isTest) {
+      console.log(`[sec-edit:git-trust] ${JSON.stringify(box)}`);
+      return process.env.SEC_EDIT_TEST_GIT_TRUST !== 'deny';
+    }
+    const w = c.win;
+    if (!w || w.isDestroyed()) return false;
+    return (await dialog.showMessageBox(w, { type: 'question', defaultId: 1, cancelId: 1, noLink: true, ...box })).response === 0;
   }
 
   /** Everything of a window that needs no Chromium: its backend starts opening the folder at once. `real`: the folder's
@@ -600,6 +694,7 @@ function main() {
       },
       closing: 'idle',
       closeApproved: false,
+      staleRealm: false,
       queueSave: () => {},
       shown: Promise.resolve(),
     };
@@ -670,8 +765,11 @@ function main() {
         }
         // An outside file is opened only if main saw that very file itself (dialog, OS open, argv, drop).
         if (method === 'openExternalFile' && !(await ctx.gate.vouchedFile(args[0]))) throw new BackendFailure('EACCES', 'This file was not chosen in the app: use “Open file”, drop it on the window or open it from the OS');
+        const before = ctx.backend.root;
         const result = await ctx.backend.call(method, args);
         if (method === 'openWorkspace') {
+          // From one folder to another (not a window's first folder, not the same one): a fresh page for it.
+          if (before !== null && ctx.backend.root !== before) staleRealmAfterSwitch(ctx);
           // Shells started in this window's previous folder go with it; a web server for a folder no window has open stops.
           terminals.setWorkspace(ctx.backend.root, ctx.id);
           webServer.rootsChanged(registry.roots(), 'Opening another folder stopped the web server.');
@@ -741,7 +839,14 @@ function main() {
   );
   registerVaultIpc(ipcMain, vault, { isTrusted: (e) => !!trustedCtx(e as Electron.IpcMainInvokeEvent), scopeOf: (e) => trustedCtx(e as Electron.IpcMainInvokeEvent)?.vault ?? null });
   registerGpuIpc(ipcMain, { isTrusted: (e) => !!trustedCtx(e as Electron.IpcMainInvokeEvent) });
-  registerWebServerIpc(ipcMain, webServer, { isTrusted: (e) => !!trustedCtx(e as Electron.IpcMainInvokeEvent), rootOf: (e) => trustedCtx(e as Electron.IpcMainInvokeEvent)?.backend.root ?? null });
+  registerWebServerIpc(ipcMain, webServer, {
+    isTrusted: (e) => {
+      const c = trustedCtx(e as Electron.IpcMainInvokeEvent);
+      if (c) webServerAsker = c; // runs right before the request: its LAN question goes on this window
+      return !!c;
+    },
+    rootOf: (e) => trustedCtx(e as Electron.IpcMainInvokeEvent)?.backend.root ?? null,
+  });
   registerUpdateCheckIpc(ipcMain, updates, { isTrusted: (e) => !!trustedCtx(e as Electron.IpcMainInvokeEvent) });
   registerMcpIpc(ipcMain, mcp, {
     isTrusted: (e) => {
@@ -902,12 +1007,26 @@ function main() {
     w.webContents.on('will-redirect', (e, url) => {
       if (!isAppNavigation(url, DEV_URL)) e.preventDefault();
     });
+    const mayReload = crashReloads(); // 3 in 60 s
     w.webContents.on('render-process-gone', (_e, d) => {
       console.error('[sec-edit] renderer gone', d.reason);
+      if (d.reason === 'clean-exit' || w.isDestroyed()) return;
       // Crash / OOM: come back instead of leaving a dead window (autosave limits what is lost).
-      if (d.reason !== 'clean-exit' && !w.isDestroyed()) setTimeout(() => !w.isDestroyed() && w.webContents.reload(), 300);
+      if (mayReload()) return void setTimeout(() => !w.isDestroyed() && w.webContents.reload(), 300);
+      // It keeps crashing (a file the session restores?): a start-screen window instead, nothing restored. The new one
+      // comes first: on Windows / Linux the last window closing would quit the app.
+      console.error('[sec-edit] renderer keeps crashing: start screen instead of the session');
+      void serial(() => createWindow({ folder: null, files: [] }, c)).then(
+        () => {
+          c.closeApproved = true;
+          if (!w.isDestroyed()) w.destroy();
+        },
+        (err) => console.error('[sec-edit] start screen after crashes failed', err),
+      );
     });
     w.webContents.on('will-attach-webview', (e) => e.preventDefault());
+    // A new page has loaded (not a hash / pushState change): it may talk to main again after an in-place switch.
+    w.webContents.on('did-navigate', () => void (c.staleRealm = false));
 
     // Persist window geometry (debounced) and on close: the window saved last is where the next launch opens.
     let saveTimer: NodeJS.Timeout | null = null;
@@ -988,6 +1107,38 @@ function main() {
     return c;
   }
 
+  /**
+   * One workspace file for the preview, from the window's folder. Checked (a link out of the folder is not served),
+   * then opened ONCE: type, size and bytes all come from that handle, so a link or FIFO swapped in after the check
+   * is never followed by a second lookup. Non-blocking open: a FIFO cannot hold a thread; regular files only.
+   */
+  async function workspaceFile(c: Live, rel: string): Promise<Response> {
+    const abs = await c.backend.real(rel);
+    const fh = await fsp.open(abs, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
+    let st: fs.Stats;
+    try {
+      st = await fh.stat();
+      if (!st.isFile()) throw new Error('not a file');
+      // The handle must be the file the check judged: a link swapped in between check and open names another one.
+      const now = await fsp.stat(await c.backend.real(rel));
+      if (now.dev !== st.dev || now.ino !== st.ino) throw new Error('changed');
+    } catch (err) {
+      await fh.close().catch(() => {});
+      throw err;
+    }
+    const size = st.size;
+    const body = Readable.toWeb(fh.createReadStream()) as unknown as ReadableStream<Uint8Array>; // closes the handle when done
+    return new Response(body, {
+      headers: {
+        'content-type': workspaceMediaType(rel),
+        'content-length': String(size),
+        'content-security-policy': "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
+        'x-content-type-options': 'nosniff',
+        'cache-control': 'no-cache',
+      },
+    });
+  }
+
   function serveRenderer() {
     protocol.handle(SCHEME, async (req) => {
       const route = routeAppUrl(req.url, rendererDir, path);
@@ -1009,19 +1160,7 @@ function main() {
       if (route.kind === 'workspace') {
         const c = registry.all().find((x) => x.wsKey === route.key);
         if (!c) return new Response('not found', { status: 404 });
-        try {
-          const abs = await c.backend.real(route.rel); // also through links: a link out of the folder is not served
-          // Regular files only: file:// on a folder renders a listing page, on a FIFO it blocks a thread.
-          if (!(await fsp.stat(abs)).isFile()) return new Response('not found', { status: 404 });
-          const res = await net.fetch(pathToFileURL(abs).toString());
-          const headers = new Headers(res.headers);
-          headers.set('content-security-policy', "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox");
-          headers.set('x-content-type-options', 'nosniff');
-          headers.set('cache-control', 'no-cache');
-          return new Response(res.body, { status: res.status, headers });
-        } catch {
-          return new Response('not found', { status: 404 });
-        }
+        return workspaceFile(c, route.rel).catch(() => new Response('not found', { status: 404 }));
       }
       const res = await net.fetch(pathToFileURL(route.file).toString());
       if (!isPdfWorkerAsset(route.file)) return res;
@@ -1062,9 +1201,14 @@ function main() {
     if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(path.join(rendererDir, 'icon.png'));
     serveRenderer();
     // An editor needs no camera, mic, geolocation, notifications… deny everything but clipboard + fullscreen.
-    const allowed = new Set(['clipboard-sanitized-write', 'clipboard-read', 'fullscreen']);
-    session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowed.has(permission)));
-    session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowed.has(permission));
+    const allowed = new Set(['clipboard-sanitized-write', 'fullscreen']);
+    // Reading the clipboard (menu Paste, paste as plain text, Ctrl+K link, compare with clipboard, terminal Paste; Ctrl+V
+    // needs no permission): only our own app page in a window of ours, its main frame. Never another frame or origin,
+    // never a workspace file (app://sec-edit/__ws/ is not the app).
+    const mayRead = (wc: Electron.WebContents | null, url: string | undefined, mainFrame: boolean | undefined) =>
+      !!wc && mainFrame !== false && !!registry.get(wc.id) && isAppNavigation(url ?? '', DEV_URL) && isAppNavigation(wc.getURL(), DEV_URL);
+    session.defaultSession.setPermissionRequestHandler((wc, permission, cb, d) => cb(allowed.has(permission) || (permission === 'clipboard-read' && mayRead(wc, d.requestingUrl, d.isMainFrame))));
+    session.defaultSession.setPermissionCheckHandler((wc, permission, origin, d) => allowed.has(permission) || (permission === 'clipboard-read' && mayRead(wc, d.requestingUrl ?? origin, d.isMainFrame)));
     try {
       let ctxs = await firstCtxs;
       const extra = earlyOpen.splice(0);

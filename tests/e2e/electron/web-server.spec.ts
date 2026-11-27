@@ -81,17 +81,22 @@ test('start from the palette: info shows the address, the link needs its token, 
   expect((await fetch(`${origin}api/events?token=${token}`)).status).toBe(403);
   expect((await (await listTree({ 'x-sec-edit-token': token })).json()).ok).toBe(true);
 
-  // "Open" hands the OS browser (stubbed here) a one-time launch link, not the key: a command line is
-  // visible to other processes. The code works once.
+  // "Open" hands the OS (stubbed here) a 0600 redirect file with a one-time launch link: no command line (visible to
+  // other processes and users) holds the key or the code. The code works once.
   await app.evaluate(({ shell }) => {
     (globalThis as any).__opened = [];
-    shell.openExternal = (async (u: string) => void (globalThis as any).__opened.push(u)) as typeof shell.openExternal;
+    shell.openPath = (async (p: string) => ((globalThis as any).__opened.push(p), '')) as typeof shell.openPath;
+    shell.openExternal = (async (u: string) => void (globalThis as any).__opened.push(`external:${u}`)) as typeof shell.openExternal;
   });
   await info.locator('[data-testid="webserver-open"]').click();
   await expect.poll(() => app.evaluate(() => (globalThis as any).__opened.length)).toBe(1);
   const opened: string = await app.evaluate(() => (globalThis as any).__opened[0]);
-  expect(opened).toMatch(new RegExp(`^${origin.replace(/[.]/g, '\\.')}\\?launch=[a-f0-9]{32}$`));
-  const redeem = () => fetch(`${origin}api/launch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: opened.split('launch=')[1] }) });
+  expect(path.dirname(opened)).toBe(path.join(el.userData, 'launch'));
+  expect(fs.statSync(opened).mode & 0o777).toBe(0o600);
+  const html = fs.readFileSync(opened, 'utf8');
+  expect(html).not.toContain(token);
+  const code = new RegExp(`${origin.replace(/[.]/g, '\\.')}\\?launch=([a-f0-9]{32})`).exec(html)![1];
+  const redeem = () => fetch(`${origin}api/launch`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code }) });
   expect((await (await redeem()).json()).token).toBe(token);
   expect((await redeem()).status).toBe(403);
   // A page cannot make main open anything else.
@@ -140,7 +145,7 @@ test('a crashed app leaves no server behind either (the child notices the closed
 });
 
 test('LAN: warns before starting, then lists the network addresses', async ({ el }) => {
-  const { app, page } = await el.launch([el.ws]);
+  const { app, page, stdout } = await el.launch([el.ws]);
   await ready(page);
   await openBrowserModeSettings(page);
   await page.locator('[data-setting="webserver.access"] [data-value="lan"]').click();
@@ -160,6 +165,9 @@ test('LAN: warns before starting, then lists the network addresses', async ({ el
   await expect(panel.locator('[data-testid="webserver-state"]')).toHaveText('Running');
   const s = await status(page);
   expect(s.access).toBe('lan');
+  // Main asked too, natively (the page's dialog alone could be skipped by a taken-over page).
+  expect(stdout.join('')).toContain('[sec-edit:webserver-confirm]');
+  expect(stdout.join('')).toContain('Share this folder on your network?');
   const expected = lanAddresses(os.networkInterfaces()).map((a) => `http://${a}:${s.port}/`);
   await expect(panel.locator('[data-testid="webserver-url"]')).toHaveText([`http://127.0.0.1:${s.port}/`, ...expected]);
   if (!expected.length) await expect(panel).toContainText('No network address found');
@@ -176,6 +184,18 @@ test('LAN: warns before starting, then lists the network addresses', async ({ el
   await expect(page.locator('[data-testid="webserver-pill"]')).toHaveAttribute('data-access', 'lan');
   await panel.locator('[data-testid="webserver-stop"]').click();
   await expect(panel.locator('[data-testid="webserver-state"]')).toHaveText('Stopped');
+});
+
+test('LAN refused in the native dialog: nothing starts, even when the page calls the bridge itself', async ({ el }) => {
+  const { app, page } = await el.launch([el.ws], { env: { SEC_EDIT_TEST_WEBSERVER_LAN: 'deny' } });
+  await ready(page);
+  const r = await page.evaluate(() => (window as any).secEditBridge.webServer.start({ port: null, access: 'lan' }));
+  expect(r).toMatchObject({ ok: false, error: { code: 'ECANCELED' } });
+  expect(await pidOf(app)).toBeUndefined();
+  // This computer only: no question.
+  const local = await page.evaluate(() => (window as any).secEditBridge.webServer.start({ port: null, access: 'local' }));
+  expect(local).toMatchObject({ ok: true, result: { state: 'running', access: 'local' } });
+  expect((await page.evaluate(() => (window as any).secEditBridge.webServer.stop())).result.state).toBe('stopped');
 });
 
 test('a dead server shows its error; a taken port says so; another folder stops it', async ({ el }) => {

@@ -1,7 +1,7 @@
 // app:// routing, navigation policy, external URLs and argv parsing — posix and win32.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { isAppNavigation, isExternalUrl, pathsFromArgs, routeAppUrl } from '../../../src/main/protocol';
+import { isAppNavigation, isExternalUrl, pathsFromArgs, routeAppUrl, workspaceMediaType } from '../../../src/main/protocol';
 import { resolveInside } from '../../../src/backend/pathsafe';
 
 describe('routeAppUrl', () => {
@@ -68,6 +68,24 @@ describe('isAppNavigation', () => {
     expect(isAppNavigation('http://localhost:5173/x', 'http://localhost:5173/')).toBe(true);
     expect(isAppNavigation('http://localhost:5173/x')).toBe(false);
   });
+
+  it('the dev server by exact origin, never by prefix (L9)', () => {
+    const dev = 'http://localhost:5173';
+    expect(isAppNavigation('http://localhost:5173/', dev)).toBe(true);
+    expect(isAppNavigation('http://localhost:5173/src/main.tsx?x=1', `${dev}/`)).toBe(true);
+    for (const bad of ['http://localhost:5173.evil.com/', 'http://localhost:51730/', 'http://localhost:5173@evil.com/', 'https://localhost:5173/', 'http://127.0.0.1:5173/', 'http://localhost:5173evil/']) expect(isAppNavigation(bad, dev), bad).toBe(false);
+    expect(isAppNavigation('http://localhost:5173/', 'not a url')).toBe(false);
+  });
+});
+
+describe('workspaceMediaType (app://sec-edit/__ws/ answers, L7)', () => {
+  it('the preview’s media by extension; anything else is plain bytes, never HTML or script', () => {
+    expect(workspaceMediaType('img/a #1.SVG')).toBe('image/svg+xml');
+    expect(workspaceMediaType('x/y.png')).toBe('image/png');
+    expect(workspaceMediaType('doc.pdf')).toBe('application/pdf');
+    expect(workspaceMediaType('clip.webm')).toBe('video/webm');
+    for (const f of ['evil.html', 'evil.js', 'a.htm', 'noext', '.hidden', 'x.constructor', 'a.toString']) expect(workspaceMediaType(f), f).toBe('application/octet-stream');
+  });
 });
 
 describe('isExternalUrl', () => {
@@ -104,5 +122,19 @@ describe('pathsFromArgs (Windows)', () => {
 
   it('squirrel / unknown switches and missing paths are ignored', () => {
     expect(pathsFromArgs(['sec-edit.exe', '--squirrel-firstrun', 'C:\\nope.md'], o())).toEqual([]);
+  });
+});
+
+describe('pathsFromArgs after `--` (macOS `one` launcher, L5)', () => {
+  const P = path.posix;
+  const files = new Set(['/w/--inspect=9229', '/w/-x.md', '/w/a.md', '/w', '/apps/sec-edit']);
+  const o = (extra: Partial<Parameters<typeof pathsFromArgs>[1]> = {}) => ({ cwd: '/w', appPath: null, exists: (p: string) => files.has(p), p: P, foldCase: false, ...extra });
+  it('everything after `--` is a path, even names that look like switches', () => {
+    expect(pathsFromArgs(['/Applications/One.app/Contents/MacOS/one', '--', '--inspect=9229', '-x.md', 'a.md'], o())).toEqual(['/w/--inspect=9229', '/w/-x.md', '/w/a.md']);
+    expect(pathsFromArgs(['one', '--disable-gpu', '--', '.'], o())).toEqual(['/w']);
+    expect(pathsFromArgs(['one', '--'], o())).toEqual([]);
+  });
+  it('unpackaged: the app dir before `--` is still skipped', () => {
+    expect(pathsFromArgs(['electron', '/apps/sec-edit', '--', 'a.md'], o({ appPath: '/apps/sec-edit' }))).toEqual(['/w/a.md']);
   });
 });

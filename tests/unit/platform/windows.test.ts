@@ -1,7 +1,7 @@
 // Window registry, launch routing (planLaunch) and cascade placement: pure, no electron. Windows paths via path.win32.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { WindowRegistry, cascadeBounds, folderMatch, planLaunch, type LaunchInput } from '../../../src/main/windows';
+import { WindowRegistry, cascadeBounds, crashReloads, folderMatch, planLaunch, type LaunchInput } from '../../../src/main/windows';
 import { isInsideDir } from '../../../src/backend/pathsafe';
 
 type W = { id: number; root: string | null; foldsCase?: boolean };
@@ -263,5 +263,22 @@ describe('cascadeBounds', () => {
   });
   it('never makes a window larger than the work area', () => {
     expect(cascadeBounds({ x: 0, y: 0, width: 2560, height: 1440 }, screen)).toEqual({ x: 0, y: 0, width: 1920, height: 1040 });
+  });
+});
+
+describe('crashReloads: renderer crash reloads are capped (L8)', () => {
+  it('3 reloads in 60 s, the 4th crash gives up; older crashes age out', () => {
+    let t = 0;
+    const may = crashReloads({ now: () => t });
+    expect([may(), may(), may()]).toEqual([true, true, true]);
+    t = 59_999;
+    expect(may()).toBe(false); // 4 within a minute: start screen instead
+    t = 200_000;
+    expect(may()).toBe(true); // a crash an hour later reloads again
+    const slow = crashReloads({ now: () => t });
+    for (let i = 0; i < 10; i++) {
+      t += 30_000; // one crash every 30 s: never 4 within 60 s
+      expect(slow()).toBe(true);
+    }
   });
 });

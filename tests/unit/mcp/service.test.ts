@@ -344,7 +344,8 @@ describe('access tokens (main)', () => {
     const st = await t.svc.createToken('Claude Code', 'claude-code');
     const tok = st.tokens.find((x) => x.name === 'Claude Code')!;
     const raw = rawIn(t.clip.at(-1)!)!;
-    expect(t.clip.at(-1)).toContain(`--env ${TOKEN_ENV}=`);
+    expect(JSON.parse(t.clip.at(-1)!).mcpServers.one.env[TOKEN_ENV]).toBe(raw); // Claude Code: a config entry, no command line
+    expect(t.clip.at(-1)).not.toContain('--env');
     t.answers.copy = false; // copying again asks first ("Copy setup with the access token?")
     const n = t.clip.length;
     await expect(t.svc.copySetup(tok.id, 'lmstudio')).rejects.toMatchObject({ code: 'ECANCELED' });
@@ -413,8 +414,11 @@ describe('folderProblem (pure, Windows rules as strings)', () => {
 
 describe('mcpLaunch + IPC guard', () => {
   it('no cli.mjs → no launch; untrusted senders are refused on every channel', async () => {
-    expect(mcpLaunch({ execPath: '/x/one', cli: '/x/cli.mjs', exists: () => false })).toBeNull();
-    expect(mcpLaunch({ execPath: '/x/one', cli: '/x/cli.mjs', exists: () => true })).toEqual({ command: '/x/one', args: ['/x/cli.mjs', '--stdio'], env: { ELECTRON_RUN_AS_NODE: '1' } });
+    expect(mcpLaunch({ execPath: '/x/one', appPath: null, platform: 'linux', cli: '/x/cli.mjs', exists: () => false })).toBeNull();
+    // One's own executable, windowless (M10: no Node mode, no ELECTRON_RUN_AS_NODE); Linux needs no display.
+    expect(mcpLaunch({ execPath: '/x/one', appPath: null, platform: 'linux', cli: '/x/cli.mjs', exists: () => true })).toEqual({ command: '/x/one', args: ['--ozone-platform=headless', '--mcp-stdio'], env: {} });
+    expect(mcpLaunch({ execPath: 'C:\\One\\One.exe', appPath: null, platform: 'win32', cli: 'C:\\One\\cli.mjs', exists: () => true })).toEqual({ command: 'C:\\One\\One.exe', args: ['--mcp-stdio'], env: {} });
+    expect(mcpLaunch({ execPath: '/n/electron', appPath: '/src/one', platform: 'darwin', cli: '/x/cli.mjs', exists: () => true })!.args).toEqual(['/src/one', '--mcp-stdio']); // unpackaged
     const t = setup();
     const handlers = new Map<string, (e: unknown, ...a: unknown[]) => unknown>();
     registerMcpIpc({ handle: (c, fn) => void handlers.set(c, fn) }, t.svc, { isTrusted: (e) => e === 'trusted' });

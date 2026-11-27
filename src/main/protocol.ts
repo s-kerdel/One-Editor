@@ -27,6 +27,36 @@ export function isPdfWindowRequestAllowed(url: string, resourceType: string): bo
   return u.protocol === 'https:' && resourceType === 'image';
 }
 
+// What the preview loads from app://sec-edit/__ws/ (images, PDFs, audio, video: preview/markdown.ts). Anything
+// else is bytes (application/octet-stream): never HTML or script, whatever the file is called.
+const WS_MEDIA: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml', // an <img> renders SVG only with its own type
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/x-icon',
+  '.pdf': 'application/pdf',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.flac': 'audio/flac',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.ogv': 'video/ogg',
+  '.mov': 'video/quicktime',
+};
+
+/** Content-Type of a workspace file served to the preview (by extension, case-insensitive). */
+export function workspaceMediaType(rel: string): string {
+  const m = /\.[^./\\]+$/.exec(rel);
+  return (m && Object.hasOwn(WS_MEDIA, m[0].toLowerCase()) ? WS_MEDIA[m[0].toLowerCase()] : null) ?? 'application/octet-stream';
+}
+
 export type AppRoute =
   /** `key`: the window's ws key (several windows: each serves its own folder, main/main.ts). */
   | { kind: 'workspace'; key: string; rel: string }
@@ -71,12 +101,22 @@ export function routeAppUrl(rawUrl: string, rendererDir: string, p: PlatformPath
  * (`app://sec-edit/__ws/x.html` would replace the app, unsaved edits included) or anywhere else.
  */
 export function isAppNavigation(url: string, devServerUrl?: string): boolean {
-  if (devServerUrl && url.startsWith(devServerUrl)) return true;
   try {
     const u = new URL(url);
+    // Exact origin: a prefix match would let `http://localhost:5173.evil.com` pass as the dev server.
+    if (devServerUrl && u.origin !== 'null' && u.origin === originOf(devServerUrl)) return true;
     return u.protocol === `${SCHEME}:` && u.host === HOST && !decodeURIComponent(u.pathname).startsWith(WS_PREFIX);
   } catch {
     return false;
+  }
+}
+
+function originOf(url: string): string | null {
+  try {
+    const o = new URL(url).origin;
+    return o === 'null' ? null : o;
+  } catch {
+    return null;
   }
 }
 
@@ -89,11 +129,17 @@ export interface ArgvOptions {
   foldCase: boolean;
 }
 
-/** argv → existing absolute paths. Skips the exe, Chromium/Squirrel switches and (unpackaged) the app dir. */
+/**
+ * argv → existing absolute paths. Skips the exe, Chromium/Squirrel switches and (unpackaged) the app dir. After a `--`
+ * (the macOS `one` launcher puts one before the user's paths; Chromium stops reading switches there too) every
+ * argument is a path, also one that starts with `-`.
+ */
 export function pathsFromArgs(argv: string[], o: ArgvOptions): string[] {
   const win = o.p.sep === '\\';
   const fold = (s: string) => (o.foldCase ? s.toLowerCase() : s);
-  let rest = argv.slice(1).filter((a) => !!a && !a.startsWith('-'));
+  const end = argv.indexOf('--', 1);
+  const literal = end === -1 ? [] : argv.slice(end + 1).filter((a) => !!a);
+  let rest = (end === -1 ? argv.slice(1) : argv.slice(1, end)).filter((a) => !!a && !a.startsWith('-'));
   if (o.appPath) {
     const app = fold(o.p.resolve(o.appPath));
     const i = rest.findIndex((a) => fold(o.p.resolve(o.cwd, a)) === app);
@@ -106,7 +152,7 @@ export function pathsFromArgs(argv: string[], o: ArgvOptions): string[] {
     if (/^[a-z]:$/i.test(s)) s += '\\';
     return s;
   };
-  return rest.map((a) => o.p.resolve(o.cwd, clean(a))).filter((x) => o.exists(x));
+  return [...rest, ...literal].map((a) => o.p.resolve(o.cwd, clean(a))).filter((x) => o.exists(x));
 }
 
 /**

@@ -124,6 +124,47 @@ describe('shared vault keys across folders', () => {
     expect(state.asked).toEqual([]);
   });
 
+  it('L4: a new value from another folder makes it the owner; the folder that saved the name first must ask again', async () => {
+    const { v, state, file } = vault('takeover', true);
+    state.root = '/home/me/Downloads/cloned-repo';
+    await v.set('prod-db', 'dummy'); // a hostile folder saves the name first
+    state.root = '/home/me/projects/site';
+    expect(await v.get('prod-db')).toBe('dummy'); // allowed (dialog) to read it: a grant
+    state.root = '/home/me/work';
+    await v.set('prod-db', 'the-real-one'); // the user's own folder, allowed to change it in the dialog
+    expect(state.asked.map((q) => `${q.root}:${q.action}:${q.owner}`)).toEqual(['/home/me/projects/site:read:/home/me/Downloads/cloned-repo', '/home/me/work:change:/home/me/Downloads/cloned-repo']);
+    const disk = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(disk.owners).toEqual({ 'prod-db': '/home/me/work' });
+    expect(Object.values(disk.grants ?? {}).flat()).not.toContain('prod-db'); // every old grant dropped
+    state.answer = false;
+    state.root = '/home/me/Downloads/cloned-repo';
+    await expect(v.get('prod-db')).rejects.toMatchObject(denied); // the old owner asks now, and was refused
+    state.root = '/home/me/projects/site';
+    await expect(v.get('prod-db')).rejects.toMatchObject(denied); // so does the folder allowed the old value
+    state.root = '/home/me/work';
+    expect(await v.get('prod-db')).toBe('the-real-one');
+    await v.set('prod-db', 'rotated'); // the owner changing its own value: no question, owner stays
+    expect(state.asked).toHaveLength(4);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).owners).toEqual({ 'prod-db': '/home/me/work' });
+  });
+
+  it('L4: the owner changing its value keeps the grants it allowed', async () => {
+    const { v, state, file } = vault('keep-grants', true);
+    await v.set('api', 'one');
+    state.root = '/home/me/site';
+    expect(await v.get('api')).toBe('one');
+    state.root = '/home/me/work';
+    await v.set('api', 'two');
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).grants).toEqual({ '/home/me/site': ['api'] });
+  });
+
+  it('L4: the dialog shows the full path of the folder that saved the key', () => {
+    const m = sharedKeyMessage({ key: 'prod-db', root: '/home/me/work/lab', owner: '/home/me/Downloads/lab', action: 'change' });
+    expect(m.detail).toContain('Folder: /home/me/work/lab\nSaved from: /home/me/Downloads/lab');
+    expect(m.detail).toContain('other folders allowed so far must ask again');
+    expect(sharedKeyMessage({ key: 'k', root: '/r', owner: null, action: 'read' }).detail).toContain('Saved from: unknown');
+  });
+
   it('the dialog text names the key and where it came from, on one line each, shortened', () => {
     const m = sharedKeyMessage({ key: 'prod-db', root: '/home/me/Downloads/cloned-repo', owner: '/home/me/work/lab', action: 'read' });
     expect(m.message).toBe('This folder wants to use the secret “prod-db” (saved from “lab”). Allow?');

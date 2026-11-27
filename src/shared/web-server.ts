@@ -66,7 +66,13 @@ export function optionsFromSettings(s: Record<string, unknown>): WebServerOption
 
 /** The child's handshake over the Node IPC channel (`cli.mjs --ipc`). */
 /** `launch`: a one-time link (answer to { type: 'launch' }) — "Open" hands it to the browser instead of the token. */
-export type ChildMessage = { type: 'ready'; port: number; token: string; busy?: number } | { type: 'error'; code: string; message: string } | { type: 'launch'; url: string };
+/** `launch` + `file`: the 0600 redirect file holding such a link (answer to { type: 'launch', file: true }); + `error`: none could be written. */
+export type ChildMessage =
+  | { type: 'ready'; port: number; token: string; busy?: number }
+  | { type: 'error'; code: string; message: string }
+  | { type: 'launch'; url: string }
+  | { type: 'launch'; file: string }
+  | { type: 'launch'; error: string };
 
 export function parseChildMessage(m: unknown): ChildMessage | null {
   if (!m || typeof m !== 'object') return null;
@@ -79,6 +85,9 @@ export function parseChildMessage(m: unknown): ChildMessage | null {
     return typeof busy === 'number' && Number.isInteger(busy) && busy > 0 && busy <= 65535 && busy !== port ? { type: 'ready', port, token, busy } : { type: 'ready', port, token };
   }
   if (o.type === 'launch' && typeof o.url === 'string' && /^http:\/\/[^\s/?#]+\/\?launch=[a-f0-9]{32}$/.test(o.url)) return { type: 'launch', url: o.url };
+  // The file's folder is checked by main (web-server.ts launchFile): here only its shape.
+  if (o.type === 'launch' && typeof o.file === 'string' && o.file.length < 4096 && !o.file.includes('\0') && /[\\/]open-[0-9a-f]{16}\.html$/.test(o.file)) return { type: 'launch', file: o.file };
+  if (o.type === 'launch' && typeof o.error === 'string') return { type: 'launch', error: o.error.slice(0, 40) };
   if (o.type === 'error' && typeof o.message === 'string') {
     return { type: 'error', code: typeof o.code === 'string' ? o.code.slice(0, 40) : 'EIO', message: o.message.slice(0, 500) };
   }

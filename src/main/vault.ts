@@ -187,10 +187,17 @@ export class VaultService {
     const isNew = !Object.hasOwn(d.entries, key);
     if (isNew && Object.keys(d.entries).length >= VAULT_LIMITS.maxEntries) throw new VaultError('ENOSPC', 'The vault is full');
     if (!isNew) await this.allowShared(key, 'change', sc);
-    else if (sc && vaultKeyFolder(key) === null) {
-      // A new shared key belongs to the folder that saves it.
+    if (sc && vaultKeyFolder(key) === null) {
+      // A shared key belongs to the folder that saved its value. A new value from another folder (allowed in the
+      // dialog) makes that folder the owner and drops the other grants: a folder that saved the name first (with a
+      // dummy) must not read the real value later, and folders allowed the old value ask again.
       const root = sc.root();
-      if (root !== null) (d.owners ??= {})[key] = vaultRootScope(root, sc.os ?? process.platform);
+      const me = root === null ? null : vaultRootScope(root, sc.os ?? process.platform);
+      const owners = (d.owners ??= {});
+      if (me !== null && (isNew || !Object.hasOwn(owners, key) || owners[key] !== me)) {
+        owners[key] = me;
+        if (!isNew) for (const list of Object.values(d.grants ?? {})) if (list.includes(key)) list.splice(list.indexOf(key), 1);
+      }
     }
     d.entries[key] = this.crypto.encrypt(value).toString('base64');
     await this.save();
@@ -222,9 +229,12 @@ export function sharedKeyMessage(q: VaultSharedKeyRequest): { message: string; d
   };
   const name = (p: string) => one(p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p, 60);
   const from = q.owner ? `saved from “${name(q.owner)}”` : 'saved earlier, from another folder';
+  // The full folder paths: two folders can share a name ("lab" at work and "lab" in Downloads).
+  const where = `Folder: ${one(q.root, 200)}\nSaved from: ${q.owner ? one(q.owner, 200) : 'unknown (saved before One recorded it)'}`;
+  const change = q.action === 'change' ? ' Its new value then belongs to this folder: other folders allowed so far must ask again.' : '';
   return {
     message: `This folder wants to ${q.action === 'read' ? 'use' : 'change'} the secret “${one(q.key, 80)}” (${from}). Allow?`,
-    detail: `Folder: ${one(q.root, 200)}\n\nA note or variables.md in this folder refers to that secret by name. Allow it only if you trust this folder: the secret’s value becomes available to it. Your answer is remembered for this folder.`,
+    detail: `${where}\n\nA note or variables.md in this folder refers to that secret by name. Allow it only if you trust this folder: the secret’s value becomes available to it.${change} Your answer is remembered for this folder.`,
   };
 }
 

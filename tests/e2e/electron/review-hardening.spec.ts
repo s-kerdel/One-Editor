@@ -86,9 +86,9 @@ test('app:// serves workspace files sandboxed and never outside the workspace', 
     const get = async (u: string) => {
       try {
         const res = await fetch(u);
-        return { status: res.status, body: (await res.text()).slice(0, 40), csp: res.headers.get('content-security-policy') };
+        return { status: res.status, body: (await res.text()).slice(0, 40), csp: res.headers.get('content-security-policy'), type: res.headers.get('content-type') };
       } catch (e) {
-        return { status: -1, body: String(e), csp: null };
+        return { status: -1, body: String(e), csp: null, type: null };
       }
     };
     // This window's folder: its own key names it (several windows each serve their own).
@@ -108,6 +108,7 @@ test('app:// serves workspace files sandboxed and never outside the workspace', 
   });
   expect(r.ok.status).toBe(200);
   expect(r.ok.csp).toContain('sandbox');
+  expect(r.ok.type).toBe('image/svg+xml'); // served from one opened handle (L7), with the type an <img> needs
   expect(r.dir.status).toBe(404); // no directory listing page on our origin
   for (const k of ['up', 'up2', 'renderer', 'bad'] as const) expect(r[k].body, k).not.toContain('SECRET');
   expect(r.bad.status).toBe(400);
@@ -121,7 +122,10 @@ test('permissions an editor never needs are denied', async ({ el }) => {
     notification: await Notification.requestPermission(),
     media: await navigator.mediaDevices.getUserMedia({ audio: true }).then(() => 'granted', (e) => e.name),
     geo: await new Promise((r) => navigator.geolocation.getCurrentPosition(() => r('granted'), (e) => r(`denied:${e.code}`))),
+    // Reading the clipboard stays for our own page (menu Paste, terminal Paste…): only there (L19).
+    clip: await navigator.permissions.query({ name: 'clipboard-read' as PermissionName }).then((p) => p.state, (e) => String(e)),
   }));
+  expect(res.clip).toBe('granted');
   expect(res.notification).toBe('denied');
   expect(res.media).not.toBe('granted');
   expect(res.geo).not.toBe('granted');
@@ -157,11 +161,16 @@ test('the page cannot open a folder main has not seen: no home folder, no parent
   for (const p of [other, el.tmp, path.dirname(el.ws), home, '/', '/etc']) expect(await open(p), p).toBe('refused:EACCES');
   expect(await page.evaluate(() => (window as any).__secEdit.workspace.value.root)).toBe(el.ws);
   await expect(page.evaluate(() => (window as any).__secEdit.backend.readFile('../other/private.md'))).rejects.toThrow();
-  // What main saw itself passes: the dialog's answer (stood in for here), then it is a recent folder.
+  // What main saw itself passes: the dialog's answer (stood in for here), then it is a recent folder. A switch done by
+  // page script leaves that page refused until main has reloaded it (M4): each next call comes from the fresh page.
+  const reloaded = (root: string) => expect.poll(() => page.evaluate(() => (document.documentElement.dataset.ready === 'true' ? (window as any).__secEdit.workspace.value?.root : null)).catch(() => null), { timeout: 15000 }).toBe(root);
   await app.evaluate((_e, p) => (globalThis as any).__secEditVouch(p), other);
   expect(await open(other)).toBe(other);
+  await reloaded(other);
   expect(await open(el.ws)).toBe(el.ws); // recent
+  await reloaded(el.ws);
   expect(await open(path.join(el.ws, 'notes'))).toBe(path.join(el.ws, 'notes')); // inside the open folder ("Open as project")
+  await reloaded(path.join(el.ws, 'notes'));
   expect(await open(el.tmp)).toBe('refused:EACCES');
 });
 

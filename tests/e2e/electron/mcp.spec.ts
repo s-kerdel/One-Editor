@@ -1,8 +1,9 @@
 // Settings → MCP server in the real desktop app: off by default; turning on, sharing a folder, allowing
 // writes / code files, undo off and every token step go through main's native dialogs (stubbed by
 // SEC_EDIT_TEST_MCP_*); main writes mcp.json; "Copy setup" puts the snippet with its access token on the
-// clipboard from main (the page never sees the token); that setup really starts the server (this Electron in
-// Node mode), which serves the shared folder, logs to the activity list and exits when its token is revoked.
+// clipboard from main (the page never sees the token); that setup really starts the server (this Electron with
+// --mcp-stdio: windowless, no Node mode), which serves the shared folder, logs to the activity list and exits when
+// its token is revoked. A setup copied before (`<exe> <…>/dist/mcp/cli.mjs --stdio`) still gets that server.
 import { spawn } from 'node:child_process';
 import type { ElectronApplication, Page } from '@playwright/test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -75,7 +76,7 @@ test('on (asks first), share a folder (dialog), allow writes (asks), setup snipp
   await expect(page.locator('[data-testid="mcp-snippet"]')).toContainText('"ONE_MCP_TOKEN": "one_••••"');
   await page.locator('[data-testid="mcp-client-codex"]').click();
   await expect(page.locator('[data-testid="mcp-snippet"]')).toContainText('[mcp_servers.one]');
-  await expect(page.locator('[data-testid="mcp-snippet"]')).toContainText('dist/mcp/cli.mjs');
+  await expect(page.locator('[data-testid="mcp-snippet"]')).toContainText('--mcp-stdio'); // One itself, windowless (no Node mode)
   await page.locator('[data-testid="mcp-client-lmstudio"]').click();
 
   // "Copy setup": main copies; the bridge answer is only "copied".
@@ -84,10 +85,11 @@ test('on (asks first), share a folder (dialog), allow writes (asks), setup snipp
   const answer = await page.evaluate((x) => (window as any).secEditBridge.mcp.copySetup(x, 'lmstudio'), id);
   expect(answer).toEqual({ ok: true, result: { copied: true } });
   const server = await copiedServer(app);
-  expect(server.env).toEqual({ ELECTRON_RUN_AS_NODE: '1', ONE_MCP_TOKEN: raw });
+  expect(server.env).toEqual({ ONE_MCP_TOKEN: raw });
+  expect(server.args.slice(-2)).toEqual(['--ozone-platform=headless', '--mcp-stdio']); // Linux: starts without a display
   expect(server.args.join(' ')).not.toContain('one_'); // env, never argv
   const launch = (await status(page)).launch as { command: string; args: string[]; env: Record<string, string> };
-  expect(launch.env).toEqual({ ELECTRON_RUN_AS_NODE: '1' }); // the page's copy has no token
+  expect(launch.env).toEqual({}); // the page's copy has no token
 
   // Start the server exactly as the copied setup says (+ the test profile's data folder).
   const transport = new StdioClientTransport({ command: server.command, args: server.args, env: { PATH: process.env.PATH ?? '', HOME: el.tmp, ...server.env, SEC_EDIT_CONFIG_DIR: el.userData, SEC_EDIT_MCP_POLL_MS: '150' }, stderr: 'pipe' });
@@ -135,7 +137,7 @@ test('a "no" in the native dialog changes nothing, and the page cannot name a fo
   expect(fs.existsSync(path.join(el.userData, 'mcp.json'))).toBe(false);
   // And a server started anyway refuses to run.
   const launch = (await status(page)).launch as { command: string; args: string[]; env: Record<string, string> };
-  const child = spawn(launch.command, launch.args, { env: { PATH: process.env.PATH ?? '', ...launch.env, SEC_EDIT_CONFIG_DIR: el.userData } });
+  const child = spawn(launch.command, launch.args, { env: { PATH: process.env.PATH ?? '', HOME: el.tmp, ...launch.env, SEC_EDIT_CONFIG_DIR: el.userData } });
   let err = '';
   child.stderr.on('data', (d) => (err += d));
   expect(await new Promise((res) => child.on('exit', res))).toBe(1);
@@ -233,4 +235,29 @@ test('Recent activity: Revert undoes an AI edit; with undo copies switched off a
   } finally {
     await client.close().catch(() => {});
   }
+});
+
+test('M10: a setup copied before (`<exe> <…>/dist/mcp/cli.mjs --stdio`) still starts the windowless server, not the app', async ({ el }) => {
+  const shared = path.join(el.tmp, 'Shared');
+  fs.mkdirSync(shared, { recursive: true });
+  fs.writeFileSync(path.join(shared, 'hello.md'), '# Hello');
+  const { page, app } = await el.launch([el.ws], { env: { SEC_EDIT_TEST_MCP_CONFIRM: 'allow', SEC_EDIT_TEST_MCP_FOLDER: shared } });
+  await openMcpSettings(page);
+  await page.locator('[data-testid="mcp-enable"]').click();
+  await page.locator('[data-testid="mcp-add-folder"]').click();
+  await expect(page.locator('[data-testid="mcp-folder"]')).toHaveCount(1);
+  const raw = TOKEN.exec(await clipboardText(app))![0];
+  const launch = (await status(page)).launch as { command: string; args: string[] };
+  // The old shape, without ELECTRON_RUN_AS_NODE (what a packaged build with the fuse off sees): electron <app> <cli.mjs> --stdio.
+  const appDir = launch.args[0];
+  const transport = new StdioClientTransport({ command: launch.command, args: [appDir, path.join(appDir, 'dist/mcp/cli.mjs'), '--stdio'], env: { PATH: process.env.PATH ?? '', HOME: el.tmp, DISPLAY: process.env.DISPLAY ?? ':99', ONE_MCP_TOKEN: raw, SEC_EDIT_CONFIG_DIR: el.userData }, stderr: 'pipe' });
+  const client = new Client({ name: 'old-setup-e2e', version: '1' });
+  await client.connect(transport);
+  try {
+    const folders = ((await client.callTool({ name: 'list_folders', arguments: {} })) as any).content[0].text as string;
+    expect(folders).toMatch(/^1 folder\nshared /);
+  } finally {
+    await client.close().catch(() => {});
+  }
+  expect(app.windows()).toHaveLength(1); // the running app got nothing (no second-instance hand-off, no tab)
 });

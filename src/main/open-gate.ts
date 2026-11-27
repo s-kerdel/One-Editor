@@ -7,6 +7,8 @@
 //  - the recent folders (recent.json in user data; only successful opens get in),
 //  - folders inside the open folder ("Open as project"),
 //  - the folder of a vouched FILE (a lone file is opened in its folder).
+// A path from the page is decided on its spelling first: only main's own paths go to the disk (a UNC path would
+// connect to its host and leak the user's NTLM hash), and the page's only when it is spelled inside the open folder.
 // No electron import: unit-tested with a fake file system.
 type PlatformPath = typeof import('node:path').posix;
 import { isInsideDir } from '../backend/pathsafe';
@@ -44,40 +46,68 @@ export class OpenGate {
     if (this.vouched.size > MAX_VOUCHED) this.vouched.delete(this.vouched.keys().next().value as string);
   }
 
-  /** Both spellings of a path: as given and without symlinks (the renderer sends back what resolvePath answered). */
-  private async forms(abs: string): Promise<string[]> {
+  /** Main saw exactly this path (as written, the platform's case rule): sync, no disk access. For a lookup that must
+   *  never touch a path main did not see itself (resolvePath on a UNC path: ServiceHooks.remotePathOk). */
+  seen(abs: unknown): boolean {
+    return this.pagePath(abs) && this.vouched.has(this.key(abs));
+  }
+
+  /**
+   * Comparison keys of a path MAIN saw (vouched, recent, the open folder): as seen and without symlinks. Only such
+   * paths go to the disk; a path from the page is compared by its spelling first (see allows / vouchedFile).
+   */
+  private async known(abs: string): Promise<string[]> {
     const real = await this.d.realpath(abs).catch(() => null);
     return real ? [...new Set([this.key(abs), this.key(real)])] : [this.key(abs)];
   }
 
-  /** This very file was seen by main (dialog, OS open, argv, drop) — not its folder, not a recent: what an outside file needs. */
+  /** A path string from the page: absolute, no NUL. */
+  private pagePath(abs: unknown): abs is string {
+    return typeof abs === 'string' && !!abs && !abs.includes('\0') && this.d.p.isAbsolute(abs);
+  }
+
+  /**
+   * This very file was seen by main (dialog, OS open, argv, drop) — not its folder, not a recent: what an outside file needs.
+   * Decided on the string: the page's path itself never reaches the disk (a `\\host\share` path would connect to that
+   * host and hand it the user's NTLM hash). Its real spelling (what resolvePath answered) matches a vouched file's.
+   */
   async vouchedFile(abs: unknown): Promise<boolean> {
-    if (typeof abs !== 'string' || !abs || abs.includes('\0') || !this.d.p.isAbsolute(abs)) return false;
-    const mine = await this.forms(this.d.p.resolve(abs));
-    for (const [k, v] of this.vouched) {
-      if (mine.includes(k)) return true;
-      if ((await this.forms(v)).some((f) => mine.includes(f))) return true;
-    }
+    if (!this.pagePath(abs)) return false;
+    const want = this.key(abs);
+    if (this.vouched.has(want)) return true;
+    for (const v of this.vouched.values()) if ((await this.known(v)).includes(want)) return true;
     return false;
   }
 
+  /**
+   * May the page open this folder? String first, like vouchedFile: main's own paths (and their real spellings) are
+   * compared without touching the page's path; that path goes to the disk only when it is spelled inside the open
+   * folder, and is then judged by where it really is. Anything else (a UNC path main never saw included) is refused
+   * without a disk access.
+   */
   async allows(abs: unknown): Promise<boolean> {
-    if (typeof abs !== 'string' || !abs || abs.includes('\0')) return false;
+    if (!this.pagePath(abs)) return false;
     const { p } = this.d;
-    const mine = await this.forms(p.resolve(abs));
-    const same = async (other: string) => (await this.forms(other)).some((f) => mine.includes(f));
-    for (const k of this.vouched.keys()) if (mine.includes(k)) return true; // the usual case: no further disk access
-    for (const [, v] of [...this.vouched].reverse().slice(0, 64)) {
-      if (await same(v)) return true;
+    const want = this.key(abs);
+    if (this.vouched.has(want)) return true; // the usual case: no disk access at all
+    const recents = (await this.d.recent().catch(() => [])).filter((r): r is string => typeof r === 'string' && !!r && p.isAbsolute(r));
+    if (recents.some((r) => this.key(r) === want)) return true;
+    for (const v of [...this.vouched.values()].reverse().slice(0, 64)) {
+      if ((await this.known(v)).includes(want)) return true;
       // A vouched file: its folder (never the parent of a vouched folder).
-      if ((await same(p.dirname(v))) && (await this.d.isFile(v).catch(() => false))) return true;
+      if ((await this.known(p.dirname(v))).includes(want) && (await this.d.isFile(v).catch(() => false))) return true;
     }
-    for (const r of await this.d.recent().catch(() => [])) if (typeof r === 'string' && (await same(r))) return true;
+    for (const r of recents) if ((await this.known(r)).includes(want)) return true;
     // Inside the open folder — judged on the real paths: a link in the folder pointing elsewhere is elsewhere.
     const root = this.d.root();
     if (root) {
-      const [realRoot, real] = await Promise.all([this.d.realpath(root).catch(() => null), this.d.realpath(p.resolve(abs)).catch(() => null)]);
-      if (realRoot && real && isInsideDir(real, realRoot, p, this.d.foldCase)) return true;
+      const realRoot = await this.d.realpath(root).catch(() => null);
+      const lexical = p.resolve(abs);
+      const spelledInside = [root, realRoot].some((dir) => !!dir && isInsideDir(lexical, dir, p, this.d.foldCase));
+      if (realRoot && spelledInside) {
+        const real = await this.d.realpath(lexical).catch(() => null);
+        if (real && isInsideDir(real, realRoot, p, this.d.foldCase)) return true;
+      }
     }
     return false;
   }

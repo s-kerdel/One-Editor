@@ -46,7 +46,35 @@ export interface ResponseLike {
   ok: boolean;
   status: number;
   headers?: { get(name: string): string | null };
+  /** The body as it arrives (fetch's Response): read with the size cap applied per chunk. Absent: text(). */
+  body?: { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }>; cancel(reason?: unknown): Promise<void> } } | null;
   text(): Promise<string>;
+}
+
+/** The body as text, never more than `max` bytes in memory: a reply without (or with a false) content-length stops at the cap. */
+export async function readCapped(res: ResponseLike, max: number): Promise<string> {
+  const tooLarge = () => new Error('Unexpected reply (too large)');
+  if (Number(res.headers?.get('content-length') ?? 0) > max) throw tooLarge();
+  if (!res.body?.getReader) {
+    const text = await res.text();
+    if (text.length > max) throw tooLarge();
+    return text;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value?.byteLength ?? 0;
+    if (bytes > max) {
+      await reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    if (value) text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
 }
 
 export interface UpdateCheckDeps {
@@ -187,9 +215,7 @@ export class UpdateCheckService {
       signal: AbortSignal.timeout(this.deps.timeoutMs ?? 15_000),
     });
     if (!res.ok) throw new UpdateCheckError('EIO', `The update service answered ${Number(res.status) || 0}`);
-    if (Number(res.headers?.get('content-length') ?? 0) > MAX_BODY) throw new Error('Unexpected reply (too large)');
-    const text = await res.text();
-    if (text.length > MAX_BODY) throw new Error('Unexpected reply (too large)');
+    const text = await readCapped(res, MAX_BODY);
     try {
       return JSON.parse(text);
     } catch {

@@ -118,3 +118,20 @@ test('auth needed: the error offers the integrated terminal with the command typ
     server.close();
   }
 });
+
+test('trust comes only from the native dialog (H1): "Not now" there keeps git off, a yes turns it on', async ({ el }) => {
+  isolateGit();
+  git(el.ws, 'init', '-q'); // not trusted: no trustRepo()
+  git(el.ws, 'add', '-A');
+  git(el.ws, 'commit', '-qm', 'initial');
+  const trust = (page: Page) => page.evaluate(() => (window as any).__secEdit.backend.git('trust'));
+  const no = await el.launch([el.ws], { env: { ...gitEnv(), SEC_EDIT_TEST_GIT_TRUST: 'deny' } });
+  expect(await trust(no.page)).toBe(false); // the page asked; main's dialog said no
+  expect(no.stdout.join('')).toContain('[sec-edit:git-trust]');
+  expect(no.stdout.join('')).toContain(`Trust “${path.basename(el.ws)}” for git?`);
+  expect(fs.existsSync(path.join(el.userData, 'git-trust.json')) ? fs.readFileSync(path.join(el.userData, 'git-trust.json'), 'utf8') : '').not.toContain(fs.realpathSync(el.ws));
+  await no.app.close();
+  const { page } = await el.launch([el.ws], { env: gitEnv() }); // tests default to yes
+  expect(await trust(page)).toBe(true);
+  await gitReady(page);
+});

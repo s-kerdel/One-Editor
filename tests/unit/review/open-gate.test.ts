@@ -8,7 +8,7 @@ import { OpenGate, type OpenGateDeps } from '../../../src/main/open-gate';
 import { VaultService } from '../../../src/main/vault';
 import { vaultKeyFolder, vaultKeyInScope, vaultRootScope } from '../../../src/shared/vault';
 
-function gate(o: { files?: string[]; links?: Record<string, string>; recent?: string[]; root?: string | null; p?: typeof path.posix; foldCase?: boolean } = {}) {
+function gate(o: { files?: string[]; links?: Record<string, string>; recent?: string[]; root?: string | null; p?: typeof path.posix; foldCase?: boolean; touched?: string[] } = {}) {
   const p = o.p ?? path.posix;
   const fold = (s: string) => (o.foldCase ? s.toLowerCase() : s);
   const links = Object.entries(o.links ?? {}).map(([k, v]) => [fold(k), v] as const);
@@ -17,10 +17,11 @@ function gate(o: { files?: string[]; links?: Record<string, string>; recent?: st
     foldCase: !!o.foldCase,
     // Fake file system: every path exists; a path at or below a link is rewritten to the link's target.
     realpath: async (abs) => {
+      o.touched?.push(abs);
       for (const [from, to] of links) if (fold(abs) === from || fold(abs).startsWith(from + p.sep)) return to + abs.slice(from.length);
       return abs;
     },
-    isFile: async (abs) => (o.files ?? []).map(fold).includes(fold(abs)),
+    isFile: async (abs) => (o.touched?.push(abs), (o.files ?? []).map(fold).includes(fold(abs))),
     recent: async () => o.recent ?? [],
     root: () => o.root ?? null,
   };
@@ -148,5 +149,56 @@ describe('OpenGate.vouchedFile: an outside file needs main to have seen that ver
     g.vouch('/home/me/l.md');
     expect(await g.vouchedFile('/data/real.md')).toBe(true);
     expect(await g.vouchedFile('/data/other.md')).toBe(false);
+  });
+});
+
+describe('OpenGate decides on the string first (L6: no disk access for a path main never saw)', () => {
+  it('a UNC path from the page is refused without touching it (no SMB connection, no NTLM hash)', async () => {
+    const touched: string[] = [];
+    const w = gate({ p: path.win32 as never, foldCase: true, root: 'C:\\notes', recent: ['C:\\work'], files: ['c:\\docs\\a.md'], touched });
+    w.vouch('C:\\docs\\a.md');
+    w.vouch('D:\\proj');
+    for (const bad of ['\\\\attacker\\s', '\\\\attacker\\s\\notes', '//attacker/s/x', '\\\\?\\UNC\\attacker\\s', '\\\\attacker@SSL\\s']) {
+      expect(await w.allows(bad), bad).toBe(false);
+      expect(await w.vouchedFile(bad), bad).toBe(false);
+    }
+    expect(touched.some((t) => /attacker/i.test(t))).toBe(false);
+    // Main's own paths still work, also by their real spelling.
+    expect(await w.allows('d:\\PROJ')).toBe(true);
+    expect(await w.allows('C:\\notes\\sub')).toBe(true);
+  });
+
+  it('a UNC path main saw itself (dialog, argv, a recent) still opens', async () => {
+    const w = gate({ p: path.win32 as never, foldCase: true, recent: ['\\\\nas\\team'] });
+    w.vouch('\\\\nas\\notes');
+    expect(await w.allows('\\\\nas\\notes')).toBe(true);
+    expect(await w.allows('\\\\NAS\\team\\')).toBe(true);
+    expect(await w.allows('\\\\nas\\other')).toBe(false);
+  });
+
+  it('the page path reaches realpath only when it is spelled inside the open folder', async () => {
+    const touched: string[] = [];
+    const g = gate({ root: '/home/me/notes', recent: ['/work/repo'], links: { '/home/me/notes/out': '/home/me/.ssh' }, touched });
+    g.vouch('/data/project');
+    for (const p of ['/home/me', '/etc', '/home/me/notes-private', '/mnt/share/x']) expect(await g.allows(p), p).toBe(false);
+    expect(touched.filter((t) => ['/home/me', '/etc', '/home/me/notes-private', '/mnt/share/x'].includes(t))).toEqual([]);
+    expect(await g.allows('/home/me/notes/sub')).toBe(true); // a candidate: judged by its real path
+    expect(touched).toContain('/home/me/notes/sub');
+    expect(await g.allows('/home/me/notes/out')).toBe(false); // spelled inside, really elsewhere
+    touched.length = 0;
+    expect(await g.vouchedFile('/home/me/secret.md')).toBe(false);
+    expect(touched).not.toContain('/home/me/secret.md');
+  });
+});
+
+describe('OpenGate.seen: sync, no disk (resolvePath may look up a UNC path only when main saw it)', () => {
+  it('exactly a vouched path, in any spelling of its text; never its neighbours or folder', () => {
+    const touched: string[] = [];
+    const w = gate({ p: path.win32 as never, foldCase: true, touched });
+    w.vouch('\\\\nas\\notes\\a.md');
+    expect(w.seen('\\\\NAS\\notes\\a.md')).toBe(true);
+    expect(w.seen('//nas/notes/a.md')).toBe(true);
+    for (const bad of ['\\\\nas\\notes', '\\\\nas\\notes\\b.md', '\\\\attacker\\s', 'relative', '', 7, null]) expect(w.seen(bad), String(bad)).toBe(false);
+    expect(touched).toEqual([]);
   });
 });

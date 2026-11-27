@@ -1,14 +1,14 @@
 // "Start web server" (main process): runs browser mode for the open folder as a separate child process
-// — dist/server/cli.mjs under ELECTRON_RUN_AS_NODE, the same server "Start web server.cmd" runs.
+// — dist/server/cli.mjs in a utilityProcess (web-server-child.ts), the same server "Start web server.cmd" runs.
 //  - One server at a time for the whole app, never started on its own; it serves the folder of the window that
 //    started it and stops on quit, when that window opens another folder or when no window has it open any more.
-//  - Handshake over the Node IPC channel (`--ipc`): port + token arrive as data, never parsed from a log line.
-//  - The child exits by itself when this process goes away (IPC disconnect): no orphan, even after a crash.
+//  - Handshake over the child's message port (`--ipc`): port + token arrive as data, never parsed from a log line.
+//  - The child exits by itself when this process goes away (Chromium ends a utility process without its parent).
 //  - The token never reaches a log; the child gets an allowlisted environment only.
 // No electron import: main.ts injects spawn / openExternal (unit-testable).
-import { spawn as nodeSpawn } from 'node:child_process';
+import path from 'node:path';
 import type os from 'node:os';
-import { STOPPED, WEB_SERVER_CHANNELS as CH, parseChildMessage, parseWebServerOptions, type WebServerReply, type WebServerStatus, type WebServerUrl } from '../shared/web-server';
+import { STOPPED, WEB_SERVER_CHANNELS as CH, parseChildMessage, parseWebServerOptions, type WebServerOptions, type WebServerReply, type WebServerStatus, type WebServerUrl } from '../shared/web-server';
 
 export interface ChildLike {
   readonly pid?: number;
@@ -29,6 +29,15 @@ export interface WebServerDeps {
   /** IPv4 addresses other devices can reach (LAN mode lists one link per address). */
   lanAddresses(): string[];
   openExternal(url: string): Promise<unknown> | unknown;
+  /** "Open": hands the browser the child's redirect file (its path only: no command line holds the launch code). */
+  openFile?(file: string): Promise<unknown> | unknown;
+  /** Where the child writes its redirect files (`<SEC_EDIT_CONFIG_DIR>/launch`): "Open" opens nothing else. */
+  launchDir?: string;
+  /**
+   * LAN access (other devices reach the folder): the user's OK in a native dialog the page cannot answer. Absent or
+   * false = not started. Local-only starts never ask.
+   */
+  confirmLan?(q: { root: string; port: number | null }): Promise<boolean>;
   onChange(s: WebServerStatus): void;
   startTimeoutMs?: number;
   stopTimeoutMs?: number;
@@ -75,19 +84,53 @@ export function lanAddresses(ifaces: ReturnType<typeof os.networkInterfaces>): s
 const KEEP_ENV =
   /^(PATH|PATHEXT|HOME|USER|USERNAME|LOGNAME|LANG|LANGUAGE|LC_\w+|TZ|TMPDIR|TEMP|TMP|XDG_\w+|SSH_AUTH_SOCK|GIT_\w+|SYSTEMROOT|SYSTEMDRIVE|WINDIR|COMSPEC|USERPROFILE|APPDATA|LOCALAPPDATA|PROGRAMDATA|PROGRAMFILES|PROGRAMFILES\(X86\)|PROGRAMW6432|COMMONPROGRAMFILES|COMMONPROGRAMFILES\(X86\)|HOMEDRIVE|HOMEPATH|USERDOMAIN|NUMBER_OF_PROCESSORS|PROCESSOR_ARCHITECTURE|OS|WSL_DISTRO_NAME|WSLENV|WSL_INTEROP|HTTPS?_PROXY|NO_PROXY|SEC_EDIT_RENDERER_DIR|SEC_EDIT_TRASH_DIR|SEC_EDIT_WATCH)$/i;
 
-/** Environment for the child: the allowlist + Node mode + the desktop app's settings folder. */
+/** Environment for the child: the allowlist + the desktop app's settings folder. */
 export function childEnv(env: NodeJS.ProcessEnv, configDir: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) if (v !== undefined && KEEP_ENV.test(k)) out[k] = v;
-  out.ELECTRON_RUN_AS_NODE = '1';
   // Same settings, recent folders and index cache as the desktop app (what "Start web server.cmd" uses too).
   out.SEC_EDIT_CONFIG_DIR = configDir;
   return out;
 }
 
-/** The real child: `<exe> cli.mjs <args>` in Node mode; stdout (which prints the URL + token) is discarded. */
-export function spawnCli(execPath: string, cli: string, args: string[], env: Record<string, string>): ChildLike {
-  return nodeSpawn(execPath, [cli, ...args], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], env, windowsHide: true });
+/** Electron's UtilityProcess, as far as the child needs it (structural: no electron import here). */
+export interface UtilityLike {
+  readonly pid?: number;
+  readonly stderr?: { on(ev: 'data', fn: (d: unknown) => void): unknown } | null;
+  postMessage(m: unknown): void;
+  kill(): boolean;
+  on(ev: 'spawn', fn: () => void): unknown;
+  on(ev: 'exit', fn: (code: number) => void): unknown;
+  on(ev: 'message', fn: (m: unknown) => void): unknown;
+}
+
+// POSIX: a utility process ended by a signal reports the signal's number as its code (cli.ts itself exits 0 or 1).
+const SIGNAL_CODES: Record<number, NodeJS.Signals> = { 2: 'SIGINT', 6: 'SIGABRT', 9: 'SIGKILL', 11: 'SIGSEGV', 15: 'SIGTERM' };
+
+/** A utilityProcess child as the service sees one (Node's ChildProcess shape). `win`: exit codes are only codes there. */
+export function childOfUtility(u: UtilityLike, win: boolean): ChildLike {
+  let alive = true;
+  u.on('exit', () => void (alive = false));
+  return {
+    get pid() {
+      return u.pid;
+    },
+    get connected() {
+      return alive;
+    },
+    stderr: u.stderr ?? null,
+    send(m) {
+      if (!alive) return false;
+      u.postMessage(m);
+      return true;
+    },
+    kill: () => u.kill(),
+    on(ev: string, fn: (...a: never[]) => void) {
+      if (ev === 'exit') u.on('exit', (code) => (fn as (c: number | null, s: NodeJS.Signals | null) => void)(...((!win && SIGNAL_CODES[code] ? [null, SIGNAL_CODES[code]] : [code, null]) as [number | null, NodeJS.Signals | null])));
+      else if (ev === 'message') u.on('message', fn as (m: unknown) => void);
+      return this;
+    },
+  } as ChildLike;
 }
 
 // Exact: folding case could keep serving a different folder on a case-sensitive disk (a needless stop is harmless).
@@ -126,16 +169,40 @@ export class WebServerService {
     if (this.child && !openRoots.some((r) => sameRoot(r, this.s.root))) void this.stop(notice);
   }
 
+  /** One server for the app: another window's folder is not silently swapped in. */
+  private busy(root: string | null): WebServerError | null {
+    if (this.confirming) return new WebServerError('EBUSY', 'A web server start is waiting for your answer');
+    if (!this.child && !this.stopping) return null;
+    const other = this.s.root && !sameRoot(root, this.s.root) ? this.s.root : null;
+    return new WebServerError('EBUSY', other ? `The web server is already serving ${other}. Stop it first` : 'A web server is already running. Stop it first');
+  }
+
+  /** The native LAN question is on screen: no second start meanwhile. */
+  private confirming = false;
+
   /** `root`: the calling window's folder (null: it has none); omitted = deps.getRoot(). */
   start(raw: unknown, root: string | null = this.deps.getRoot()): Promise<WebServerStatus> {
     const o = parseWebServerOptions(raw);
     if (!o) return Promise.reject(new WebServerError('EINVAL', 'Invalid web server options'));
-    if (this.child || this.stopping) {
-      // One server for the app: another window's folder is not silently swapped in.
-      const other = this.s.root && !sameRoot(root, this.s.root) ? this.s.root : null;
-      return Promise.reject(new WebServerError('EBUSY', other ? `The web server is already serving ${other}. Stop it first` : 'A web server is already running. Stop it first'));
-    }
+    const busy = this.busy(root);
+    if (busy) return Promise.reject(busy);
     if (!root) return Promise.reject(new WebServerError('NO_WORKSPACE', 'Open a folder first'));
+    if (o.access !== 'lan') return this.launch(o, root);
+    // Other devices could read and change this folder: main asks itself (a taken-over page could start it otherwise).
+    this.confirming = true;
+    const asked = Promise.resolve()
+      .then(() => this.deps.confirmLan?.({ root, port: o.port }) ?? false)
+      .then((ok) => ok === true, () => false)
+      .finally(() => (this.confirming = false));
+    return asked.then((ok) => {
+      if (!ok) throw new WebServerError('ECANCELED', 'Not started: sharing this folder on the network was not confirmed');
+      const again = this.busy(root);
+      if (again) throw again;
+      return this.launch(o, root);
+    });
+  }
+
+  private launch(o: WebServerOptions, root: string): Promise<WebServerStatus> {
     const args = [root, '--host', o.access === 'lan' ? '0.0.0.0' : '127.0.0.1', '--ipc'];
     if (o.port !== null) args.push('--port', String(o.port));
     const base = { ...STOPPED, root, access: o.access, port: o.port };
@@ -171,7 +238,7 @@ export class WebServerService {
         const m = parseChildMessage(raw);
         if (!m || this.child !== child) return;
         if (m.type === 'launch') {
-          this.launchWaiter?.(m.url);
+          this.launchWaiter?.('file' in m ? m.file : null);
           this.launchWaiter = null;
         } else if (m.type === 'error') {
           reported = redact(m.message);
@@ -255,30 +322,35 @@ export class WebServerService {
     } catch {}
   }
 
-  /** "Open in browser": only a link of the running server. The local one opens through a one-time launch
-   *  code from the child, so the browser's command line (visible to other processes) never holds the key. */
+  /**
+   * "Open in browser": only for a link of the running server, and never with its token. Every row (LAN ones too: this
+   * computer reaches the server on 127.0.0.1) opens the child's 0600 redirect file holding a one-time launch code, so
+   * no command line (visible to other processes and users) ever holds the key or the code. No answer = an error,
+   * never the token link instead.
+   */
   async open(url: unknown): Promise<void> {
     if (typeof url !== 'string' || this.s.state !== 'running' || !this.s.urls.some((u) => u.url === url)) throw new WebServerError('EACCES', 'Not a link of the running web server');
-    const local = this.s.urls[0];
-    const launch = url === local?.url ? await this.launchLink() : null;
-    await this.deps.openExternal(launch?.startsWith(`${local.origin}?launch=`) ? launch : url);
+    const file = await this.launchFile();
+    if (!file) throw new WebServerError('EIO', 'The web server did not hand over a link to open. Use Copy link instead');
+    await this.deps.openFile!(file);
   }
 
-  private launchWaiter: ((url: string) => void) | null = null;
-  /** A one-time link from the child, or null (it did not answer: an older child, or it is going away). */
-  private launchLink(): Promise<string | null> {
+  private launchWaiter: ((file: string | null) => void) | null = null;
+  /** The child's redirect file (in launchDir), or null (no answer, an error, or a path that is not its own). */
+  private launchFile(): Promise<string | null> {
     const child = this.child;
-    if (!child?.connected || !child.send) return Promise.resolve(null);
+    const dir = this.deps.launchDir;
+    if (!child?.connected || !child.send || !dir || !this.deps.openFile) return Promise.resolve(null);
     return new Promise((resolve) => {
-      const done = (u: string | null) => {
+      const done = (f: string | null) => {
         clearTimeout(timer);
         this.launchWaiter = null;
-        resolve(u);
+        resolve(f && path.resolve(path.dirname(f)) === path.resolve(dir) && /^open-[0-9a-f]{16}\.html$/.test(path.basename(f)) ? f : null);
       };
       const timer = setTimeout(() => done(null), 3000);
       this.launchWaiter = done;
       try {
-        if (!child.send!({ type: 'launch' })) done(null);
+        if (!child.send!({ type: 'launch', file: true })) done(null);
       } catch {
         done(null);
       }

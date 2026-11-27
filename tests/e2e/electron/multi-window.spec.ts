@@ -274,3 +274,34 @@ test('shared across windows: web server and MCP status, settings; each window se
   await expect(pa.locator('.cm-content')).toContainText('Welcome');
   expect(fs.existsSync(path.join(el.userData, 'mcp.json'))).toBe(true);
 });
+
+test('M4: a raw rpc:openWorkspace to another folder from page script leaves no old page alive; until it reloads, it is refused', async ({ el }) => {
+  const b = await folder(el.tmp, 'beta');
+  const c = await folder(el.tmp, 'gamma');
+  await fsp.mkdir(el.userData, { recursive: true });
+  await fsp.writeFile(path.join(el.userData, 'recent.json'), JSON.stringify([c]));
+  const { app, page } = await el.launch([el.ws]);
+  await app.evaluate((_e, p) => (globalThis as any).__secEditVouch(p), b);
+  await page.evaluate(() => void ((window as any).__mark = 1));
+  // Script of the old page: the switch itself, then a call right after it (no reload of its own).
+  const r = await page.evaluate(async (p) => {
+    const bridge = (window as any).secEditBridge;
+    const open = await bridge.invoke('openWorkspace', [p]);
+    const after = await bridge.invoke('listTree', []);
+    return { open: open.ok, after: after.ok ? 'ok' : after.error.code };
+  }, b);
+  expect(r).toEqual({ open: true, after: 'EACCES' }); // the old page reaches nothing of the new folder
+  // Main reloads it: a fresh page on the new folder, nothing of the old one left.
+  await expect.poll(() => rootOf(page), { timeout: 15000 }).toBe(b);
+  expect(await page.evaluate(() => (window as any).__mark)).toBeUndefined();
+  expect(await page.evaluate(() => (window as any).__secEdit.backend.listTree().then(() => 'ok', (e: { code?: string }) => e.code))).toBe('ok');
+  // The renderer's own switch (a recent folder) reloads once: no second reload from main.
+  await page.evaluate(() => void ((window as any).__mark = 2));
+  const loads: number[] = [];
+  page.on('load', () => loads.push(Date.now()));
+  await openRecent(page, 'gamma');
+  await expect.poll(() => rootOf(page), { timeout: 15000 }).toBe(c);
+  expect(await page.evaluate(() => (window as any).__mark)).toBeUndefined();
+  await page.waitForTimeout(3500); // past main's grace: it must not reload again
+  expect(loads).toHaveLength(1);
+});

@@ -13,10 +13,13 @@ class FakeChild extends EventEmitter {
   sent: unknown[] = [];
   kills: Array<string | undefined> = [];
   port = 4317;
+  launchAnswer: 'file' | 'none' | 'elsewhere' = 'file';
   send(m: unknown) {
     this.sent.push(m);
-    // Like cli.ts: a one-time launch link for "Open".
-    if ((m as { type?: string })?.type === 'launch') queueMicrotask(() => this.emit('message', { type: 'launch', url: `http://127.0.0.1:${this.port}/?launch=${'c'.repeat(32)}` }));
+    // Like cli.ts: "Open" asks for the redirect file holding a one-time launch link (an older ask: the link itself).
+    const ask = m as { type?: string; file?: boolean };
+    if (ask?.type === 'launch' && this.launchAnswer !== 'none')
+      queueMicrotask(() => this.emit('message', ask.file ? { type: 'launch', file: this.launchAnswer === 'elsewhere' ? `/tmp/open-${'c'.repeat(16)}.html` : `/cfg/launch/open-${'c'.repeat(16)}.html` } : { type: 'launch', url: `http://127.0.0.1:${this.port}/?launch=${'c'.repeat(32)}` }));
     return true;
   }
   kill(sig?: string) {
@@ -33,11 +36,13 @@ class FakeChild extends EventEmitter {
   }
 }
 
-function setup(o: { root?: string | null; lan?: string[] } = {}) {
+function setup(o: { root?: string | null; lan?: string[]; lanAnswer?: boolean | (() => Promise<boolean>) } = {}) {
   const children: FakeChild[] = [];
   const spawned: string[][] = [];
   const events: WebServerStatus[] = [];
   const opened: string[] = [];
+  const files: string[] = [];
+  const asked: Array<{ root: string; port: number | null }> = [];
   let root: string | null = o.root === undefined ? '/home/me/notes' : o.root;
   const svc = new WebServerService({
     getRoot: () => root,
@@ -49,11 +54,17 @@ function setup(o: { root?: string | null; lan?: string[] } = {}) {
     },
     lanAddresses: () => o.lan ?? ['192.168.1.20'],
     openExternal: (url) => void opened.push(url),
+    openFile: (f) => void files.push(f),
+    launchDir: '/cfg/launch',
+    confirmLan: async (q) => {
+      asked.push(q);
+      return typeof o.lanAnswer === 'function' ? o.lanAnswer() : (o.lanAnswer ?? true);
+    },
     onChange: (s) => events.push(s),
     startTimeoutMs: 1000,
     stopTimeoutMs: 500,
   });
-  return { svc, children, spawned, events, opened, setRoot: (r: string | null) => (root = r) };
+  return { svc, children, spawned, events, opened, files, asked, setRoot: (r: string | null) => (root = r) };
 }
 
 afterEach(() => vi.useRealTimers());
@@ -85,6 +96,10 @@ describe('options and handshake validation', () => {
     const launch = `http://127.0.0.1:4317/?launch=${'a'.repeat(32)}`;
     expect(parseChildMessage({ type: 'launch', url: launch })).toEqual({ type: 'launch', url: launch });
     for (const url of ['https://evil.example/?launch=' + 'a'.repeat(32), `${launch}&x=1`, 'http://127.0.0.1:4317/?token=' + 'a'.repeat(32)]) expect(parseChildMessage({ type: 'launch', url })).toBeNull();
+    const file = 'C:\\Users\\me\\AppData\\Roaming\\sec-edit\\launch\\open-0123456789abcdef.html';
+    expect(parseChildMessage({ type: 'launch', file })).toEqual({ type: 'launch', file });
+    for (const bad of ['/cfg/launch/open-x.html', '/cfg/launch/open-0123456789abcdef.html\0', 'open-0123456789abcdef.htm', 42]) expect(parseChildMessage({ type: 'launch', file: bad })).toBeNull();
+    expect(parseChildMessage({ type: 'launch', error: 'EACCES' })).toEqual({ type: 'launch', error: 'EACCES' });
     expect(parseChildMessage({ type: 'error' })).toBeNull();
     expect(parseChildMessage('ready')).toBeNull();
     expect(parseChildMessage(null)).toBeNull();
@@ -115,7 +130,7 @@ describe('helpers', () => {
 
   it('gives the child an allowlisted environment', () => {
     const env = childEnv({ PATH: '/usr/bin', HOME: '/home/me', LANG: 'en_US.UTF-8', GIT_CEILING_DIRECTORIES: '/x', NODE_OPTIONS: '--require evil.js', ELECTRON_ENABLE_LOGGING: '1', AWS_SECRET_ACCESS_KEY: 'k', GITHUB_TOKEN: 't', SystemRoot: 'C:\\Windows', Path: 'C:\\bin' }, '/cfg');
-    expect(env).toEqual({ PATH: '/usr/bin', HOME: '/home/me', LANG: 'en_US.UTF-8', GIT_CEILING_DIRECTORIES: '/x', SystemRoot: 'C:\\Windows', Path: 'C:\\bin', ELECTRON_RUN_AS_NODE: '1', SEC_EDIT_CONFIG_DIR: '/cfg' });
+    expect(env).toEqual({ PATH: '/usr/bin', HOME: '/home/me', LANG: 'en_US.UTF-8', GIT_CEILING_DIRECTORIES: '/x', SystemRoot: 'C:\\Windows', Path: 'C:\\bin', SEC_EDIT_CONFIG_DIR: '/cfg' });
   });
 
   it('never shows a token from the child’s stderr', () => {
@@ -153,6 +168,8 @@ describe('WebServerService', () => {
   it('LAN: binds every interface and lists one link per address', async () => {
     const t = setup({ lan: ['10.0.0.5', '192.168.1.20'] });
     const p = t.svc.start({ port: 5000, access: 'lan' });
+    await vi.waitFor(() => expect(t.spawned).toHaveLength(1)); // after the native question
+    expect(t.asked).toEqual([{ root: '/home/me/notes', port: 5000 }]);
     expect(t.spawned[0]).toEqual(['/home/me/notes', '--host', '0.0.0.0', '--ipc', '--port', '5000']);
     t.children[0].ready(5000);
     expect((await p).urls.map((u) => u.origin)).toEqual(['http://127.0.0.1:5000/', 'http://10.0.0.5:5000/', 'http://192.168.1.20:5000/']);
@@ -314,9 +331,57 @@ describe('WebServerService', () => {
     const s = await p;
     await t.svc.open(s.urls[0].url);
     for (const bad of ['https://evil.example/', 'file:///etc/passwd', `http://127.0.0.1:4317/?token=${TOKEN}&x=1`, 42]) await expect(t.svc.open(bad)).rejects.toMatchObject({ code: 'EACCES' });
-    // The browser gets a one-time launch link from the child, never the token on its command line.
-    expect(t.opened).toEqual([`http://127.0.0.1:4317/?launch=${'c'.repeat(32)}`]);
-    expect(t.children[0].sent).toContainEqual({ type: 'launch' });
+    // The browser gets the child's 0600 redirect file (its path), never the token or the code on a command line.
+    expect(t.files).toEqual([`/cfg/launch/open-${'c'.repeat(16)}.html`]);
+    expect(t.opened).toEqual([]);
+    expect(t.children[0].sent).toContainEqual({ type: 'launch', file: true });
+  });
+
+  it('L1: a LAN row opens the redirect file too; no answer, an error or a file elsewhere is an error, never the token link', async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    const p = t.svc.start({ port: null, access: 'lan' });
+    await vi.waitFor(() => expect(t.children).toHaveLength(1));
+    t.children[0].ready();
+    const s = await p;
+    await t.svc.open(s.urls[1].url); // the LAN row
+    expect(t.files).toEqual([`/cfg/launch/open-${'c'.repeat(16)}.html`]);
+    t.children[0].launchAnswer = 'elsewhere';
+    await expect(t.svc.open(s.urls[0].url)).rejects.toMatchObject({ code: 'EIO' });
+    t.children[0].launchAnswer = 'none';
+    const late = t.svc.open(s.urls[0].url).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(3100);
+    expect(await late).toMatchObject({ code: 'EIO', message: expect.stringContaining('Copy link') });
+    t.children[0].launchAnswer = 'file';
+    t.children[0].emit('message', { type: 'launch', error: 'EACCES' }); // nobody waiting: ignored
+    expect(t.files).toHaveLength(1);
+    expect(t.opened).toEqual([]); // no token link, ever
+  });
+
+  it('LAN needs the native OK: no, a failing dialog or none at all start nothing; local never asks', async () => {
+    const no = setup({ lanAnswer: false });
+    await expect(no.svc.start({ port: null, access: 'lan' })).rejects.toMatchObject({ code: 'ECANCELED' });
+    expect(no.spawned).toEqual([]);
+    expect(no.svc.status().state).toBe('stopped');
+    const broken = setup({ lanAnswer: () => Promise.reject(new Error('no window')) });
+    await expect(broken.svc.start({ port: null, access: 'lan' })).rejects.toMatchObject({ code: 'ECANCELED' });
+    const local = setup({ lanAnswer: false });
+    const p = local.svc.start({ port: null, access: 'local' });
+    local.children[0].ready();
+    expect((await p).state).toBe('running');
+    expect(local.asked).toEqual([]);
+    // While the question is open, nothing else starts.
+    let answer!: (ok: boolean) => void;
+    const slow = setup({ lanAnswer: () => new Promise<boolean>((r) => (answer = r)) });
+    const first = slow.svc.start({ port: null, access: 'lan' });
+    await vi.waitFor(() => expect(slow.asked).toHaveLength(1));
+    await expect(slow.svc.start({ port: null, access: 'local' })).rejects.toMatchObject({ code: 'EBUSY' });
+    answer(true);
+    await vi.waitFor(() => expect(slow.children).toHaveLength(1));
+    slow.children[0].ready();
+    expect((await first).access).toBe('lan');
+    const plain = new WebServerService({ getRoot: () => '/r', spawn: () => new FakeChild() as unknown as ChildLike, lanAddresses: () => [], openExternal: () => {}, onChange: () => {} });
+    await expect(plain.start({ port: null, access: 'lan' })).rejects.toMatchObject({ code: 'ECANCELED' }); // no dialog = no
   });
 });
 

@@ -33,7 +33,7 @@ import {
   type ShippedDeps,
   type UpdateStatus,
 } from '../../../src/shared/update-check';
-import { UpdateCheckService, parseShipped, registerUpdateCheckIpc, type FetchInit, type UpdateCheckDeps } from '../../../src/main/update-check';
+import { UpdateCheckService, parseShipped, readCapped, registerUpdateCheckIpc, type FetchInit, type UpdateCheckDeps } from '../../../src/main/update-check';
 import { updateCheckBridge } from '../../../src/main/update-check-bridge';
 // @ts-expect-error plain .mjs build script
 import { shippedDeps } from '../../../scripts/shipped-deps.mjs';
@@ -684,5 +684,53 @@ describe('IPC + preload bridge', () => {
     off();
     expect(got).toEqual([{ lastChecked: 1 }]);
     expect(w.listeners).toHaveLength(0);
+  });
+});
+
+describe('readCapped: the size cap applies while the body arrives (no content-length needed)', () => {
+  const streamed = (chunks: number, size: number, length: string | null = null) => {
+    const st = { reads: 0, cancelled: false };
+    const res = {
+      ok: true,
+      status: 200,
+      headers: { get: (n: string) => (n === 'content-length' ? length : null) },
+      body: new ReadableStream<Uint8Array>({
+        pull(c) {
+          if (st.reads++ >= chunks) return c.close();
+          c.enqueue(new Uint8Array(size).fill(0x61));
+        },
+        cancel() {
+          st.cancelled = true;
+        },
+      }),
+      text: async () => {
+        throw new Error('text() must not be used when there is a body stream');
+      },
+    };
+    return { res, st };
+  };
+
+  it('stops reading at the cap and cancels the stream', async () => {
+    const { res, st } = streamed(1000, 64 * 1024);
+    await expect(readCapped(res, 256 * 1024)).rejects.toThrow('Unexpected reply (too large)');
+    expect(st.cancelled).toBe(true);
+    expect(st.reads).toBeLessThan(10); // ~4 chunks, not the 64 MB on offer
+  });
+
+  it('a body within the cap is read whole (UTF-8 split across chunks too)', async () => {
+    expect(await readCapped(streamed(3, 10).res, 100)).toBe('a'.repeat(30));
+    const bytes = new TextEncoder().encode('{"x":"é€"}');
+    let i = 0;
+    const res = { ok: true, status: 200, body: new ReadableStream<Uint8Array>({ pull: (c) => (i < bytes.length ? c.enqueue(bytes.slice(i, ++i)) : c.close()) }), text: async () => '' };
+    expect(JSON.parse(await readCapped(res, 100))).toEqual({ x: 'é€' });
+  });
+
+  it('a too-large content-length is refused before reading; no stream: text() with the same cap', async () => {
+    const { res, st } = streamed(1, 1, String(10 * 1024 * 1024));
+    await expect(readCapped(res, 1024)).rejects.toThrow('too large');
+    expect(res.body.locked).toBe(false); // never read
+    expect(st.cancelled).toBe(false);
+    await expect(readCapped({ ok: true, status: 200, text: async () => 'x'.repeat(11) }, 10)).rejects.toThrow('too large');
+    expect(await readCapped({ ok: true, status: 200, text: async () => 'ok' }, 10)).toBe('ok');
   });
 });

@@ -134,3 +134,25 @@ test('closing with unsaved changes (autosave off) asks first', async ({ el }) =>
   await closed;
   expect(await fsp.readFile(path.join(el.ws, 'README.md'), 'utf8')).toContain('unsaved') // trailing space trimmed on save;
 });
+
+test('a renderer that keeps crashing: 3 reloads, then a start-screen window without the session (L8)', async ({ el }) => {
+  const { app } = await el.launch([el.ws]);
+  const state = () =>
+    app.evaluate(async ({ BrowserWindow }) =>
+      Promise.all(
+        BrowserWindow.getAllWindows().map(async (w) => ({
+          id: w.id,
+          crashed: w.webContents.isCrashed(),
+          ready: w.webContents.isCrashed() || w.webContents.isLoading() ? null : await w.webContents.executeJavaScript('document.documentElement.dataset.ready === "true" ? (window.__secEdit?.workspace.value?.root ?? "") : null').catch(() => null),
+        })),
+      ),
+    );
+  const first = (await state())[0];
+  expect(first.ready).toBe(el.ws);
+  for (let i = 1; i <= 4; i++) {
+    await app.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)!.webContents.forcefullyCrashRenderer(), first.id);
+    if (i < 4) await expect.poll(async () => (await state()).find((w) => w.id === first.id)?.ready, { timeout: 15000 }).toBe(el.ws); // reloaded, session back
+  }
+  // The 4th crash within a minute: the crashing window is gone, a start-screen window (no folder) is there instead.
+  await expect.poll(async () => (await state()).map((w) => ({ same: w.id === first.id, ready: w.ready })), { timeout: 15000 }).toEqual([{ same: false, ready: '' }]);
+});

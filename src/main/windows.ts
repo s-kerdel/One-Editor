@@ -197,3 +197,20 @@ export function cascadeBounds(prev: Rect, workArea: Rect, step = 32): Rect {
   const fits = x >= workArea.x && y >= workArea.y && x + width <= workArea.x + workArea.width && y + height <= workArea.y + workArea.height;
   return fits ? { x, y, width, height } : { x: workArea.x, y: workArea.y, width, height };
 }
+
+/**
+ * A window's renderer crash reloads: true while fewer than `max` crashes fell in the last `windowMs`. A crash that
+ * comes back after every reload (a file the session restores, a page that runs out of memory) must not loop forever.
+ */
+export function crashReloads(o: { max?: number; windowMs?: number; now?: () => number } = {}): () => boolean {
+  const max = o.max ?? 3;
+  const windowMs = o.windowMs ?? 60_000;
+  const now = o.now ?? Date.now;
+  const at: number[] = [];
+  return () => {
+    const t = now();
+    while (at.length && t - at[0] >= windowMs) at.shift();
+    at.push(t);
+    return at.length <= max;
+  };
+}

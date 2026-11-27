@@ -92,7 +92,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 - **One main process, many windows** (`src/main/main.ts`); browser mode stays one window. Main owns which window a path goes to.
 - **Registry** (`WindowRegistry`, `src/main/windows.ts`, no electron import): by id (= `webContents.id`), by folder (`byRoot`, `samePath` with the backend's case rule), by focus (`noteFocus` / `lastFocused`); `roots()` = open folders, each once.
 - **Same folder never twice:** the open-elsewhere check (`windowWith`) and launch routing compare with `folderMatch()` (`src/main/windows.ts`): same spelling under the window's case rule, or the same real path (each window caches its real root). An open in flight counts too: a window's `claim` (launch open, `app:openFolderWindow` → `'here'`, `rpc:openWorkspace`) and prepared-but-unregistered windows (`pending`) are checked inside the same `serial()` queue as routing. A `'here'` claim is `asked` (the renderer may still cancel on "Save changes?", it expires after `CLAIM_MS` = 30 s): in-app requests see it, launch routing does not (a launch then opens its own window and the late `rpc:openWorkspace` gets `EBUSY`).
-- **Per window** (`WindowCtx` in `main.ts`, built by `prepareWindow()`): `BrowserWindow`, `WindowBackend` (its folder), `OpenGate`, `ZenFullScreen`, `VaultScope`, close flow (`closing` / `closeApproved`), `indexToken`, `wsKey`, frame.
+- **Per window** (`WindowCtx` in `main.ts`, built by `prepareWindow()`): `BrowserWindow`, `WindowBackend` (its folder), `OpenGate`, `ZenFullScreen`, `VaultScope`, close flow (`closing` / `closeApproved`), `staleRealm` (after an in-place switch), `indexToken`, `wsKey`, frame.
 - **Every `ipcMain` handler finds its window by sender:** `trustedCtx(e)` = `registry.get(e.sender.id)`; null = refused. Terminals are owned by `webContents.id` (`getWorkspaceRoot(owner)`, `setWorkspace(root, owner)`, `killOwner` on close).
 - **App level, one each:** `appState` (a `BackendService` without a folder: settings, recent folders), MCP, web server, vault store, update check.
   - Their `onChange` → `broadcast()` to every window. Theme / background colour go to every window (`applyTheme`).
@@ -124,8 +124,34 @@ grep -n "keyword" docs/llm/09-reference*.md
 ### Per-window secrets (preload argv)
 
 - **`--sec-edit-ws-key=<hex>`** → `bridge.wsKey`. `fileUrl()` builds `app://sec-edit/__ws/<key>/<rel>`; main serves `<rel>` from the folder of the window with that key (`routeAppUrl` → `{ kind: 'workspace', key, rel }`). No key segment or unknown key = 404.
+  - `workspaceFile()`: checked by `backend.real()`, then opened ONCE (non-blocking): type check, size and bytes come from that handle, and the handle's dev/ino must match the checked path (L7). Content-Type by extension (`workspaceMediaType`, `protocol.ts`), anything else `application/octet-stream`. No Range support (as before).
 - **`--sec-edit-index-token=<hex>`** → header `x-sec-edit-index` on `app://sec-edit/__index/*`: picks the window whose folder its search workers index. Unknown = 403.
 - Both: 16 random bytes per window (`prepareWindow`), never shared between windows.
+
+### In-place folder switch: a fresh page (M4, main side)
+
+- `rpc:openWorkspace` from one folder to ANOTHER (not a window's first folder, not the same one) marks the window `staleRealm`: `trustedCtx` refuses every IPC of that page (`EACCES` "Untrusted sender") until a new page has loaded (`did-navigate`).
+- The renderer reloads itself right after the open (`doc-save.ts` `pageReload`); a page that skipped it (script calling the RPC) is reloaded by main after `STALE_RELOAD_MS` (1.5 s). While a navigation is under way main only waits: never a second reload.
+
+### Crash reloads (L8)
+
+- A crashed renderer reloads (300 ms later) at most 3 times in 60 s (`crashReloads()`, `windows.ts`). The 4th crash: a start-screen window opens (`createWindow({ folder: null })`, nothing restored) and the crashing one is destroyed (new one first: the last window closing would quit on Windows / Linux).
+
+### Native questions main asks itself
+
+- **Git trust** (`ServiceHooks.confirmTrust`, per window, `confirmTrust()` in `main.ts`): `git('trust')` passes only on "Trust" in a native box on that window. Tests: `SEC_EDIT_TEST_GIT_TRUST` = `allow` (default) | `deny`, each box logged as `[sec-edit:git-trust]`.
+- **Web server on the network** (`WebServerDeps.confirmLan`): a LAN start asks natively on the asking window (`webServerAsker`); local starts never ask. Tests: `SEC_EDIT_TEST_WEBSERVER_LAN` = `allow` (default) | `deny`, logged as `[sec-edit:webserver-confirm]`.
+- `ServiceHooks.remotePathOk` = the window's `OpenGate.seen()` (sync string check of vouched paths): resolvePath looks up a UNC / device path only when main saw it itself.
+
+### Windowless launches (M10: RunAsNode fuse off)
+
+- `src/main/launch-mode.ts` (pure) decides at the very top of `main.ts`, after `env-boot`, before the profile override, the thread pool, the single-instance lock and any window:
+  - `One --mcp-stdio [--folder <name>] [--read-only]`: the MCP server (`dist/mcp/cli.mjs`) in this process (MCP clients; `mcpLaunch` in `main/mcp.ts`, Linux adds `--ozone-platform=headless`: no display needed);
+  - `One --serve [folder…] [--port N] [--host H] [--open]`: browser mode (`dist/server/cli.mjs`; `Start web server.cmd`, `start-web.sh`);
+  - an older setup (`One <…>/app.asar.unpacked/dist/mcp/cli.mjs --stdio`, or the server's cli.mjs) gets the same server: only our two fixed programs ever run, never a script the command line names.
+- `src/main/headless.ts` `runHeadless`: no Dock icon, no GPU process (`disable-gpu`, `in-process-gpu`), Chromium's profile files in `<config>/headless-profile` (never One's own Local State), argv rewritten to `node cli.mjs …`, then `import()` of the program. stdout stays the MCP server's (its `stdout-guard`).
+- "Start web server" runs `dist/server/cli.mjs` in a `utilityProcess` (`web-server-child.cjs`: Electron's parent port stands in for Node's IPC channel; `childOfUtility()` adapts it to `ChildLike`). Same handshake, allowlisted env (no `ELECTRON_RUN_AS_NODE`), dies with main.
+- Packaged builds refuse `--remote-debugging-port` / `--remote-debugging-pipe` (`remoteDebuggingRefused`) unless `dist/main/test-package.txt` exists (`scripts/package.mjs --out <dir> --test-package`, for `packaged.spec.ts` only; `SEC_EDIT_PACKAGED_DIR` points the spec at it).
 
 ### Close, quit, relaunch
 
