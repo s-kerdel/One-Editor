@@ -17,7 +17,6 @@ import crypto from 'node:crypto';
 import { RPC_METHODS, type Settings } from '../shared/api';
 import { BackendService, readJson, writeJson, type ServiceHooks } from '../backend/service';
 import { BackendFailure } from '../backend/errors';
-import { isInsideDir } from '../backend/pathsafe';
 import { isBridgeRoot } from '../backend/readpool';
 import { registerProcessSource } from '../backend/processes';
 import { electronProcessSource } from './process-rows';
@@ -40,7 +39,7 @@ import os from 'node:os';
 import { ZenFullScreen } from './zen-fullscreen';
 import { createRelaunch, frameOf, frameWindowOptions, initialOverlay, isDarkColor, parseOverlay, rememberOverlay, type TitleBarCache, type WindowFrame } from './frame';
 import { createInProcessBackend, type WindowBackend } from './window-backend';
-import { WindowRegistry, cascadeBounds, planLaunch, type LaunchPath, type LaunchStep } from './windows';
+import { WindowRegistry, cascadeBounds, folderMatch, planLaunch, type LaunchPath, type LaunchStep } from './windows';
 
 const tMainStart = performance.now(); // ms since process start (Node's timeOrigin)
 const isTest = !!process.env.SEC_EDIT_TEST;
@@ -72,6 +71,8 @@ const DEV_URL = !app.isPackaged ? process.env.VITE_DEV_SERVER_URL || undefined :
 const BG = { shelf: { dark: '#131519', light: '#f0f0ed' }, classic: { dark: '#1b1d22', light: '#ffffff' } };
 const windowBg = (s: Settings) => BG[s.sidebarStyle === 'classic' ? 'classic' : 'shelf'][nativeTheme.shouldUseDarkColors ? 'dark' : 'light'];
 const FOLDER_REFUSED = 'This folder was not chosen in the app: use “Open folder”, drop it on the window, or pick a recent one';
+/** How long an empty window's 'here' counts its folder as taken when its own open (rpc:openWorkspace) never follows. */
+const CLAIM_MS = 30_000;
 
 // Single instance: a second launch hands its paths to the running app (feels instant).
 // Tests run many instances in parallel; they opt back in with SEC_EDIT_SINGLE_INSTANCE=1.
@@ -79,10 +80,6 @@ const wantLock = !isTest || !!process.env.SEC_EDIT_SINGLE_INSTANCE;
 const gotLock = !wantLock || app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
 else main();
-
-function isInside(child: string, parent: string) {
-  return isInsideDir(child, parent, path, process.platform !== 'linux');
-}
 
 /** argv → existing absolute paths (skips exe, Chromium/Playwright flags and, unpackaged, the app dir). */
 function pathsFromArgv(argv: string[], cwd = process.cwd()): string[] {
@@ -126,8 +123,15 @@ interface WindowCtx {
   frame: WindowFrame;
   /** Main's own open of this window's folder: the renderer's first RPC waits for it (bootstrap sees the folder). */
   initialOpen: Promise<void>;
-  /** A folder main is opening here: routing counts it as this window's before the open has settled. */
-  opening: string | null;
+  /**
+   * A folder being opened here (main's launch open; the renderer's own after 'here', and while its rpc open runs):
+   * it counts as this window's until the open has settled, so a second request for it elsewhere finds this window.
+   * `real` = its real path once known. Set and checked inside serial() (or before it runs: the first launch).
+   */
+  claim: { folder: string; real: string | null } | null;
+  /** Real path of the open folder (a link's / mapped drive's target) and the backend root it belongs to (settleRoot()). */
+  realRoot: string | null;
+  realFor: string | null;
   /** The open folder (or the one being opened) and its case rule (undefined = the platform's). */
   readonly root: string | null;
   readonly foldsCase: boolean | undefined;
@@ -201,8 +205,48 @@ function main() {
   function closeAll() {
     for (const c of registry.all()) if (alive(c)) c.win.close();
   }
-  /** Another window that has this folder open (one window per folder). */
-  const otherWindowWith = (me: WindowCtx | null, abs: string) => registry.all().find((c) => c !== me && c.root !== null && registry.samePath(c.root, abs, c.foldsCase));
+  const realOf = (abs: string) => fsp.realpath(abs).catch(() => null);
+  /** Prepared windows not shown yet (their folder is already opening). */
+  const pending = new Set<WindowCtx>();
+  const contexts = (): WindowCtx[] => [...registry.all(), ...pending];
+  const isLive = (c: WindowCtx): c is Live => !!c.win && registry.get(c.id) === c;
+  /** Folder comparisons that see through links and mapped drives: every window's known real paths + `known`. */
+  function matcher(known = new Map<string, string | null>()) {
+    for (const c of contexts()) {
+      if (c.claim && !known.has(c.claim.folder)) known.set(c.claim.folder, c.claim.real);
+      const r = c.backend.root;
+      if (r !== null && r === c.realFor && !known.has(r)) known.set(r, c.realRoot);
+    }
+    return folderMatch({ p: path, foldCase: process.platform !== 'linux', real: (x) => known.get(x) });
+  }
+  /** Another window that has this folder open, or is opening it (one window per folder). Inside serial(). */
+  function windowWith(me: WindowCtx | null, abs: string, real: string | null): WindowCtx | undefined {
+    const m = matcher(new Map([[abs, real]]));
+    const has = (c: WindowCtx, folder: string | null | undefined, fold?: boolean) => !!folder && m.samePath(folder, abs, fold);
+    return contexts().find((c) => c !== me && (has(c, c.claim?.folder) || has(c, c.backend.root, c.backend.foldsCase)));
+  }
+  /** `c` is opening `folder` (WindowCtx.claim). Returns the release: a no-op once a newer claim replaced this one. */
+  function claim(c: WindowCtx, folder: string, real: string | null): () => void {
+    const mine = { folder, real };
+    c.claim = mine;
+    return () => void (c.claim === mine && (c.claim = null));
+  }
+  /** After an open: the real path of what the window has open now (`hint`: a real path already known, no second lookup). */
+  async function settleRoot(c: WindowCtx, hint?: { folder: string; real: string | null }) {
+    const root = c.backend.root;
+    if (root === c.realFor) return;
+    const real = root === null ? null : hint && root === path.resolve(hint.folder) ? hint.real : await realOf(root);
+    if (c.backend.root !== root) return; // opened again meanwhile: that open settles it
+    c.realFor = root;
+    c.realRoot = root === null ? null : (real ?? root); // no real path (gone, refused): its spelling
+  }
+  /** A prepared window that will not show (it failed, or the launch changed its plan): nothing of it stays behind. */
+  function discard(c: WindowCtx) {
+    pending.delete(c);
+    c.claim = null;
+    if (c.win && !c.win.isDestroyed()) c.win.destroy(); // already a window: 'closed' cleans up the rest
+    else void c.backend.dispose();
+  }
 
   if (isTest) (globalThis as any).__secEditVouch = (abs: string) => registry.all().forEach((c) => c.gate.vouch(abs)); // E2E stands in for the folder dialog
 
@@ -395,15 +439,18 @@ function main() {
     return paths.flatMap((abs, i): LaunchPath[] => (st[i] ? [{ abs, kind: st[i]!.isDirectory() ? 'dir' : 'file' }] : []));
   }
 
-  function plan(paths: LaunchPath[], recents: string[], firstLaunch: boolean): LaunchStep[] {
+  /** `reals`: the launched paths' real paths (second launches; the first launch has no window to compare with). */
+  function plan(paths: LaunchPath[], recents: string[], firstLaunch: boolean, reals = new Map<string, string | null>()): LaunchStep[] {
+    const m = matcher(reals);
     return planLaunch({
       paths,
-      windows: registry.all().map((c) => ({ id: c.id, root: c.root })),
+      // Each window with its own case rule; the match sees links and mapped drives (the same as windowWith).
+      windows: registry.all().map((c) => ({ id: c.id, root: c.root, foldsCase: c.foldsCase })),
       lastFocusedId: registry.lastFocused()?.id ?? null,
       recents,
       firstLaunch,
-      isInside,
-      samePath: (a, b) => registry.samePath(a, b),
+      isInside: m.isInside,
+      samePath: m.samePath,
       exists: (d) => fs.existsSync(d),
       dirname: (x) => path.dirname(x),
     });
@@ -427,11 +474,12 @@ function main() {
 
   /** Inside serial() only. Executes the steps in order: the last one ends up in front. */
   async function route(raw: string[], firstLaunch: boolean): Promise<void> {
-    const [paths, recents] = await Promise.all([classify(raw), appState.recentWorkspaces()]);
-    const steps = plan(paths, recents, firstLaunch);
+    const [paths, recents, real] = await Promise.all([classify(raw), appState.recentWorkspaces(), Promise.all(raw.map(realOf))]);
+    const reals = new Map(raw.map((x, i) => [x, real[i]] as const));
+    const steps = plan(paths, recents, firstLaunch, reals);
     for (const [i, s] of steps.entries()) {
       if (s.kind === 'new-window') {
-        const c = await createWindow({ folder: s.folder, files: s.files }, registry.lastFocused() ?? null);
+        const c = await createWindow({ folder: s.folder, files: s.files, real: s.folder === null ? null : reals.get(s.folder) }, registry.lastFocused() ?? null);
         // A new window takes the focus when it shows: wait for that before the next step.
         if (i < steps.length - 1) await shownOrLater(c);
         continue;
@@ -457,10 +505,15 @@ function main() {
     return serial(() => createWindow({ folder: null, files: [] }, from ?? registry.lastFocused() ?? null));
   }
 
-  async function createWindow(o: { folder: string | null; files: string[] }, from: Live | null): Promise<Live> {
+  async function createWindow(o: { folder: string | null; files: string[]; real?: string | null }, from: Live | null): Promise<Live> {
     const ctx = prepareWindow(o);
-    await app.whenReady();
-    return showWindow(ctx, from);
+    try {
+      await app.whenReady();
+      return await showWindow(ctx, from);
+    } catch (err) {
+      discard(ctx);
+      throw err;
+    }
   }
 
   /** The dialogs and OS hooks of one window's backend: parented to that window. */
@@ -500,8 +553,9 @@ function main() {
     };
   }
 
-  /** Everything of a window that needs no Chromium: its backend starts opening the folder at once. */
-  function prepareWindow(o: { folder: string | null; files: string[]; first?: boolean }): WindowCtx {
+  /** Everything of a window that needs no Chromium: its backend starts opening the folder at once. `real`: the folder's
+   *  real path when the caller knows it (else looked up next to the open, never in its way). */
+  function prepareWindow(o: { folder: string | null; files: string[]; first?: boolean; real?: string | null }): WindowCtx {
     let ctx!: WindowCtx;
     const service = new BackendService(userData, windowHooks(() => ctx));
     // Test only, reaching past the seam: the startup guard reads the first window's workspace (fullWalks, host).
@@ -531,33 +585,40 @@ function main() {
       wsKey: crypto.randomBytes(16).toString('hex'),
       frame: 'native',
       initialOpen: Promise.resolve(),
-      opening: o.folder,
+      claim: null,
+      realRoot: null,
+      realFor: null,
       get root() {
-        return ctx.opening ?? backend.root;
+        return ctx.claim?.folder ?? backend.root;
       },
       get foldsCase() {
-        return ctx.opening === null && backend.root !== null ? backend.foldsCase : undefined;
+        return ctx.claim === null && backend.root !== null ? backend.foldsCase : undefined;
       },
       closing: 'idle',
       closeApproved: false,
       queueSave: () => {},
       shown: Promise.resolve(),
     };
+    pending.add(ctx);
     for (const p of [o.folder, ...o.files]) if (p) ctx.gate.vouch(p);
     // A file never changes an open folder (it becomes a tab; one outside the folder is the renderer's call).
     for (const f of o.files) backend.queueOpenRequest(f);
-    ctx.initialOpen = (async () => {
-      if (o.folder) {
+    const folder = o.folder;
+    if (folder) {
+      const release = claim(ctx, folder, o.real ?? null);
+      const mine = ctx.claim!;
+      // The real path next to the open (not in its way); the claim keeps the folder counted until it has settled.
+      const realP = o.real !== undefined ? Promise.resolve(o.real) : realOf(folder).then((r) => (mine.real = r));
+      ctx.initialOpen = (async () => {
         try {
-          await backend.openWorkspace(o.folder);
+          await backend.openWorkspace(folder);
         } catch (err) {
           console.error('[sec-edit] initial open failed', err); // the window shows the start screen
-        } finally {
-          ctx.opening = null;
         }
-      }
-      if (o.first) mark('workspaceOpen');
-    })();
+        void realP.then((real) => settleRoot(ctx, { folder, real })).finally(release);
+        if (o.first) mark('workspaceOpen');
+      })();
+    } else if (o.first) ctx.initialOpen = Promise.resolve().then(() => void mark('workspaceOpen'));
     backend.on('fs', (events) => send('fs:events', events));
     backend.on('git', (e) => send('git:changed', e));
     backend.on('settings', (s, patch) => {
@@ -584,16 +645,24 @@ function main() {
       const ctx = trustedCtx(e);
       if (!ctx) return { ok: false, error: { code: 'EACCES', message: 'Untrusted sender' } };
       await ctx.initialOpen; // the renderer's first getWorkspace/bootstrap must see the launch folder
+      let opened: { folder: string; real: string | null; release: () => void } | null = null;
       try {
         if (method === 'openWorkspace') {
           // The page asks, main decides: a folder it has not seen itself is not opened (open-gate.ts).
           if (!(await ctx.gate.allows(args[0]))) throw new BackendFailure('EACCES', FOLDER_REFUSED);
-          // One window per folder: a folder another window has open is shown there.
-          const other = otherWindowWith(ctx, args[0] as string);
-          if (other) {
-            focusWindow(other);
-            throw new BackendFailure('EBUSY', 'That folder is open in another window');
-          }
+          const folder = path.resolve(args[0] as string);
+          const real = await realOf(folder);
+          // One window per folder, decided in turn with launches and openFolderWindow: a folder another window has
+          // open (or is opening) is shown there; else this window claims it until its open has settled.
+          const release = await serial(async () => {
+            const other = windowWith(ctx, folder, real);
+            if (other) {
+              if (isLive(other)) focusWindow(other);
+              throw new BackendFailure('EBUSY', 'That folder is open in another window');
+            }
+            return claim(ctx, folder, real);
+          });
+          opened = { folder, real, release };
         }
         // An outside file is opened only if main saw that very file itself (dialog, OS open, argv, drop).
         if (method === 'openExternalFile' && !(await ctx.gate.vouchedFile(args[0]))) throw new BackendFailure('EACCES', 'This file was not chosen in the app: use “Open file”, drop it on the window or open it from the OS');
@@ -607,6 +676,11 @@ function main() {
       } catch (err: any) {
         const code = err instanceof BackendFailure ? err.code : err?.code || 'EIO';
         return { ok: false, error: { code, message: String(err?.message || err) } };
+      } finally {
+        if (opened) {
+          await settleRoot(ctx, opened);
+          opened.release();
+        }
       }
     });
   }
@@ -618,15 +692,23 @@ function main() {
     await ctx.initialOpen;
     if (!(await ctx.gate.allows(abs))) throw new BackendFailure('EACCES', FOLDER_REFUSED);
     const folder = path.resolve(abs as string);
+    const real = await realOf(folder);
     return serial(async () => {
-      const other = otherWindowWith(ctx, folder);
+      const other = windowWith(ctx, folder, real);
       if (other) {
-        focusWindow(other);
+        if (isLive(other)) focusWindow(other);
         return 'focused';
       }
-      if (ctx.root === null || registry.samePath(ctx.root, folder, ctx.foldsCase)) return 'here';
+      const own = ctx.backend.root;
+      if (own === null) {
+        // Empty: the renderer opens it here next (rpc:openWorkspace). Until then it counts as this window's, so the
+        // same folder asked for in another window (or launched) comes here instead of opening twice.
+        setTimeout(claim(ctx, folder, real), CLAIM_MS).unref();
+        return 'here';
+      }
+      if (matcher(new Map([[folder, real]])).samePath(own, folder, ctx.backend.foldsCase)) return 'here';
       if (!(await fsp.stat(folder).then((st) => st.isDirectory(), () => false))) throw new BackendFailure('ENOENT', `Not a folder: ${folder}`);
-      await createWindow({ folder, files: [] }, ctx); // vouched in the new window's gate
+      await createWindow({ folder, files: [], real }, ctx); // vouched in the new window's gate
       return 'new';
     });
   });
@@ -781,6 +863,12 @@ function main() {
       w.once('closed', () => r());
     });
     registry.add(c);
+    pending.delete(c);
+    // A window opened while quitting or restarting (a second launch, the Dock): the user wants the app after all.
+    if (quitRequested || relaunch.requested) {
+      quitRequested = false;
+      relaunch.cancelled();
+    }
     c.zen.attach(w);
     w.on('focus', () => registry.noteFocus(c.id));
     w.on('show', () => registry.noteFocus(c.id));
@@ -977,18 +1065,26 @@ function main() {
       launchDone = true;
       if (extra.length) {
         // macOS cold start by Finder / the Dock: those paths are what this launch opens.
-        for (const c of ctxs) void c.backend.dispose();
+        for (const c of ctxs) discard(c);
         ctxs = await planFirst(extra);
       }
       let prev: Live | null = null;
       for (const ctx of ctxs) {
-        if (prev) await shownOrLater(prev); // the last one ends up in front
-        prev = await showWindow(ctx, prev);
+        try {
+          if (prev) await shownOrLater(prev); // the last one ends up in front
+          prev = await showWindow(ctx, prev);
+        } catch (err) {
+          console.error('[sec-edit] a launch window failed', err);
+          discard(ctx); // the others still open
+        }
       }
     } catch (err) {
       console.error('[sec-edit] launch failed', err);
     } finally {
+      for (const c of [...pending]) discard(c); // nothing of a failed launch stays behind (routing has not started yet)
       windowsReadyDone();
+      // Not one window came up: no window-all-closed will ever follow (Windows / Linux would keep a process without a window).
+      if (!registry.all().length && process.platform !== 'darwin') app.quit();
     }
   });
 

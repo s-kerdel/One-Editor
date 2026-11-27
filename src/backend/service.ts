@@ -31,7 +31,7 @@ import { GitMonitor, findNestedRepos, type GitMonitorEvent } from './git-monitor
 import { GitTrust } from './git-trust';
 import { diffTexts } from './git-compare';
 import { GIT_OPS } from '../shared/git';
-import { ProcessExplorer, registerProcessSource } from './processes';
+import { ProcessExplorer } from './processes';
 import type { ProcRequest, ProcSnapshot } from '../shared/processes';
 import { winSystemExe } from './winsys';
 import { isMainOwnedKey } from '../shared/mcp';
@@ -766,10 +766,9 @@ export class BackendService {
   async processes(req: ProcRequest): Promise<ProcSnapshot | boolean> {
     const op = (req as { op?: unknown } | null)?.op;
     if (op === 'snapshot') {
-      if (!this.explorer) {
-        this.explorer = new ProcessExplorer({ root: () => this.workspace?.root ?? null });
-        registerProcessSource({ id: 'indexer', rows: () => this.workspace?.processRows() ?? [] });
-      }
+      // This backend's indexer rides on its own explorer (not a process-wide source): several windows' backends in
+      // one process each list their own, Restart reaches that one, and a closed window's backend is not kept alive.
+      this.explorer ??= new ProcessExplorer({ root: () => this.workspace?.root ?? null, rows: () => this.workspace?.processRows() ?? [] });
       return this.explorer.snapshot();
     }
     if (op === 'close') return void this.explorer?.close(), true;
@@ -925,6 +924,8 @@ export class BackendService {
   dispose() {
     this.settingsWatch?.close();
     this.settingsWatch = null;
+    this.explorer?.close();
+    this.explorer = null;
     this.unwatch?.();
     this.workspace?.dispose();
     this.ext.dispose();

@@ -1,7 +1,7 @@
 // Window registry, launch routing (planLaunch) and cascade placement: pure, no electron. Windows paths via path.win32.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { WindowRegistry, cascadeBounds, planLaunch, type LaunchInput } from '../../../src/main/windows';
+import { WindowRegistry, cascadeBounds, folderMatch, planLaunch, type LaunchInput } from '../../../src/main/windows';
 import { isInsideDir } from '../../../src/backend/pathsafe';
 
 type W = { id: number; root: string | null; foldsCase?: boolean };
@@ -190,6 +190,56 @@ describe('planLaunch: folders and files in one launch', () => {
     const windows = [{ id: 1, root: '/a' }];
     expect(plan({ windows, paths: [file('/a/x.md'), dir('/c')] }).map((s) => s.kind)).toEqual(['open-files', 'new-window']);
     expect(plan({ windows, paths: [dir('/c'), file('/a/x.md')] }).map((s) => s.kind)).toEqual(['new-window', 'open-files']);
+  });
+});
+
+// Folder identity: the gate judges real paths, so routing does too (a link / mapped drive to an open folder is that folder).
+describe('folderMatch', () => {
+  const posix = (real: Record<string, string | null> = {}) => folderMatch({ p: path.posix, foldCase: false, real: (x) => real[x] });
+  const win = (real: Record<string, string | null> = {}) => folderMatch({ p: path.win32, foldCase: true, real: (x) => real[x] });
+
+  it('the same spelling: resolved, trailing separator ignored, the case rule per call', () => {
+    expect(posix().samePath('/a/', '/a')).toBe(true);
+    expect(posix().samePath('/a', '/A')).toBe(false);
+    expect(win().samePath('C:\\Notes\\', 'c:\\notes')).toBe(true);
+    // A window's own rule wins: a case-sensitive WSL folder on Windows.
+    expect(win().samePath('\\\\wsl$\\Ubuntu\\home\\Notes', '\\\\wsl$\\Ubuntu\\home\\notes', false)).toBe(false);
+  });
+
+  it('a link and its target are the same folder; containment works through either', () => {
+    // As main passes them: each window's root and each launched path with its real path.
+    const m = posix({ '/home/me/link': '/data/notes', '/data/notes': '/data/notes', '/home/me/link/a.md': '/data/notes/a.md' });
+    expect(m.samePath('/home/me/link', '/data/notes')).toBe(true);
+    expect(m.samePath('/data/notes', '/home/me/link')).toBe(true);
+    expect(m.isInside('/home/me/link/a.md', '/data/notes')).toBe(true);
+    expect(m.isInside('/data/notes/a.md', '/home/me/link')).toBe(true);
+    expect(m.samePath('/home/me/link', '/data/other')).toBe(false);
+    // Real path unknown (lookup failed, a path not looked up): the spelling only.
+    expect(posix({ '/home/me/link': null }).samePath('/home/me/link', '/data/notes')).toBe(false);
+  });
+
+  it('Windows: a mapped drive and its UNC path, case-folded', () => {
+    const m = win({ 'Z:\\Notes': '\\\\server\\share\\notes' });
+    expect(m.samePath('Z:\\Notes', '\\\\SERVER\\share\\Notes')).toBe(true);
+    expect(m.isInside('\\\\server\\share\\notes\\a.md', 'Z:\\Notes')).toBe(true);
+    expect(m.samePath('Z:\\Notes', 'Y:\\Notes')).toBe(false);
+  });
+});
+
+describe('planLaunch: real paths and each window’s case rule', () => {
+  it('a folder or file launched by another spelling of an open folder goes to that window', () => {
+    const m = folderMatch({ p: path.posix, foldCase: false, real: (x) => ({ '/link': '/data/a', '/link/x.md': '/data/a/x.md', '/data/a': '/data/a' } as Record<string, string>)[x] });
+    const base = { ...posixHelpers, isInside: m.isInside, samePath: m.samePath, windows: [{ id: 1, root: '/data/a' }, { id: 2, root: '/b' }], lastFocusedId: 2 };
+    expect(plan({ ...base, paths: [dir('/link')] })).toEqual([{ kind: 'focus', id: 1 }]);
+    expect(plan({ ...base, paths: [file('/link/x.md')] })).toEqual([{ kind: 'open-files', id: 1, files: ['/link/x.md'] }]);
+  });
+  it("Windows: a case-sensitive (WSL) window's folder is matched exactly; a folding one case-folded", () => {
+    const m = folderMatch({ p: path.win32, foldCase: true, real: () => undefined });
+    const base = { ...winHelpers, isInside: m.isInside, samePath: m.samePath, recents: [], firstLaunch: false, lastFocusedId: 2 };
+    const windows = [{ id: 1, root: '\\\\wsl$\\Ubuntu\\home\\Notes', foldsCase: false }, { id: 2, root: 'C:\\Work', foldsCase: true }];
+    expect(planLaunch({ ...base, windows, paths: [dir('\\\\wsl$\\Ubuntu\\home\\notes')] })).toEqual([{ kind: 'new-window', folder: '\\\\wsl$\\Ubuntu\\home\\notes', files: [] }]);
+    expect(planLaunch({ ...base, windows, paths: [dir('\\\\wsl$\\Ubuntu\\home\\Notes')] })).toEqual([{ kind: 'focus', id: 1 }]);
+    expect(planLaunch({ ...base, windows, paths: [dir('c:\\work')] })).toEqual([{ kind: 'focus', id: 2 }]);
   });
 });
 

@@ -84,6 +84,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 - **One main process, many windows** (`src/main/main.ts`); browser mode stays one window. Main owns which window a path goes to.
 - **Registry** (`WindowRegistry`, `src/main/windows.ts`, no electron import): by id (= `webContents.id`), by folder (`byRoot`, `samePath` with the backend's case rule), by focus (`noteFocus` / `lastFocused`); `roots()` = open folders, each once.
+- **Same folder never twice:** the open-elsewhere check (`windowWith`) and launch routing compare with `folderMatch()` (`src/main/windows.ts`): same spelling under the window's case rule, or the same real path (each window caches its real root). An open in flight counts too: a window's `claim` (launch open, `app:openFolderWindow` → `'here'`, `rpc:openWorkspace`) and prepared-but-unregistered windows (`pending`) are checked inside the same `serial()` queue as routing.
 - **Per window** (`WindowCtx` in `main.ts`, built by `prepareWindow()`): `BrowserWindow`, `WindowBackend` (its folder), `OpenGate`, `ZenFullScreen`, `VaultScope`, close flow (`closing` / `closeApproved`), `indexToken`, `wsKey`, frame.
 - **Every `ipcMain` handler finds its window by sender:** `trustedCtx(e)` = `registry.get(e.sender.id)`; null = refused. Terminals are owned by `webContents.id` (`getWorkspaceRoot(owner)`, `setWorkspace(root, owner)`, `killOwner` on close).
 - **App level, one each:** `appState` (a `BackendService` without a folder: settings, recent folders), MCP, web server, vault store, update check.
@@ -135,4 +136,4 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 ### Known limit
 
-- Process explorer: the indexer row (`registerProcessSource({ id: 'indexer' })` in `backend/service.ts`, a fixed id) shows one window's indexer: that of the window whose backend created its explorer last (first open per window), never removed when that window closes.
+- Process explorer: each window's explorer lists its own backend's indexer rows (`ProcessExplorer` takes its owner's rows from `BackendService.processes()`; nothing per window is registered process-wide, so a closed window leaves nothing behind). Electron's own rows stay a process-wide `registerProcessSource` in main.

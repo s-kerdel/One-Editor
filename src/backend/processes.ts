@@ -53,7 +53,9 @@ export class ProcessExplorer {
   private helperMs = 0;
   private helperCpu: number | null = null;
 
-  constructor(private readonly opts: { root: () => string | null }) {}
+  /** `rows`: what only this explorer's owner knows (its backend's indexer): never a shared source, so one window's
+   *  backend never lists — or keeps alive — another's. */
+  constructor(private readonly opts: { root: () => string | null; rows?: (ctx: { intervalMs: number }) => Promise<ProcRow[]> | ProcRow[] }) {}
 
   get helperRunning(): boolean {
     return !!this.win?.alive;
@@ -67,6 +69,13 @@ export class ProcessExplorer {
     const notes: string[] = [];
     const rows: ProcRow[] = [this.selfRow(now)];
     const extra: ProcRow[] = [];
+    if (this.opts.rows) {
+      try {
+        extra.push(...(await this.opts.rows({ intervalMs })));
+      } catch (err) {
+        notes.push(`own rows: ${(err as Error).message}`);
+      }
+    }
     for (const s of sources.values()) {
       try {
         extra.push(...(await s.rows({ intervalMs })));

@@ -133,6 +133,50 @@ test('Ctrl+Shift+N opens a start screen that lists it; a folder opens here when 
   expect(await roots(app)).toEqual([el.ws, b, c].sort());
 });
 
+test('a folder being opened, or another spelling of an open one, belongs to that window: never two windows for it', async ({ el }) => {
+  const x = await folder(el.tmp, 'xray');
+  const y = await folder(el.tmp, 'yankee');
+  const link = path.join(el.tmp, 'link-to-workspace');
+  await fsp.symlink(el.ws, link, 'dir');
+  const { app, page: w1 } = await el.launch([el.ws], { env: SINGLE });
+  const emptyWindow = async () => {
+    const opened = app.waitForEvent('window');
+    await w1.evaluate(() => (window as any).secEditBridge.newWindow());
+    const p = await opened;
+    await p.waitForSelector('html[data-ready="true"]');
+    return p;
+  };
+  const w2 = await emptyWindow();
+  const w3 = await emptyWindow();
+  await app.evaluate((_e, ps) => ps.forEach((p) => (globalThis as any).__secEditVouch(p)), [x, y, link]); // stands in for the dialog
+  const ask = (p: Page, abs: string) => p.evaluate((a) => (window as any).secEditBridge.openFolderWindow(a), abs);
+  const open = (p: Page, abs: string) => p.evaluate((a) => (window as any).__secEdit.backend.openWorkspace(a).then((w: { root: string }) => w.root, (e: { code?: string }) => e.code), abs);
+
+  // W2 may open X here; before its own open has even started, X already counts as W2's.
+  expect(await ask(w2, x)).toBe('here');
+  expect(await ask(w3, x)).toBe('focused');
+  expect(await open(w3, x)).toBe('EBUSY');
+  expect(await open(w2, x)).toBe(x);
+
+  // An empty window about to open Y: a launch of Y goes to it, not to a new window.
+  expect(await ask(w3, y)).toBe('here');
+  await secondLaunch(el.userData, [y]);
+  expect(await open(w3, y)).toBe(y); // decided in turn: after the launch was routed
+  expect(await windowCount(app)).toBe(3);
+
+  // A link to the folder W1 has open is that folder (the gate judges real paths, so does routing).
+  const w4 = await emptyWindow();
+  await app.evaluate((_e, p) => (globalThis as any).__secEditVouch(p), link);
+  expect(await ask(w4, link)).toBe('focused');
+  expect(await open(w4, link)).toBe('EBUSY');
+  await secondLaunch(el.userData, [link]);
+  expect(await ask(w4, link)).toBe('focused'); // in turn: after the launch was routed
+  expect(await windowCount(app)).toBe(4);
+  // What each window's backend has open (the raw RPC above leaves the renderer's own state alone).
+  const opened = async (p: Page) => (await p.evaluate(() => (window as any).__secEdit.backend.getWorkspace()))?.root ?? '';
+  expect([await opened(w1), await opened(w2), await opened(w3), await opened(w4)]).toEqual([el.ws, x, y, '']);
+});
+
 test('shared across windows: web server and MCP status, settings; each window serves its own folder; closing one stops its server', async ({ el }) => {
   await fsp.writeFile(path.join(el.ws, 'pixel.png'), Buffer.from(PNG_1x1, 'base64'));
   const b = await folder(el.tmp, 'beta');

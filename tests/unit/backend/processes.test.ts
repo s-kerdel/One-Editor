@@ -2,8 +2,12 @@
 // tree order, the text export, and — on Linux — a real snapshot + kill of a child process.
 import { describe, expect, it, afterEach } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { childRows, descendantsOf, gitVerb, parsePs, parseProcStat, parseWinProcs, procText, treeOrder, type ChildInfo, type ProcRow } from '../../../src/shared/processes';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { childRows, descendantsOf, gitVerb, parsePs, parseProcStat, parseWinProcs, procText, treeOrder, type ChildInfo, type ProcRow, type ProcSnapshot } from '../../../src/shared/processes';
 import { ProcessExplorer, registerProcessSource } from '../../../src/backend/processes';
+import { BackendService } from '../../../src/backend/service';
 
 describe('parsing', () => {
   it('/proc/<pid>/stat: a name with spaces and parentheses, CPU ticks → ms, RSS pages → bytes', () => {
@@ -119,5 +123,38 @@ describe.skipIf(process.platform !== 'linux')('Linux snapshot (real /proc)', () 
     expect(ex.helperRunning).toBe(false);
     expect(ex.kill(sleep.pid!), 'forgotten after close').toBe(false);
     off();
+  });
+});
+
+// Several windows = several backends in one process: each explorer lists its own backend's indexer only, nothing goes
+// into the process-wide source list, and a disposed backend leaves nothing behind (no row, no reference).
+describe.skipIf(process.platform !== 'linux')('per-backend indexer rows (several windows)', () => {
+  it("each backend's explorer shows its own indexer; none is shared; dispose leaves nothing", async () => {
+    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'sec-proc-'));
+    try {
+      const cfg = path.join(tmp, 'config');
+      const [a, b] = [path.join(tmp, 'a'), path.join(tmp, 'b')];
+      for (const d of [a, b]) {
+        await fsp.mkdir(d, { recursive: true });
+        await fsp.writeFile(path.join(d, 'n.md'), 'x');
+      }
+      const sa = new BackendService(cfg, {}, { cacheDir: '' });
+      const sb = new BackendService(cfg, {}, { cacheDir: '' });
+      await sa.openWorkspace(a);
+      await sb.openWorkspace(b);
+      const indexers = async (s: BackendService) => ((await s.processes({ op: 'snapshot' })) as ProcSnapshot).rows.filter((r) => r.id === 'indexer');
+      expect(await indexers(sa)).toHaveLength(1);
+      expect(await indexers(sb)).toHaveLength(1);
+      // An explorer of no backend (main's, a third window) sees neither: they were never process-wide sources.
+      const bare = new ProcessExplorer({ root: () => null });
+      expect((await bare.snapshot()).rows.some((r) => r.id === 'indexer')).toBe(false);
+      sb.dispose();
+      expect(await indexers(sa)).toHaveLength(1);
+      expect((await bare.snapshot()).rows.some((r) => r.id === 'indexer')).toBe(false);
+      bare.close();
+      sa.dispose();
+    } finally {
+      await fsp.rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 });
+    }
   });
 });

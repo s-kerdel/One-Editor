@@ -3,6 +3,7 @@
 // No electron import: unit-tested, Windows paths included (path.win32).
 type PlatformPath = typeof import('node:path').posix;
 import { folderForOpenedFile } from './protocol';
+import { isInsideDir } from '../backend/pathsafe';
 
 export interface RegistryOptions {
   p: PlatformPath;
@@ -70,6 +71,24 @@ export class WindowRegistry<T extends { id: number; root: string | null; foldsCa
   }
 }
 
+/**
+ * Folder identity for routing: the same spelling (resolved, case rule) or the same real path. `real` = what main knows
+ * of a path's real form (a symlink's / mapped drive's target: each window's root after its open, the launched paths);
+ * unknown → the spelling only. The gate judges real paths too: a second spelling of an open folder is that folder.
+ * `foldCase` per call: a window's own case rule (its backend's), else the platform's.
+ */
+export function folderMatch(o: { p: PlatformPath; foldCase: boolean; real: (abs: string) => string | null | undefined }) {
+  const forms = (x: string) => {
+    const r = o.real(x);
+    return r && r !== x ? [x, r] : [x];
+  };
+  const norm = (x: string, fold: boolean) => (fold ? o.p.resolve(x).toLowerCase() : o.p.resolve(x));
+  return {
+    samePath: (a: string, b: string, foldCase = o.foldCase) => forms(a).some((x) => forms(b).some((y) => norm(x, foldCase) === norm(y, foldCase))),
+    isInside: (child: string, parent: string, foldCase = o.foldCase) => forms(child).some((x) => forms(parent).some((y) => isInsideDir(o.p.resolve(x), o.p.resolve(y), o.p, foldCase))),
+  };
+}
+
 export interface LaunchPath {
   abs: string;
   kind: 'dir' | 'file';
@@ -78,14 +97,15 @@ export interface LaunchPath {
 export interface LaunchInput {
   /** Existing absolute paths, in launch order. */
   paths: LaunchPath[];
-  /** Open windows (registry order). */
-  windows: { id: number; root: string | null }[];
+  /** Open windows (registry order); `foldsCase` = the window's own case rule (undefined: the platform's). */
+  windows: { id: number; root: string | null; foldsCase?: boolean }[];
   lastFocusedId: number | null;
   recents: string[];
   /** The app process just started: no paths → the most recent folder (as one window always did). */
   firstLaunch: boolean;
-  isInside: (child: string, parent: string) => boolean;
-  samePath: (a: string, b: string) => boolean;
+  /** `foldCase`: a window's own case rule when comparing with its folder; omitted = the platform's. */
+  isInside: (child: string, parent: string, foldCase?: boolean) => boolean;
+  samePath: (a: string, b: string, foldCase?: boolean) => boolean;
   exists: (dir: string) => boolean;
   dirname: (p: string) => string;
 }
@@ -105,7 +125,7 @@ export type LaunchStep =
  *  - nothing: first launch → the most recent folder; later → a new window with the start screen.
  */
 export function planLaunch(o: LaunchInput): LaunchStep[] {
-  const windowOf = (folder: string) => o.windows.find((w) => w.root !== null && o.samePath(w.root, folder));
+  const windowOf = (folder: string) => o.windows.find((w) => w.root !== null && o.samePath(w.root, folder, w.foldsCase));
   if (!o.paths.length) {
     const folder = o.firstLaunch ? (o.recents[0] ?? null) : null;
     const open = folder === null ? undefined : windowOf(folder);
@@ -133,14 +153,15 @@ export function planLaunch(o: LaunchInput): LaunchStep[] {
     reach(w ? openTarget(w.id) : newTarget(x.abs), i);
   });
 
+  // Where a file can go: open windows (their own case rule) and the folders this launch opens.
   const homes = [
-    ...o.windows.flatMap((w) => (w.root === null ? [] : [{ root: w.root, target: () => openTarget(w.id) }])),
-    ...targets.flatMap((t) => (t.id === null && t.folder !== null ? [{ root: t.folder, target: () => t }] : [])),
+    ...o.windows.flatMap((w) => (w.root === null ? [] : [{ root: w.root, fold: w.foldsCase, target: () => openTarget(w.id) }])),
+    ...targets.flatMap((t) => (t.id === null && t.folder !== null ? [{ root: t.folder, fold: undefined, target: () => t }] : [])),
   ];
   const outside: { abs: string; at: number }[] = [];
   o.paths.forEach((x, i) => {
     if (x.kind !== 'file') return;
-    const inside = homes.filter((h) => o.isInside(x.abs, h.root));
+    const inside = homes.filter((h) => o.isInside(x.abs, h.root, h.fold));
     if (!inside.length) return void outside.push({ abs: x.abs, at: i });
     const deepest = inside.reduce((best, h) => (!o.samePath(h.root, best.root) && o.isInside(h.root, best.root) ? h : best));
     reach(deepest.target(), i, x.abs);
