@@ -23,6 +23,8 @@ interface Entry {
   mtime: number;
   size: number;
   gone: boolean;
+  /** Open in a tab of this window: only these are polled (closed ones stay allowed, a reopen reads them again). */
+  open: boolean;
 }
 
 export interface ExternalOptions {
@@ -68,7 +70,7 @@ export class ExternalFiles {
     const id = extIdOf(real);
     const k = this.key(real);
     this.entries.delete(k);
-    this.entries.set(k, { id, real, mtime: st.mtimeMs, size: st.size, gone: false });
+    this.entries.set(k, { id, real, mtime: st.mtimeMs, size: st.size, gone: false, open: true });
     if (this.entries.size > MAX_ALLOWED) this.entries.delete(this.entries.keys().next().value as string);
     this.startPolling();
     return id;
@@ -101,6 +103,7 @@ export class ExternalFiles {
     const buf = opts.asText ? await readHead(e.real, Math.min(st.size, window)) : await fsp.readFile(e.real);
     const d = opts.asText ? decodeBestEffort(buf) : decode(buf);
     this.note(e, st.mtimeMs, st.size);
+    e.open = true; // read = opened in a tab (again)
     const data: FileData = { path: id, content: toLf(d.text), mtime: st.mtimeMs, eol: detectEol(d.text), size: st.size };
     if (d.bom) data.bom = true;
     if (d.encoding !== 'utf8') data.encoding = d.encoding;
@@ -124,6 +127,7 @@ export class ExternalFiles {
     await atomicWrite(e.real, encode(withEol(content, eol ?? 'lf'), encoding ?? 'utf8', bom ?? false), st?.mode);
     const now = await fsp.stat(e.real);
     this.note(e, now.mtimeMs, now.size);
+    e.open = true;
     return { mtime: now.mtimeMs };
   }
 
@@ -133,16 +137,43 @@ export class ExternalFiles {
     e.gone = false;
   }
 
-  // ---- watching: a stat per allowed file; changes of files nobody has open are dropped by the renderer ----
+  /** The window's open tabs (its saved session, service.saveSession): files not among them are no longer polled. */
+  setOpen(tabs: readonly unknown[]) {
+    const open = new Set<string>();
+    for (const t of tabs) {
+      const abs = typeof t === 'string' ? extAbsOf(t, this.win) : null;
+      if (abs) open.add(this.key(abs));
+    }
+    for (const [k, e] of this.entries) e.open = open.has(k);
+  }
+
+  // ---- watching: a stat per allowed file open in a tab ----
   private startPolling() {
     if (this.timer || !this.listeners.size) return;
     this.timer = setInterval(() => void this.poll(), this.o.pollMs ?? POLL_MS);
     this.timer.unref?.();
   }
 
-  async poll(): Promise<void> {
+  private pollRun: Promise<void> | null = null;
+  private pollNext: Promise<void> | null = null;
+
+  /** One poll at a time (a stat on a dead share can hang for long): a tick during a run gets at most one run after it. */
+  poll(): Promise<void> {
+    if (!this.pollRun) {
+      this.pollRun = this.pollOnce().finally(() => (this.pollRun = null));
+      return this.pollRun;
+    }
+    this.pollNext ??= this.pollRun.catch(() => {}).then(() => {
+      this.pollNext = null;
+      return this.poll();
+    });
+    return this.pollNext;
+  }
+
+  private async pollOnce(): Promise<void> {
     const out: FsEvent[] = [];
     for (const e of [...this.entries.values()]) {
+      if (!e.open) continue;
       const st = await fs.promises.stat(e.real).catch(() => null);
       if (!st || !st.isFile()) {
         if (!e.gone) {

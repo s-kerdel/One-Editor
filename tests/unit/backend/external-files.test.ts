@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,6 +21,7 @@ beforeEach(async () => {
   await fsp.writeFile(path.join(outside, 'secret.md'), 'SECRET');
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fsp.rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 25 });
 });
 
@@ -132,6 +134,82 @@ describe('ExternalFiles allow-list', () => {
     await x.poll();
     expect(seen).toHaveLength(1); // once
     x.dispose();
+  });
+});
+
+describe('ExternalFiles poller', () => {
+  /** Counts fs.promises.stat calls on `real`; `hold()` makes the next ones wait until `release()`. */
+  function statsOf(real: string) {
+    const realStat = fs.promises.stat.bind(fs.promises) as (p: fs.PathLike) => Promise<fs.Stats>;
+    const c = { calls: 0, gate: null as Promise<void> | null, release: () => {} };
+    vi.spyOn(fs.promises, 'stat').mockImplementation((async (f: fs.PathLike) => {
+      if (f === real) {
+        c.calls++;
+        if (c.gate) await c.gate;
+      }
+      return realStat(f);
+    }) as never);
+    const hold = () => (c.gate = new Promise<void>((r) => (c.release = () => ((c.gate = null), r()))));
+    return Object.assign(c, { hold });
+  }
+
+  it('one poll at a time: ticks during a held stat start nothing; they share one run after it', async () => {
+    const x = new ExternalFiles({ pollMs: 100000 });
+    const p = path.join(outside, 'a.md');
+    await x.allow(p);
+    const st = statsOf(await fsp.realpath(p));
+    st.hold();
+    const ticks = [x.poll(), x.poll(), x.poll()];
+    await new Promise((r) => setTimeout(r, 30));
+    expect(st.calls).toBe(1);
+    st.release();
+    await Promise.all(ticks);
+    expect(st.calls).toBe(2);
+    x.dispose();
+  });
+
+  it('a file closed in every tab is not polled any more; it stays allowed, and reading it again polls it again', async () => {
+    const x = new ExternalFiles({ pollMs: 100000 });
+    const seen: unknown[] = [];
+    x.onEvents((e) => seen.push(...e));
+    const p = path.join(outside, 'a.md');
+    const id = await x.allow(p);
+    await x.read(id);
+    const st = statsOf(await fsp.realpath(p));
+    x.setOpen([id, 'in.md']);
+    await x.poll();
+    expect(st.calls).toBe(1);
+    x.setOpen(['in.md']); // its tab was closed
+    await fsp.writeFile(p, 'changed while closed');
+    await x.poll();
+    await x.poll();
+    expect(st.calls).toBe(1);
+    expect(seen).toEqual([]);
+    expect(x.has(id)).toBe(true);
+    expect((await x.read(id)).content).toBe('changed while closed'); // reopened
+    const before = st.calls;
+    await fsp.writeFile(p, 'changed again, and longer');
+    await x.poll();
+    expect(st.calls).toBe(before + 1);
+    expect(seen).toEqual([{ type: 'change', path: id, mtime: expect.any(Number) }]);
+    x.dispose();
+  });
+
+  it('BackendService: the saved session (its open tabs) is the signal', async () => {
+    const s = new BackendService(path.join(tmp, 'cfg'), { externalFiles: true });
+    await s.openWorkspace(root);
+    const p = path.join(outside, 'a.md');
+    const id = await s.openExternalFile(p);
+    await s.readFile(id);
+    const st = statsOf(await fsp.realpath(p));
+    const ext = (s as unknown as { ext: ExternalFiles }).ext; // the poller's tick, without waiting for its timer
+    await s.saveSession({ openTabs: ['in.md', id], activeTab: id });
+    await ext.poll();
+    expect(st.calls).toBe(1);
+    await s.saveSession({ openTabs: ['in.md'], activeTab: 'in.md' });
+    await ext.poll();
+    expect(st.calls).toBe(1);
+    s.dispose();
   });
 });
 

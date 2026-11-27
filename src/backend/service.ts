@@ -628,6 +628,8 @@ export class BackendService {
   }
 
   async saveSession(s: SessionState) {
+    // Its tab list is the window's "which files are open": closed outside files stop being polled.
+    if (Array.isArray(s?.openTabs)) this.ext.setOpen(s.openTabs);
     const ws = this.workspace;
     if (!ws) return;
     this.sessionCache.set(ws.root, s); // synchronously, before the write: see sessionCache
