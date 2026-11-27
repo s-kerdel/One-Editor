@@ -79,7 +79,7 @@ export const test = base.extend<{ el: ElectronFixture }>({
       },
     });
     for (const a of apps) await a.close().catch(() => {});
-    await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+    await fsp.rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
   },
 });
 

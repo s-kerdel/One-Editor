@@ -56,7 +56,8 @@ export const test = base.extend<{ ws: WsFixture }>({
       write: (rel, c) => fsp.writeFile(path.join(root, rel), c),
     });
     await server.close();
-    await fsp.rm(tmp, { recursive: true, force: true });
+    // A backend write still landing (recent folders, settings: read-merge-write under a lock) would make one rmdir fail: retry.
+    await fsp.rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   },
 });
 
