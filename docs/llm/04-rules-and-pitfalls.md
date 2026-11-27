@@ -95,7 +95,7 @@ Find a rule there with: `grep -n "keyword" docs/llm/09-reference*.md`.
 | Platform | Remember |
 |---|---|
 | **Windows** (primary target) | CRLF files (content is LF in memory, EOL restored on save). Case-insensitive FS. Drive letters. `\\wsl.localhost` roots are case-sensitive. |
-| **macOS** | Cmd + backtick is the OS's (the terminal also answers to Ctrl + backtick). Ctrl chords in the terminal belong to the shell. No Reload accelerator in the menu. |
+| **macOS** | Cmd + backtick is the OS's (the terminal also answers to Ctrl + backtick). Ctrl chords in the terminal belong to the shell. No Reload accelerator in the menu. The app keeps running with no window (Dock). |
 | **WSL (this dev machine)** | No sudo. No Windows executables via interop. Never touch `/mnt/c`. Electron tests need Xvfb (`~/.local/xvfb/start-xvfb.sh :99`). |
 | **Browser mode** | State is per origin (per port). No terminal, no PDF export, no vault on disk. |
 
@@ -154,7 +154,7 @@ Decisions and their reasons: `10-decisions.md`. Check a row first: `grep -n "sym
 | `src/backend/service.ts`: `gitTrusted` | Checked before any `GitService` exists. | An untrusted folder spawns git. |
 | `src/backend/service.ts`: `saveSettings` | Merges the patch **after** the await. | Concurrent saves drop each other's patch. |
 | `src/backend/service.ts`: `writeBinary` | Size check before base64 decoding. | An oversized payload allocates its buffer first. |
-| `src/main/terminal.ts`: `getWorkspaceRoot` | Root is compared again after the await. | A shell starts in the previous folder. |
+| `src/main/terminal.ts`: `getWorkspaceRoot` | Root (of the terminal's window, `owner`) is compared again after the await. | A shell starts in the previous folder. |
 | `src/backend/workspace.ts`: `sameEntry`, `parentStillHere` | Re-checks the entry right before trashing it. | A racer's replacement file gets trashed. |
 
 **Security and path checks**
@@ -177,6 +177,21 @@ Decisions and their reasons: `10-decisions.md`. Check a row first: `grep -n "sym
 | `src/backend/indexcache.ts`: `readFileSync` in `load` | Sync read on the indexer's own thread. | Async fs queues with the user's file opens in the shared libuv pool. |
 | `vite.config.ts`: `codeSplitting` group `core` | Only `app` + `ui`. | A larger group made the warm launch ~12 ms slower. |
 | `src/main/main.ts`: `confirmSharedKey` | Tests default to deny. | A native dialog hangs the test run. |
+
+**Multiple windows (desktop main)** - contracts: `09-reference-app.md`, "Multiple windows"
+
+| File: symbol | What it does | Removing / changing it breaks |
+|---|---|---|
+| `src/main/window-backend.ts`: `WindowBackend` | **The seam:** main reaches a window's folder only through it (JSON / `Uint8Array`, async, no shared in-memory state). Never touch a window's `BackendService` / `Workspace` from `main.ts`. | A window's backend can no longer move into its own `utilityProcess` without rewriting routing and IPC. |
+| `src/main/window-backend.ts`: `run` | Disposes the service again when a call was still running as the window closed. | A closed window leaves a folder watch or git monitor running. |
+| `src/main/main.ts`: `trustedCtx` | Every `ipcMain` handler finds its window by `e.sender.id`; not registered = refused. | A call acts on another window's folder, gate or vault scope. |
+| `src/main/main.ts`: `prepareWindow` (`gate`, `vault`) | One `OpenGate` and one `VaultScope` per window: a path is vouched in the window that saw it; vault keys are scoped to the calling window's folder (`registerVaultIpc` `scopeOf`, resolved per call). | A path vouched in one window opens in another; a window reads another folder's secrets. |
+| `src/main/main.ts`: `wsKey`, `indexToken` | Per-window secrets in the preload's argv; `__ws/<key>/` and the `x-sec-edit-index` header pick the window. | One window's preview or search workers read another window's folder. |
+| `src/main/main.ts`: `serial` | Window routing one step at a time: each sees the windows the step before made. | A folder launched twice opens two windows. |
+| `src/main/main.ts`: `shownOrLater` | Waits ≤ 3 s for a new window to show before the next launch step. | No wait: the wrong window ends in front. No cap: a stuck renderer holds up every window after it. |
+| `src/main/app-menu.ts`: `registerAccelerator: false` | macOS File → New Window shows `CmdOrCtrl+Shift+N` but does not register it. | The menu takes the key from the renderer's `window.new` command (page and terminal alike). |
+| `src/backend/service.ts`: `changeRecent`, `saveExportDir` | recent.json / export-dirs.json: read-merge-write under `withFileLock`. | Windows drop each other's recent folders / last PDF folders. |
+| `src/backend/git.ts`: async `isFile`, `hunks`, `statSig` | No blocking file calls on the main thread; `statSig` one at a time. | A hung share freezes every window (one main process); parallel stats hold the whole libuv pool. |
 
 ## STOP AND ASK list
 

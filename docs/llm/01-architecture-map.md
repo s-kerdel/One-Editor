@@ -8,6 +8,8 @@
 
 **One renderer** (UI) talks to **one `BackendService`** through a transport. The transport is **Electron IPC** (desktop) or **HTTP + SSE** (browser mode). The MCP server is a **separate program**.
 
+**Desktop: one renderer per window.** One main process, many windows; each window has its own `BackendService` for its own folder, reached from main only through `WindowBackend` (see [Windows (desktop)](#windows-desktop)).
+
 ## Process diagram
 
 ```
@@ -50,6 +52,27 @@
 | Its settings/tokens are owned by main (src/main/mcp.ts, <app data>/mcp.json).|
 +------------------------------------------------------------------------------+
 ```
+
+## Windows (desktop)
+
+```
+ELECTRON MAIN (one process, src/main/main.ts)
+ |- app level, one each: appState (BackendService without a folder: settings, recent folders),
+ |      MCP settings, web server child, vault store, update check,
+ |      WindowRegistry + launch routing (planLaunch, src/main/windows.ts)
+ '- per window (WindowCtx): BrowserWindow, WindowBackend -> BackendService -> Workspace (its folder),
+        OpenGate, ZenFullScreen, VaultScope, close flow, indexToken, wsKey
+RENDERER: one Chromium process per window (same code; browser mode stays one window)
+```
+
+- **App level** = shared by every window: their status is broadcast to all windows (MCP on/off, web server, update check).
+- **Per window** = never shared: folder, gate, vault scope, terminals (owner = `webContents.id`), zen, close flow.
+- **The `WindowBackend` seam** (`src/main/window-backend.ts`, today `createInProcessBackend(service)`):
+  - main never touches a window's `BackendService` / `Workspace` directly, only `ctx.backend`;
+  - everything crossing it is JSON-serialisable or a `Uint8Array`; every call is async; sync members are cached values only (`root`, `foldsCase`, `booted`) plus two fire-and-forget notices (`setWatchPaused`, `queueOpenRequest`);
+  - window backends share no in-memory state; shared files in `<app data>` are merged under a file lock;
+  - goal: a window's backend can later move into its own `utilityProcess` without touching routing, IPC or the renderer.
+- Contracts (routing, IPC, ws key, quit): `09-reference-app.md`, "Multiple windows".
 
 ## One RPC call, step by step
 
@@ -99,7 +122,7 @@ They need the sender's identity or native dialogs. Each has: channels in `src/sh
 |---|---|---|
 | `src/shared/` | everywhere | types + pure helpers. **No Node, no DOM.** |
 | `src/backend/` | main + server + mcp | files, tree, watcher, git, index, processes |
-| `src/main/` | Electron main | window, IPC, terminal, vault, mcp settings, update check |
+| `src/main/` | Electron main | windows (`windows.ts` registry + routing, `window-backend.ts` seam), IPC, terminal, vault, mcp settings, update check |
 | `src/server/` | Node (browser mode) | `cli.ts` (args), `server.ts` (HTTP), `ports.ts` |
 | `src/renderer/` | Chromium | all UI |
 | `src/search/` | renderer workers + mcp | search engine, symbols, go to definition (pure) |
@@ -124,6 +147,9 @@ Owner per folder: see the table in `09-reference-ownership.md` ("Layout and owne
 | Session (open tabs, layout) | `<app data>/sessions/<id>.json` (`@web` for browser mode) | `app.backend.saveSession()` |
 | Bookmarks | `<app data>/bookmarks/<folder id>.json` | `app.backend.bookmarks(op?)` |
 | Git trust | `<app data>/git-trust.json` | `git('trust')` |
+| Recent folders, last PDF folder per folder | `<app data>/recent.json`, `export-dirs.json` (read-merge-write under `withFileLock`: several windows write them) | `recentWorkspaces()`; `exportPdf` |
+| Open windows (desktop) | `WindowRegistry` in main (`src/main/windows.ts`) | `registry.all()`, `byRoot()`, `lastFocused()` |
+| Window geometry | `<app data>/window-state.json` (main only; the window saved last) | `showWindow` in `src/main/main.ts` |
 | MCP grants + tokens | `<app data>/mcp.json` (main only) | `mcp:*` channels |
 | Secrets | `<app data>/vault.json` (main only, encrypted) | `vault:*` channels |
 | Per-folder UI bits | renderer `localStorage` (`sec-edit-*` keys) | per origin, never shared across modes |

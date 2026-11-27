@@ -61,7 +61,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 ### shell: `src/main/web-server*.ts`
 
-- "Start web server": browser mode for the open folder as a child process, desktop only; `webserver/slot.ts` is the status-bar corner slot, the rest is the lazy `web-server-ui` chunk, which also carries the corner's MCP icon (`mcp/indicator.tsx`, re-exported: no extra chunk); Settings → Browser mode
+- "Start web server": browser mode for the folder of the window that started it, as one child process for the whole app (desktop only; status shared by every window); `webserver/slot.ts` is the status-bar corner slot, the rest is the lazy `web-server-ui` chunk, which also carries the corner's MCP icon (`mcp/indicator.tsx`, re-exported: no extra chunk); Settings → Browser mode
 
 ### shell: `src/main/update-check*.ts`
 

@@ -22,7 +22,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 - Anything that touches the disk for ONE path goes through **`await ws.real(rel, leaf = 'follow' | 'entry')`** (`backend/workspace.ts`).
   - Same result as `abs()`, but `OUTSIDE_WORKSPACE` when a symlink / junction leads out of the folder.
   - `'entry'` = act on the entry itself (delete, rename, reveal): only its folder must be real.
-- Used by every file RPC and by main's `app://sec-edit/__ws/` route; a new file route (HTTP server included) must use it too.
+- Used by every file RPC and by main's `app://sec-edit/__ws/<window key>/` route (each window's `wsKey` serves only that window's folder: `WindowBackend.real()`); a new file route (HTTP server included) must use it too.
 - The tree walk and the watcher leave out links whose target is outside (`linkTarget`), so the index — all the indexer reads in bulk — holds no such path; on-request index reads (`readIndexedFiles*`) check paths the listing does not know.
 - Links that stay inside the folder work as before (except in the MCP server's workspace, `links: 'skip'`).
 
@@ -46,19 +46,21 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 - **Opening a folder is main's decision** (`main/open-gate.ts`): `rpc:openWorkspace` only passes for a path main saw itself. Those are:
   - the folder dialog;
-  - launch / second-instance arguments;
+  - launch / second-instance / macOS `open-file` arguments;
   - a drop (the preload reports the `File`'s path on `app:vouchPath`);
   - a recent folder;
   - a folder inside the open one;
   - the folder of a vouched file.
 - A new way to open a folder must `gate.vouch()` in main, never trust a path string from the page.
-- E2E: `app.evaluate(() => globalThis.__secEditVouch(path))`.
+- **One gate per window** (`WindowCtx.gate`): a path is vouched in the window that saw it (its dialog, its drop, the launch step `planLaunch` sends there); `app:openFolderWindow` checks the asking window's gate, and the new window vouches the folder in its own.
+- E2E: `app.evaluate(() => globalThis.__secEditVouch(path))` (vouches in every window).
 
 ## Vault scope
 
 - **Vault scope** (`main/vault.ts`, `shared/vault.ts`):
   - folder-scoped keys (`<folder>::…`) are served only at or below the open folder (`vaultKeyInScope`);
   - a shared `vault:<key>` another folder saved needs the user's OK in a **native** dialog (`confirmSharedKey`, grant kept in vault.json `grants`, owner in `owners`).
+- **One store, scoped per window:** every key call is scoped to the **calling window's** folder (`registerVaultIpc` `scopeOf` → `WindowCtx.vault`, resolved per call: the window may have opened another folder); an unknown window is `EACCES`; a window without a folder gets shared keys only. The shared-key dialog opens on the asking window.
 - Don't add a vault call that skips `check()` / `allowShared()`.
 
 ## Terminal: residual risk, by decision

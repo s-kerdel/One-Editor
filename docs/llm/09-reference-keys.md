@@ -16,7 +16,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 | Owner | Keys |
 |---|---|
-| shell | `Mod-s` save, `Mod-w` close tab, `Mod-n` new note, `Mod-Shift-b` sidebar, `Mod-Alt-k` Bookmarks panel, `Mod-Alt-z` zen mode (also in `APP_KEYS_IN_TERMINAL`), `Mod-e` toggle edit/preview, `Mod-\` split, `Ctrl-Tab`/`Ctrl-Shift-Tab` tabs, `Mod-,` settings, `Mod-=`/`Mod--`/`Mod-0` zoom, `Mod-Shift-i` developer tools (desktop, Windows/Linux; macOS `Cmd-Alt-i` is the default app menu's, so the command only *displays* it — binding it too would toggle twice). |
+| shell | `Mod-s` save, `Mod-w` close tab, `Mod-n` new note, `Mod-Shift-n` new window (desktop only, see below), `Mod-Shift-b` sidebar, `Mod-Alt-k` Bookmarks panel, `Mod-Alt-z` zen mode (also in `APP_KEYS_IN_TERMINAL`), `Mod-e` toggle edit/preview, `Mod-\` split, `Ctrl-Tab`/`Ctrl-Shift-Tab` tabs, `Mod-,` settings, `Mod-=`/`Mod--`/`Mod-0` zoom, `Mod-Shift-i` developer tools (desktop, Windows/Linux; macOS `Cmd-Alt-i` is the default app menu's, so the command only *displays* it — binding it too would toggle twice). |
 | search | `Mod-p`/`Mod-o` quick open, `Mod-Shift-p`/`F1` palette, `Mod-Shift-f` find in files, `Mod-Shift-h` replace in files, `Mod-Shift-o` go to heading, `Mod-t` workspace symbol/heading |
 | format | `Shift-Alt-f` format document, `Mod-Alt-f` format selection/code block |
 | editor (CM-local, not global) | `Mod-b` bold, `Mod-i` italic, `Mod-k` link, `Mod-f`/`Mod-h` in-file find/replace, `Mod-d`, `Mod-/`, `Mod-Enter` toggle checkbox, `Alt-Up/Down` move line, `Mod-Shift-v` paste exactly as copied (plain text, no trailing-whitespace trim, no smart paste), `/` slash menu, `Alt-F10` focus formatting toolbar, code files only: `F12` go to definition, `Shift-F12` find usages, `Mod`+click go to definition (multi-cursor is `Alt`+click), … |
@@ -33,6 +33,10 @@ grep -n "keyword" docs/llm/09-reference*.md
 ### shell
 
 - **`F12` is no longer DevTools** (it moved in v0.5.4: Go to definition)
+- **`Mod-Shift-n` = New window** (`window.new` in `app/shell.ts`):
+  - desktop only: registered only when `app.backend.newWindow` exists, so browser mode leaves `Ctrl+Shift+N` to the browser;
+  - in `APP_KEYS_IN_TERMINAL`: it passes through a focused terminal (xterm.js sends nothing for Ctrl+Shift+letter);
+  - macOS File → New Window (`main/app-menu.ts`) only *shows* `CmdOrCtrl+Shift+N`: `registerAccelerator: false`, the renderer's command owns the key (page and terminal alike).
 
 ### nav
 

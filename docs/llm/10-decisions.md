@@ -92,6 +92,17 @@ Look up a commit: `git show --stat <hash>` (read-only). Versions are the release
 | 2026-11-23 | **Build reuse lives in `scripts/e2e-file.mjs` only.** Plain `npx playwright test` still builds on every run. | Measured: renderer build ~3.5 s of a 6.1 s one-spec run; reuse gives 2.5 s. The lead's full run in a release snapshot must never see a stale build. | Move the freshness check into `tests/e2e/global-setup.ts` or make it the default. Narrow the stamp's inputs (all of `src/` on purpose). |
 | 2026-11-23 | **E2E fixed sleeps (`waitForTimeout`) were not mass-replaced.** | 205 literal sleeps, 128.5 s summed (static count). Many are "wait, then assert nothing happened"; each needs its spec re-run to prove a condition wait is equal. | Replace a sleep without running that spec before and after. |
 
+## 8. Multiple windows (desktop)
+
+| Version | Decision | Why | Do NOT |
+|---|---|---|---|
+| 2026-11-27 (lead) | **One process with many windows**, not one process per window (single-instance lock kept; `second-instance` routes to a window). | The lead: one Dock icon, MCP and web-server status shared live across windows, lower memory. | Start a process per window. Drop `requestSingleInstanceLock`. Give a window its own MCP or web server. |
+| 2026-11-27 (lead) | **Main reaches a window's folder only through `WindowBackend`** (`src/main/window-backend.ts`). | File header: the seam lets each window's `BackendService` move into its own `utilityProcess` later without touching routing, IPC or the renderer. | Touch a window's `BackendService` / `Workspace` from `main.ts` (the one marked exception: the test hook `__secEditService`). Pass functions, class instances or handles across it. Add a sync call. Share in-memory state between window backends. |
+| 2026-11-27 (lead) | **A folder always opens in its own window; the same folder is never open twice.** An empty window (start screen) opens it in place. | The user's decision (plan, decided behaviour); detail: reason not recorded - ask the lead. | Open a folder in place in a window that already has one. Let a second window open a folder another window has (`otherWindowWith`, `EBUSY`, `'focused'`). |
+| 2026-11-27 (lead) | **One web server for the app**, serving the folder of the window that started it. Starting it for another folder is refused; it stops once no window has its folder. | `src/main/web-server.ts` `start`: "One server for the app: another window's folder is not silently swapped in." | Run a server per window. Swap the running server to the caller's folder. |
+| 2026-11-27 (lead) | **macOS keeps running without windows** (Dock click → a window like a fresh launch). Windows / Linux quit with the last window. | `src/main/main.ts` `window-all-closed`: Mac convention. | Quit on macOS when the last window closes (outside Quit / Restart now). Keep Windows / Linux running without a window. |
+| 2026-11-27 (lead) | **libuv pool sizing for several windows is left as is for now.** The pool size is fixed at launch from that launch's folders (`UV_THREADPOOL_SIZE`, see section 2); a later window on a slow root gets no extra threads. | Decided by the user (out of scope for this work). | Change the pool sizing for multiple windows without asking. |
+
 ## How to add a row (lead only)
 
 1. One row per decision. Put the version or commit hash in column 1.

@@ -137,6 +137,21 @@ No hit after these = **no precedent. STOP AND ASK.**
 | MCP path resolution | `folder.resolve()`, `folder.resolveTarget()`, `folder.visibleOnly()` | `src/mcp/folders.ts` |
 | product name / window title | `BRAND`, `brandTitle` | `src/shared/brand.ts` |
 
+## Windows (desktop)
+
+| I need to... | Reuse | File |
+|---|---|---|
+| open a new window from the UI | `app.backend.newWindow?.()` (command `window.new`) | `src/renderer/app/shell.ts`, `BackendApi` in `src/shared/api.ts` |
+| open a folder from the UI (main picks the window) | `openWorkspace(abs)` (asks `openFolderWindow` first) | `src/renderer/app/documents.ts` (impl: `doc-save.ts`) |
+| decide which window a launched path goes to | `planLaunch()` | `src/main/windows.ts` |
+| run window routing one step at a time | `serial()`, `route()`, `routeLaunch()` | `src/main/main.ts` |
+| find a window by sender / folder / focus | `trustedCtx(e)`, `registry.byRoot()`, `registry.lastFocused()`, `otherWindowWith()` | `src/main/main.ts`, `WindowRegistry` in `src/main/windows.ts` |
+| reach a window's folder from main | `ctx.backend.<member>` (never its `BackendService`) | `WindowBackend` in `src/main/window-backend.ts` |
+| send an app-level status to every window | `broadcast(channel, payload)` | `src/main/main.ts` |
+| parent a dialog to the right window | `dialogParent(asker)` | `src/main/main.ts` |
+| place a new window | `cascadeBounds()` | `src/main/windows.ts` |
+| bring a window to the front | `focusWindow(c)` | `src/main/main.ts` |
+
 ## Styling
 
 | I need... | Reuse |

@@ -79,3 +79,60 @@ grep -n "keyword" docs/llm/09-reference*.md
 - Settings across processes: `saveSettings` merges only the patch into settings.json as it is on disk, under a cross-process lock (`backend/filelock.ts`, `settings.json.lock`, stale after 5 s).
 - Each backend watches the file (debounced; own writes give no diff; keys still in flight are skipped) and reports *external* changes: `onExternalSettings` → Electron `settings:changed` (preload channel) / server SSE `event: settings`.
 - The renderer re-syncs in `app/settings-sync.ts` (installed by the idle Popups chunk: no startup code).
+
+## Multiple windows (desktop main)
+
+- **One main process, many windows** (`src/main/main.ts`); browser mode stays one window. Main owns which window a path goes to.
+- **Registry** (`WindowRegistry`, `src/main/windows.ts`, no electron import): by id (= `webContents.id`), by folder (`byRoot`, `samePath` with the backend's case rule), by focus (`noteFocus` / `lastFocused`); `roots()` = open folders, each once.
+- **Per window** (`WindowCtx` in `main.ts`, built by `prepareWindow()`): `BrowserWindow`, `WindowBackend` (its folder), `OpenGate`, `ZenFullScreen`, `VaultScope`, close flow (`closing` / `closeApproved`), `indexToken`, `wsKey`, frame.
+- **Every `ipcMain` handler finds its window by sender:** `trustedCtx(e)` = `registry.get(e.sender.id)`; null = refused. Terminals are owned by `webContents.id` (`getWorkspaceRoot(owner)`, `setWorkspace(root, owner)`, `killOwner` on close).
+- **App level, one each:** `appState` (a `BackendService` without a folder: settings, recent folders), MCP, web server, vault store, update check.
+  - Their `onChange` → `broadcast()` to every window. Theme / background colour go to every window (`applyTheme`).
+  - Dialogs go on the asking window (`dialogParent`, `mcpAsker`), else the focused one.
+
+### Launch routing
+
+- **Pure `planLaunch()`** (`windows.ts`) for argv, `second-instance` and macOS `open-file`. Steps run one at a time (`serial()`): each sees the windows the one before made.
+  - **folder:** the window that has it → `focus`; else `new-window`;
+  - **file:** the window whose folder holds it (deepest; folders of the same launch count) → `open-files` (a tab); outside every folder → the window this launch brings to front, else the last focused one (an outside-file tab); no window → `new-window`, folder by `folderForOpenedFile` (a recent folder that holds it, else its own);
+  - **no path:** first launch → the most recent folder; later (Windows taskbar Shift+click, Start menu, CLI) → a start-screen window.
+- One step per window, in launch order: the last one ends in front (`shownOrLater`, ≤ 3 s per window).
+- Files are vouched in the target window's gate, then sent (`app:openRequest` once booted, else `queueOpenRequest`).
+- The first window keeps the fast path: its backend starts opening the folder before `ready` (`prepareWindow`), geometry from `window-state.json`; launch timings and test hooks are the `first` window's only.
+- New windows: `cascadeBounds()` (32 px right and down from the window they came from, inside its work area). One `window-state.json`: the window saved last is where the next launch opens.
+
+### IPC: `app:newWindow`, `app:openFolderWindow`
+
+- Preload `newWindow()` / `openFolderWindow(abs)` → `BackendApi.newWindow?` / `openFolderWindow?` (`src/shared/api.ts`). The renderer exposes them only when the preload has a `wsKey` (`platform/index.ts`); else one window, folders open in place.
+- **`app:newWindow`** → a start-screen window next to the caller.
+- **`app:openFolderWindow(abs)`**: the caller's gate must allow it (`EACCES`), then one answer:
+  - `'focused'`: another window has that folder: brought to front;
+  - `'here'`: this window is empty or has that folder: the renderer opens it in place (`rpc:openWorkspace`);
+  - `'new'`: opened in a new window (`ENOENT` if it is not a folder).
+- `openWorkspace()` in `app/doc-save.ts` asks first; only `'here'` runs the in-place flow. Every in-app folder open goes through it.
+- `rpc:openWorkspace` itself refuses a folder another window has open (`EBUSY`, that window comes to front).
+
+### Per-window secrets (preload argv)
+
+- **`--sec-edit-ws-key=<hex>`** → `bridge.wsKey`. `fileUrl()` builds `app://sec-edit/__ws/<key>/<rel>`; main serves `<rel>` from the folder of the window with that key (`routeAppUrl` → `{ kind: 'workspace', key, rel }`). No key segment or unknown key = 404.
+- **`--sec-edit-index-token=<hex>`** → header `x-sec-edit-index` on `app://sec-edit/__index/*`: picks the window whose folder its search workers index. Unknown = 403.
+- Both: 16 random bytes per window (`prepareWindow`), never shared between windows.
+
+### Close, quit, relaunch
+
+- **One window:** `close` → `app:closeRequest` → the renderer flushes / asks → `app:closeAck`, `app:closeApproved` (by sender).
+- **Closed:** `registry.remove`, `terminals.killOwner`, `backend.dispose()`, `webServer.rootsChanged(registry.roots())` (its folder open nowhere else: the server stops).
+- **Quit** (`before-quit`): every open window goes through its own close flow (`quitRequested`). A Cancel in any (`app:closeApproved` false) clears `quitRequested` and `relaunch.cancelled()`.
+- **"Restart now"** (`app:relaunch`) → `relaunch.request()` → `closeAll()`. `window-all-closed` → `relaunch.allClosed()` relaunches + exits, else `app.quit()`.
+
+### macOS
+
+- App menu File → New Window (`CmdOrCtrl+Shift+N`, `registerAccelerator: false`); `windowMenu` role lists the windows. Dock menu (`dockMenuTemplate`): New Window.
+- `activate` with no window (inside `serial()`) → `route([], true)`: like a fresh launch (the most recent folder).
+- `window-all-closed` keeps the app running unless quitting or restarting.
+- `open-file` before the first windows exist replaces this launch's plan (`earlyOpen` → `planFirst`); later it is routed like a second launch.
+- **Not verified on a Mac** (nor Windows taskbar Shift+click): implemented, but the tests run on Linux only.
+
+### Known limit
+
+- Process explorer: the indexer row (`registerProcessSource({ id: 'indexer' })` in `backend/service.ts`, a fixed id) shows one window's indexer: that of the window whose backend created its explorer last (first open per window), never removed when that window closes.

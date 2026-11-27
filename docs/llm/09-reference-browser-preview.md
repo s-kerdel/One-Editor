@@ -48,7 +48,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 - Web server (desktop only, "Start web server"): main runs `dist/server/cli.mjs <root> --ipc` as a **child process** (`process.execPath` + `ELECTRON_RUN_AS_NODE`, allowlisted env, `SEC_EDIT_CONFIG_DIR` = userData; packaged: `app.asar.unpacked/dist/server/cli.mjs`).
 - Handshake = Node IPC message `{ type: 'ready', port, token }` / `{ type: 'error' }`, never a parsed log line; `{ type: 'stop' }` or an IPC disconnect (app quit / crash) ends it.
-- One at a time, never auto-started, stopped on quit and when another folder is opened.
+- One server for the whole app (all windows show the same status), never auto-started. It serves the folder of the window that started it; a start for another folder is refused (`EBUSY`). Stopped on quit and once no window has its folder open any more (`rootsChanged`).
 - Bridge `secEditBridge.webServer` = `status / start / stop / open / onChange` over `webserver:*` channels (`src/shared/web-server.ts`), re-validated in `src/main/web-server.ts` like the vault; `open` only accepts a link of the running server.
 - The token stays out of logs and the activity log (UI shows the address only; Copy uses the full link; Open asks the child for a one-time link, `{ type: 'launch' }` → `{ type: 'launch', url }`, so no browser command line holds the key).
 - `--ipc` and any non-loopback `--host` start the server **pinned** (`pinRoot`): it refuses `openWorkspace` / `resolvePath` outside its folder, lists no recents, no process list, no `terminal.*` / `webserver.*` settings writes.

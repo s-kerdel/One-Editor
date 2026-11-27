@@ -5,6 +5,7 @@
 | I want to… | Go to |
 |---|---|
 | Open folders and files | [1. Folders and files](#1-folders-and-files) |
+| Work on two folders side by side | [Multiple windows](#multiple-windows) |
 | Read a PDF | [PDF files](#pdf-files) |
 | Write notes faster | [2. Writing notes](#2-writing-notes) |
 | Link notes together | [3. Links and knowledge](#3-links-and-knowledge) |
@@ -36,6 +37,7 @@
 |---|---|
 | Open a folder | Drag it onto the window, or run `One.exe C:\notes` |
 | Open a file | `Ctrl+P`, type part of the name, `Enter` |
+| **New window** | `Ctrl+Shift+N` — a window with the start screen, for another folder ([below](#multiple-windows)). Desktop app only |
 | New note | `Ctrl+N`, then type its name — it lands in the folder **selected in the tree** (even while you edit a file elsewhere), else next to the open file |
 | **New file of another type** | Right-click in the tree → **New file …** — pick an extension, the ones most used in this project come first. Or right-click the **+ New note** button at the bottom of the sidebar |
 | Rename / delete | `F2` / `Del` in the file tree |
@@ -204,6 +206,29 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 - **Double-clicking a tab** still closes it. Only empty strip space maximizes.
 - **File overview open?** The buttons sit above it instead. Its top strip drags the window too.
 - The **window title** (taskbar, Alt+Tab) still shows the open note.
+
+### Multiple windows
+
+**One folder per window.** Open as many windows as you like. Desktop app only.
+
+| Do this | What happens |
+|---|---|
+| **New window** | `Ctrl+Shift+N` (macOS `Cmd+Shift+N`), or palette → "Window: New window". It opens with the start screen |
+| **Start One again** without a folder (Windows: **`Shift`+click** its taskbar button · Start menu · command line) | A new window with the start screen |
+| **Open a folder** from outside (Explorer, Finder, command line) | Already open in a window → **that window comes to the front**. Else → a new window |
+| **Open a folder in One** (Open folder…, a recent folder, Open as project, a drop) | Empty window (start screen) → it opens **here**. The window has a folder → a **new window**, or the window that already has it |
+| **Open a file** from outside | A tab in the window whose folder holds it. Else a tab in the window you used last (as a file from outside the folder). No window yet → a new window with a recent folder that holds the file, else the file's own folder |
+
+- **A folder is never open twice.** One brings its window to the front instead.
+- **Shared by all windows:** settings and theme, the **MCP server** (on / off, status) and the **web server** status. A change shows in every window at once.
+- **The web server serves the folder of the window that started it.** Every window shows the same status (Settings → Browser mode: "Serving <folder>") and can stop it. Starting it for another folder is refused until you stop it.
+- **Per window:** its folder, tabs and terminals. Secrets of `{{variables}}` follow the window's folder, as before.
+- **Closing:** each window asks about its own unsaved changes. **Quit** or **Restart now** closes every window that way; Cancel in any of them keeps One open.
+- **Windows / Linux:** closing the last window quits One.
+- **macOS:** one icon in the Dock. Right-click it: your windows + **New Window** (also File → New Window). Closing the last window keeps One in the Dock; a click on the icon opens your most recent folder again.
+- **New windows** open a little right of and below the window you came from.
+- **Browser mode:** one window, no New window (`Ctrl+Shift+N` stays the browser's).
+- **Not yet tried on a real Mac**, nor `Shift`+click on the Windows taskbar.
 
 ### Status bar
 
@@ -1144,7 +1169,8 @@ Settings are **global**, not per folder.
 - **The key stays in that browser tab** (not a cookie, not in image addresses). A new tab needs the link again. **Open** starts the browser with a one-time link.
 - **Network (LAN) is opt-in, and asked every time:** anyone on your network with the link gets the above. It is plain HTTP: trusted networks only, not public Wi-Fi.
 - **Windows:** the first network start shows a **firewall prompt** for One. Allow **Private networks** only.
-- **Nothing starts on its own.** Opening another folder stops it. Quitting One stops it.
+- **Nothing starts on its own.** It stops once no window has its folder open any more. Quitting One stops it.
+- **Several windows:** one server for the app, for the folder of the window that started it. Every window shows its status and can stop it ([Multiple windows](#multiple-windows)).
 - **Own tabs:** the browser keeps its own open tabs, tree and layout per folder (the first visit starts from the desktop's). The desktop's stay as they were.
 - **Settings are shared:** a change in the browser shows up in the desktop app at once, and the other way round.
 - **Same folder, same port:** the browser remembers things per address (environment pick, recent files). So a folder gets its last port again. If that port is taken, the info box says so: browser state for this folder then starts empty.
