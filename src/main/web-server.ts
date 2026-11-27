@@ -1,6 +1,7 @@
 // "Start web server" (main process): runs browser mode for the open folder as a separate child process
 // — dist/server/cli.mjs under ELECTRON_RUN_AS_NODE, the same server "Start web server.cmd" runs.
-//  - One server at a time, never started on its own; stopped on quit and when another folder is opened.
+//  - One server at a time for the whole app, never started on its own; it serves the folder of the window that
+//    started it and stops on quit, when that window opens another folder or when no window has it open any more.
 //  - Handshake over the Node IPC channel (`--ipc`): port + token arrive as data, never parsed from a log line.
 //  - The child exits by itself when this process goes away (IPC disconnect): no orphan, even after a crash.
 //  - The token never reaches a log; the child gets an allowlisted environment only.
@@ -21,7 +22,7 @@ export interface ChildLike {
 }
 
 export interface WebServerDeps {
-  /** The open folder (absolute), or null. */
+  /** The open folder (absolute), or null. Used when start() / registerWebServerIpc get no folder of the caller. */
   getRoot(): string | null;
   /** Starts cli.mjs with these arguments (see spawnCli). */
   spawn(args: string[]): ChildLike;
@@ -120,11 +121,20 @@ export class WebServerService {
     if (this.child && !sameRoot(this.deps.getRoot(), this.s.root)) void this.stop('Opening another folder stopped the web server.');
   }
 
-  start(raw: unknown): Promise<WebServerStatus> {
+  /** Several windows: the folders open in any of them now. A server whose folder none has open any more stops. */
+  rootsChanged(openRoots: string[], notice = 'Closing its folder stopped the web server.') {
+    if (this.child && !openRoots.some((r) => sameRoot(r, this.s.root))) void this.stop(notice);
+  }
+
+  /** `root`: the calling window's folder (null: it has none); omitted = deps.getRoot(). */
+  start(raw: unknown, root: string | null = this.deps.getRoot()): Promise<WebServerStatus> {
     const o = parseWebServerOptions(raw);
     if (!o) return Promise.reject(new WebServerError('EINVAL', 'Invalid web server options'));
-    if (this.child || this.stopping) return Promise.reject(new WebServerError('EBUSY', 'A web server is already running — stop it first'));
-    const root = this.deps.getRoot();
+    if (this.child || this.stopping) {
+      // One server for the app: another window's folder is not silently swapped in.
+      const other = this.s.root && !sameRoot(root, this.s.root) ? this.s.root : null;
+      return Promise.reject(new WebServerError('EBUSY', other ? `The web server is already serving ${other} — stop it first` : 'A web server is already running — stop it first'));
+    }
     if (!root) return Promise.reject(new WebServerError('NO_WORKSPACE', 'Open a folder first'));
     const args = [root, '--host', o.access === 'lan' ? '0.0.0.0' : '127.0.0.1', '--ipc'];
     if (o.port !== null) args.push('--port', String(o.port));
@@ -296,12 +306,15 @@ const reply = async <T>(fn: () => Promise<T> | T): Promise<WebServerReply<T>> =>
   }
 };
 
-/** webserver:* handlers. The preload only coerces types; everything is validated here (and in the service). */
-export function registerWebServerIpc(ipc: IpcLike, svc: WebServerService, o: { isTrusted: (e: unknown) => boolean }): void {
+/**
+ * webserver:* handlers. The preload only coerces types; everything is validated here (and in the service).
+ * `rootOf` (several windows): the calling window's folder, which start serves; without it deps.getRoot().
+ */
+export function registerWebServerIpc(ipc: IpcLike, svc: WebServerService, o: { isTrusted: (e: unknown) => boolean; rootOf?: (e: unknown) => string | null }): void {
   const denied: WebServerReply<never> = { ok: false, error: { code: 'EACCES', message: 'Untrusted sender' } };
   const guard = (fn: (...a: unknown[]) => Promise<unknown> | unknown) => (e: unknown, ...a: unknown[]) => (o.isTrusted(e) ? reply(() => fn(...a)) : denied);
   ipc.handle(CH.status, guard(() => svc.status()));
-  ipc.handle(CH.start, guard((opts) => svc.start(opts)));
+  ipc.handle(CH.start, (e, opts) => (o.isTrusted(e) ? reply(() => (o.rootOf ? svc.start(opts, o.rootOf(e)) : svc.start(opts))) : denied));
   ipc.handle(CH.stop, guard(() => svc.stop()));
   ipc.handle(CH.open, guard((url) => svc.open(url)));
 }

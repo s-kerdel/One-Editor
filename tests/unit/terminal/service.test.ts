@@ -213,6 +213,43 @@ describe('TerminalService (real node-pty)', () => {
     expect(r.svc.count()).toBe(0);
   });
 
+  it('several windows: each starts in its own folder; a folder switch with an owner kills only that window’s shells', async () => {
+    const esc = (p: string) => new RegExp(p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const roots = new Map<number, string | null>([[1, ws], [2, outside], [3, null]]);
+    const r = rig({ getWorkspaceRoot: (owner) => roots.get(owner) ?? null });
+    const pa = await r.svc.spawn(1, { shellId: 'pwd' });
+    const pb = await r.svc.spawn(2, { shellId: 'pwd' });
+    await r.waitFor(pa.id, esc(ws));
+    await r.waitFor(pb.id, esc(outside));
+    await expect(r.svc.spawn(3, { shellId: 'pwd' })).rejects.toMatchObject({ code: 'NO_WORKSPACE' });
+    await Promise.all([r.waitExit(pa.id), r.waitExit(pb.id)]);
+    const a = await r.svc.spawn(1, { shellId: 'bash' });
+    const b = await r.svc.spawn(2, { shellId: 'bash' });
+    roots.set(1, path.join(ws, 'sub dir'));
+    r.svc.setWorkspace(path.join(ws, 'sub dir'), 1); // window 1 opened another folder: window 2's shell is not of it
+    await r.waitExit(a.id);
+    expect(r.svc.count(2)).toBe(1);
+    r.svc.setWorkspace(outside, 2); // same folder: nothing happens
+    expect(r.svc.count(2)).toBe(1);
+    r.svc.setWorkspace(null); // no owner: as before, every window's shells of another folder go
+    await r.waitExit(b.id);
+    expect(r.svc.count()).toBe(0);
+  });
+
+  it('the root is compared again after the await — per window', async () => {
+    const roots = new Map<number, string | null>([[1, ws], [2, outside]]);
+    let during = () => {};
+    const opts = { getWorkspaceRoot: (owner: number) => roots.get(owner) ?? null, detect: async () => (during(), SHELLS) };
+    // Another window switching folders meanwhile does not matter…
+    during = () => void roots.set(2, ws);
+    const ok = await rig(opts).svc.spawn(1, { shellId: 'bash' });
+    expect(ok.cwd).toBe('');
+    // …this window switching does: never a shell in its previous folder.
+    roots.set(1, ws);
+    during = () => void roots.set(1, outside);
+    await expect(rig(opts).svc.spawn(1, { shellId: 'bash' })).rejects.toMatchObject({ code: 'NO_WORKSPACE', message: 'The folder changed' });
+  });
+
   it('only the owning window may write / resize / kill', async () => {
     const r = rig();
     const t = await r.svc.spawn(1, { shellId: 'bash' });
@@ -367,6 +404,92 @@ describe('TerminalService (real node-pty)', () => {
       const none = rig({ detectClaude: async () => ({ available: false, hint: 'install it' }) });
       await expect(none.svc.spawn(1, { preset: 'claude' })).rejects.toMatchObject({ code: 'ENOENT', message: 'install it' });
       await expect(none.svc.spawn(1, { preset: 'gpt' })).rejects.toMatchObject({ code: 'EINVAL' });
+    } finally {
+      fs.rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  it('Follow, several windows: case rule, real-path rule and git numbers are the asking window’s; events only while it keeps the folder', async () => {
+    const bin = fs.mkdtempSync(path.join(tmpRoot, 'bin-'));
+    fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\necho "DIR=$ONE_FOLLOW_DIR"\nexec sleep 30\n', { mode: 0o755 });
+    try {
+      const roots = new Map<number, string | null>([[1, ws], [2, outside]]);
+      const seen: string[] = [];
+      const r = rig({
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: bin },
+        getWorkspaceRoot: (owner) => roots.get(owner) ?? null,
+        follow: {
+          dir: path.join(bin, 'f'),
+          foldCase: (owner) => (seen.push(`fold:${owner}`), false),
+          inside: async (rel, owner) => (seen.push(`inside:${owner}:${rel}`), true),
+          numstat: async (owner) => (seen.push(`numstat:${owner}`), null),
+        },
+      });
+      const follows: Array<[number, unknown]> = [];
+      r.svc.onOutput((owner, ch, payload) => void (ch === 'term:follow' && follows.push([owner, payload])));
+      const a = await r.svc.spawn(1, { preset: 'claude', follow: true });
+      const b = await r.svc.spawn(2, { preset: 'claude', follow: true });
+      expect(seen).toEqual(['fold:1', 'numstat:1', 'fold:2', 'numstat:2']);
+      const dirOf = async (id: number) => /DIR=(\S+)/.exec(await r.waitFor(id, /DIR=\S+\r?\n/))![1];
+      const [da, db] = [await dirOf(a.id), await dirOf(b.id)];
+      let n = 0;
+      const edit = (dir: string, file: string) => {
+        const f = path.join(dir, 'in', `ev.t${++n}`);
+        fs.writeFileSync(f, JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: file, new_string: 'x' } }));
+        fs.renameSync(f, `${f}.json`);
+      };
+      edit(db, path.join(outside, 'b.md'));
+      await expect.poll(() => follows.length, { timeout: 5000 }).toBe(1);
+      expect(follows[0]).toEqual([2, expect.objectContaining({ id: b.id, kind: 'edit', path: 'b.md' })]);
+      expect(seen).toContain('inside:2:b.md');
+      // Window 2 now has another folder (its shells not killed yet): nothing of the old one reaches it; window 1 goes on.
+      roots.set(2, path.join(ws, 'sub dir'));
+      edit(db, path.join(outside, 'late.md'));
+      edit(da, path.join(ws, 'a.md'));
+      await expect.poll(() => seen.includes('inside:2:late.md') && follows.length === 2, { timeout: 5000 }).toBe(true);
+      await new Promise((res) => setTimeout(res, 50));
+      expect(follows.map(([owner, e]) => [owner, (e as { path: string }).path])).toEqual([
+        [2, 'b.md'],
+        [1, 'a.md'],
+      ]);
+      expect(seen).toContain('inside:1:a.md');
+    } finally {
+      fs.rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  it('Follow, several windows: one sweep for the app — window A’s long-running session survives window B’s first follow terminal', async () => {
+    const bin = fs.mkdtempSync(path.join(tmpRoot, 'bin-'));
+    fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\necho "DIR=$ONE_FOLLOW_DIR"\nexec sleep 30\n', { mode: 0o755 });
+    try {
+      const roots = new Map<number, string | null>([[1, ws], [2, outside]]);
+      const data = path.join(bin, 'f');
+      const old = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000); // older than the stale age (a day)
+      // A session folder a crashed run left behind: stale and nobody's, so the sweep removes it.
+      const crashed = path.join(data, 'a'.repeat(32));
+      fs.mkdirSync(crashed, { recursive: true });
+      fs.utimesSync(crashed, old, old);
+      const r = rig({
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: bin },
+        getWorkspaceRoot: (owner) => roots.get(owner) ?? null,
+        follow: { dir: data, foldCase: () => false, inside: async () => true },
+      });
+      const follows: number[] = [];
+      r.svc.onOutput((owner, ch) => void (ch === 'term:follow' && follows.push(owner)));
+      const dirOf = async (id: number) => /DIR=(\S+)/.exec(await r.waitFor(id, /DIR=\S+\r?\n/))![1];
+      const a = await r.svc.spawn(1, { preset: 'claude', follow: true });
+      const da = await dirOf(a.id);
+      await expect.poll(() => fs.existsSync(crashed)).toBe(false);
+      fs.utimesSync(da, old, old); // window A's Claude has been running for two days
+      const b = await r.svc.spawn(2, { preset: 'claude', follow: true });
+      await dirOf(b.id);
+      await new Promise((res) => setTimeout(res, 150)); // a sweep runs async: give one the time to finish
+      expect(fs.existsSync(path.join(da, 'in'))).toBe(true);
+      // …and A still follows.
+      const f = path.join(da, 'in', 'ev.t1');
+      fs.writeFileSync(f, JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Edit', tool_input: { file_path: path.join(ws, 'a.md'), new_string: 'x' } }));
+      fs.renameSync(f, `${f}.json`);
+      await expect.poll(() => follows, { timeout: 5000 }).toEqual([1]);
     } finally {
       fs.rmSync(bin, { recursive: true, force: true });
     }

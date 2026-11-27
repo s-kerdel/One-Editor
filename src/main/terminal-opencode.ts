@@ -53,8 +53,8 @@ export interface OpencodeServer {
 }
 
 export interface OpencodeOptions {
-  /** The workspace's real-path rule for a relative path (`Workspace.real`): false = outside, ignore. */
-  inside: (rel: string) => Promise<boolean>;
+  /** The real-path rule (`Workspace.real`) of the folder terminal `terminalId` works in: false = outside, ignore. */
+  inside: (rel: string, terminalId: number) => Promise<boolean>;
   emitFollow: (terminalId: number, e: TerminalFollowEvent) => void;
   emitChanges: (terminalId: number, e: TerminalChangesEvent) => void;
   /** Test hook: the server process (default: `opencode serve` in a process group of its own). */
@@ -482,7 +482,7 @@ export class OpencodeTracker {
     const r = onEvent(t.st, ev, t.ctx, t.folder);
     for (const f of r.follow) {
       if (t.closed) return;
-      if (f.path && !(await this.o.inside(f.path).catch(() => false))) continue; // outside: never shown
+      if (f.path && !(await this.o.inside(f.path, t.id).catch(() => false))) continue; // outside: never shown
       this.o.emitFollow(t.id, { id: t.id, agent: 'opencode', ...f });
     }
     for (const s of r.refresh) this.scheduleDiff(t, s);

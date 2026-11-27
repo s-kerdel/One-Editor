@@ -289,16 +289,18 @@ interface Session {
 export interface ClaudeFollowOptions {
   /** `<app data>/claude-follow`. */
   dir: string;
-  /** The workspace's real-path rule for a relative path (`Workspace.real`): false = outside, ignore. */
-  inside: (rel: string) => Promise<boolean>;
+  /** The real-path rule (`Workspace.real`) of the folder terminal `terminalId` works in: false = outside, ignore.
+   *  One instance serves every window (the stale-folder sweep must see every live session), so it names the terminal. */
+  inside: (rel: string, terminalId: number) => Promise<boolean>;
   emit: (terminalId: number, e: TerminalFollowEvent) => void;
   /** The terminal's change list moved (`term:changes`). */
   emitChanges?: (terminalId: number, e: TerminalChangesEvent) => void;
   /**
    * git's numstat for the open folder (`BackendService.git('numstat')`: behind the trust gate, with the git
    * service's own safety switches — this module never starts git). null / a failure = no exact numbers.
+   * Of the folder terminal `terminalId` works in.
    */
-  numstat?: () => Promise<unknown>;
+  numstat?: (terminalId: number) => Promise<unknown>;
   /** Test hooks: false = no change events (the poll alone), other timings. */
   watch?: boolean;
   timing?: Partial<typeof FOLLOW_TIMING>;
@@ -484,7 +486,7 @@ export class ClaudeFollow {
         }
         const rel = raw.filePath ? mapFollowPath(raw.filePath, s.ctx) : null;
         // Outside the open folder (Claude's own plan / memory files, anything else): never shown, never logged.
-        if (!rel || !(await this.o.inside(rel).catch(() => false)) || !this.sessions.has(s.id)) continue;
+        if (!rel || !(await this.o.inside(rel, s.id).catch(() => false)) || !this.sessions.has(s.id)) continue;
         if (raw.kind === 'pre') {
           this.step(s, { kind: 'pre', path: rel });
           continue;
@@ -514,7 +516,7 @@ export class ClaudeFollow {
   /** What was already uncommitted before Claude did anything (asked once at the start, again at a prompt while unknown). */
   private async baseline(s: Session) {
     if (!this.o.numstat || s.ch.baseline) return;
-    const rows = await this.o.numstat().catch(() => null);
+    const rows = await this.o.numstat(s.id).catch(() => null);
     if (this.sessions.has(s.id)) setBaseline(s.ch, rows, this.win(s));
   }
 
@@ -528,7 +530,7 @@ export class ClaudeFollow {
     try {
       do {
         s.settleAgain = false;
-        const rows = this.o.numstat ? await this.o.numstat().catch(() => null) : null;
+        const rows = this.o.numstat ? await this.o.numstat(s.id).catch(() => null) : null;
         if (!this.sessions.has(s.id)) return;
         if (reconcile(s.ch, rows, this.win(s))) s.sender.schedule();
       } while (s.settleAgain);

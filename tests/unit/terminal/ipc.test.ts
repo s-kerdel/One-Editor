@@ -132,6 +132,22 @@ describe('registerTerminalIpc', () => {
     }
   });
 
+  it('several windows: spawn and the default shell use the calling window’s folder (owner = sender id)', async () => {
+    const handlers = new Map<string, (e: IpcEventLike, ...a: unknown[]) => unknown>();
+    const wsl: ShellInfo = { id: 'wsl:Ubuntu', name: 'Ubuntu (WSL)', kind: 'wsl', path: 'C:\\Windows\\System32\\wsl.exe', args: ['-d', 'Ubuntu'] };
+    const roots: Record<number, string | null> = { 1: '\\\\wsl.localhost\\Ubuntu\\home\\me', 2: 'C:\\notes', 3: null };
+    const svc = new TerminalService({ loadPty: () => fakePty, getWorkspaceRoot: (owner) => roots[owner] ?? null, detect: async () => [{ ...SHELLS[0], id: 'pwsh', kind: 'pwsh' }, wsl], platform: 'win32', windowsBuild: 22631, treeKill: () => {} });
+    registerTerminalIpc({ handle: (ch, fn) => void handlers.set(ch, fn), on: () => {} }, svc, { isTrusted: () => true });
+    const invoke = (ch: string, s: number, ...a: unknown[]) => handlers.get(ch)!({ sender: new FakeSender(s) }, ...a) as Promise<any>;
+    expect((await invoke(CH.shells, 1)).result.defaultId).toBe('wsl:Ubuntu');
+    expect((await invoke(CH.shells, 2)).result.defaultId).toBe('pwsh');
+    expect((await invoke(CH.shells, 3)).result.defaultId).toBe('pwsh'); // no folder
+    expect(await invoke(CH.spawn, 3, {})).toMatchObject({ ok: false, error: { code: 'NO_WORKSPACE' } });
+    expect(await invoke(CH.spawn, 2, {})).toMatchObject({ ok: true, result: { shell: { id: 'pwsh' } } });
+    expect(FakePty.last?.opts.cwd).toBe('C:\\notes');
+    svc.dispose();
+  });
+
   it('never sends to a destroyed window', async () => {
     const { invoke } = setup();
     const a = new FakeSender(1);

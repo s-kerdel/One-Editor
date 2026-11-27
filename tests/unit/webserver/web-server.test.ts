@@ -239,6 +239,51 @@ describe('WebServerService', () => {
     expect(t.svc.status()).toMatchObject({ state: 'stopped', notice: 'Opening another folder stopped the web server.' });
   });
 
+  it('several windows: serves the caller’s folder; another folder is refused while it runs, naming the one served', async () => {
+    const t = setup({ root: null }); // getRoot() is not what start uses when the caller's folder is given
+    const p = t.svc.start({ port: null, access: 'local' }, '/home/me/a');
+    expect(t.spawned[0][0]).toBe('/home/me/a');
+    const refused = { code: 'EBUSY', message: 'The web server is already serving /home/me/a — stop it first' };
+    await expect(t.svc.start({ port: null, access: 'local' }, '/home/me/b')).rejects.toMatchObject(refused); // while starting
+    t.children[0].ready();
+    expect(await p).toMatchObject({ state: 'running', root: '/home/me/a' });
+    await expect(t.svc.start({ port: null, access: 'local' }, '/home/me/b')).rejects.toMatchObject(refused);
+    await expect(t.svc.start({ port: null, access: 'local' }, null)).rejects.toMatchObject(refused); // a window without a folder
+    await expect(t.svc.start({ port: null, access: 'local' }, '/home/me/a')).rejects.toMatchObject({ code: 'EBUSY', message: 'A web server is already running — stop it first' });
+    expect(t.spawned).toHaveLength(1);
+    expect(t.children[0].sent).toEqual([]);
+    // Stopped (from any window): another folder may start it.
+    const stopped = t.svc.stop();
+    t.children[0].exit(0);
+    await stopped;
+    const q = t.svc.start({ port: null, access: 'local' }, '/home/me/b');
+    t.children[1].ready();
+    expect(await q).toMatchObject({ state: 'running', root: '/home/me/b' });
+    await expect(setup().svc.start({ port: null, access: 'local' }, null)).rejects.toMatchObject({ code: 'NO_WORKSPACE' });
+  });
+
+  it('rootsChanged: stops only when no window has its folder open any more, with a notice', async () => {
+    const t = setup();
+    const p = t.svc.start({ port: null, access: 'local' }, '/home/me/a');
+    t.children[0].ready();
+    await p;
+    t.svc.rootsChanged(['/home/me/b', '/home/me/a']);
+    t.svc.rootsChanged(['/home/me/a']);
+    expect(t.children[0].sent).toEqual([]);
+    t.svc.rootsChanged(['/home/me/b', '/home/me/A']); // exact: a case twin is another folder on a case-sensitive disk
+    expect(t.children[0].sent).toEqual([{ type: 'stop' }]);
+    t.children[0].exit(0);
+    expect(t.svc.status()).toMatchObject({ state: 'stopped', root: null, notice: 'Closing its folder stopped the web server.' });
+    t.svc.rootsChanged([]); // nothing running: nothing happens
+    expect(t.svc.status().notice).toBe('Closing its folder stopped the web server.');
+    // While still starting: the child is terminated.
+    const s = t.svc.start({ port: null, access: 'local' }, '/home/me/a');
+    t.svc.rootsChanged([]);
+    expect(t.children[1].kills).toEqual([undefined]);
+    t.children[1].exit(null, 'SIGTERM');
+    expect(await s).toMatchObject({ state: 'stopped', notice: 'Closing its folder stopped the web server.' });
+  });
+
   it('dispose (quit) kills the child; its exit is not an error', async () => {
     const t = setup();
     const p = t.svc.start({ port: null, access: 'local' });
@@ -291,6 +336,24 @@ describe('IPC', () => {
     t.children[0].ready();
     expect(await started).toMatchObject({ ok: true, result: { state: 'running', port: 4317 } });
     expect(await call(CH.open, true, 'https://evil.example/')).toMatchObject({ ok: false, error: { code: 'EACCES' } });
+  });
+
+  it('rootOf: start serves the calling window’s folder; status / stop are the same for every window', async () => {
+    const handlers = new Map<string, (e: unknown, ...a: unknown[]) => unknown>();
+    const t = setup({ root: '/never/this' });
+    const roots: Record<number, string | null> = { 1: '/home/me/a', 2: '/home/me/b', 3: null };
+    registerWebServerIpc({ handle: (ch, fn) => void handlers.set(ch, fn) }, t.svc, { isTrusted: () => true, rootOf: (e) => roots[(e as { id: number }).id] ?? null });
+    const call = (win: number, ch: string, ...a: unknown[]) => handlers.get(ch)!({ id: win }, ...a);
+    expect(await call(3, CH.start, { port: null, access: 'local' })).toMatchObject({ ok: false, error: { code: 'NO_WORKSPACE' } });
+    const started = call(1, CH.start, { port: null, access: 'local' });
+    t.children[0].ready();
+    expect(await started).toMatchObject({ ok: true, result: { state: 'running', root: '/home/me/a' } });
+    expect(t.spawned[0][0]).toBe('/home/me/a');
+    expect(await call(2, CH.start, { port: null, access: 'local' })).toMatchObject({ ok: false, error: { code: 'EBUSY', message: expect.stringContaining('/home/me/a') } });
+    expect(await call(2, CH.status)).toMatchObject({ ok: true, result: { state: 'running', root: '/home/me/a' } });
+    const stopped = call(2, CH.stop);
+    t.children[0].exit(0);
+    expect(await stopped).toMatchObject({ ok: true, result: { state: 'stopped' } });
   });
 
   it('the preload bridge coerces argument types and subscribes to one fixed channel', async () => {

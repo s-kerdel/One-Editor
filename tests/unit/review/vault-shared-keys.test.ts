@@ -6,7 +6,8 @@ import { describe, it, expect, afterAll } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { VaultService, sharedKeyMessage, type VaultSharedKeyRequest } from '../../../src/main/vault';
+import { VaultService, registerVaultIpc, sharedKeyMessage, type VaultSharedKeyRequest } from '../../../src/main/vault';
+import { VAULT_CHANNELS } from '../../../src/shared/vault';
 
 const dir = path.resolve(__dirname, '../../../.tmp/sec-desktop/unit-vault-shared');
 fs.mkdirSync(dir, { recursive: true });
@@ -132,5 +133,66 @@ describe('shared vault keys across folders', () => {
     expect(odd.message).toContain('saved earlier, from another folder');
     expect(odd.message.length).toBeLessThan(200);
     expect(odd.message).not.toMatch(/\s{2,}/);
+  });
+});
+
+describe('several windows: one vault, scoped by the calling window', () => {
+  it('folder A cannot read folder B’s key; shared keys keep their rules per folder; an unknown window is refused', async () => {
+    const file = path.join(dir, 'windows.json');
+    const roots = new Map<number, string | null>([[1, '/home/me/a'], [2, '/home/me/b'], [3, null]]);
+    const asked: VaultSharedKeyRequest[] = [];
+    const scopeOf = (e: unknown) => {
+      const id = (e as { id: number }).id;
+      if (!roots.has(id)) return null; // not a window of ours
+      return { root: () => roots.get(id) ?? null, os: 'linux', confirmSharedKey: async (q: VaultSharedKeyRequest) => (asked.push(q), id === 2 ? false : true) };
+    };
+    // The constructor's scope is some other folder: the caller's must win on every call.
+    const v = new VaultService(file, crypto, { root: () => '/somewhere/else', os: 'linux' });
+    const handlers = new Map<string, (e: unknown, ...a: unknown[]) => unknown>();
+    registerVaultIpc({ handle: (ch, fn) => void handlers.set(ch, fn) }, v, { isTrusted: () => true, scopeOf });
+    const call = (win: number, ch: string, ...a: unknown[]) => handlers.get(ch)!({ id: win }, ...a) as Promise<{ ok: boolean; result?: unknown; error?: { code: string } }>;
+    const no = { ok: false, error: { code: 'EACCES' } };
+
+    expect(await call(1, VAULT_CHANNELS.set, '/home/me/a::db', 'secret-a')).toEqual({ ok: true, result: undefined });
+    expect(await call(2, VAULT_CHANNELS.set, '/home/me/b::db', 'secret-b')).toEqual({ ok: true, result: undefined });
+    expect(await call(1, VAULT_CHANNELS.get, '/home/me/a::db')).toEqual({ ok: true, result: 'secret-a' });
+    expect(await call(2, VAULT_CHANNELS.get, '/home/me/a::db')).toMatchObject(no);
+    expect(await call(1, VAULT_CHANNELS.get, '/home/me/b::db')).toMatchObject(no);
+    expect(await call(2, VAULT_CHANNELS.set, '/home/me/a::db', 'overwrite')).toMatchObject(no);
+    expect(await call(2, VAULT_CHANNELS.remove, '/home/me/a::db')).toMatchObject(no);
+    expect(await call(2, VAULT_CHANNELS.has, ['/home/me/a::db', '/home/me/b::db'])).toEqual({ ok: true, result: ['/home/me/b::db'] });
+    expect(await call(3, VAULT_CHANNELS.has, ['/home/me/a::db'])).toEqual({ ok: true, result: [] }); // no folder: no folder keys
+
+    // A shared key belongs to the window that saved it; another asks in ITS dialog (deny there, allow elsewhere).
+    expect(await call(1, VAULT_CHANNELS.set, 'api', 'shared-v')).toEqual({ ok: true, result: undefined });
+    expect(await call(1, VAULT_CHANNELS.get, 'api')).toEqual({ ok: true, result: 'shared-v' });
+    expect(asked).toEqual([]);
+    expect(await call(2, VAULT_CHANNELS.get, 'api')).toMatchObject(no);
+    expect(await call(2, VAULT_CHANNELS.get, 'api')).toMatchObject(no); // denied for this session, not asked again
+    expect(asked).toEqual([{ key: 'api', root: '/home/me/b', owner: '/home/me/a', action: 'read' }]);
+    expect(await call(3, VAULT_CHANNELS.get, 'api')).toMatchObject(no); // a window without a folder
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).owners).toEqual({ api: '/home/me/a' });
+
+    // The window opens another folder: the scope follows it on the next call.
+    roots.set(1, '/home/me/c');
+    expect(await call(1, VAULT_CHANNELS.get, '/home/me/a::db')).toMatchObject(no);
+    expect(await call(1, VAULT_CHANNELS.get, 'api')).toEqual({ ok: true, result: 'shared-v' }); // c allowed in its dialog
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).grants).toEqual({ '/home/me/c': ['api'] });
+
+    // Not a window of ours: every key call is refused (status stays harmless).
+    for (const [ch, ...a] of [[VAULT_CHANNELS.get, 'api'], [VAULT_CHANNELS.has, ['api']], [VAULT_CHANNELS.set, 'api', 'x'], [VAULT_CHANNELS.remove, 'api']] as const) expect(await call(9, ch, ...a)).toMatchObject(no);
+    expect(await call(9, VAULT_CHANNELS.status)).toMatchObject({ ok: true, result: { available: true } });
+    expect(await call(1, VAULT_CHANNELS.get, 'api')).toEqual({ ok: true, result: 'shared-v' });
+  });
+
+  it('without scopeOf: the constructor’s scope, as before', async () => {
+    const handlers = new Map<string, (e: unknown, ...a: unknown[]) => unknown>();
+    const v = new VaultService(path.join(dir, 'one-window.json'), crypto, { root: () => '/home/me/a', os: 'linux' });
+    registerVaultIpc({ handle: (ch, fn) => void handlers.set(ch, fn) }, v, { isTrusted: () => true });
+    expect(await handlers.get(VAULT_CHANNELS.set)!({}, '/home/me/a::k', 'v')).toEqual({ ok: true, result: undefined });
+    expect(await handlers.get(VAULT_CHANNELS.get)!({}, '/home/me/b::k')).toMatchObject({ ok: false, error: { code: 'EACCES' } });
+    // A per-call scope on the service itself wins over the constructor's.
+    await expect(v.get('/home/me/a::k', { root: () => '/home/me/b', os: 'linux' })).rejects.toMatchObject({ code: 'EACCES' });
+    expect(await v.get('/home/me/a::k')).toBe('v');
   });
 });

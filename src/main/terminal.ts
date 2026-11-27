@@ -225,7 +225,8 @@ export type TerminalSink = (owner: number, channel: typeof CH.data | typeof CH.e
 export interface TerminalServiceOptions {
   /** Loads node-pty (called on the first spawn only). */
   loadPty: () => PtyModuleLike;
-  getWorkspaceRoot: () => string | null;
+  /** The folder open in the window `owner` (webContents id), or null. One window: the open folder. */
+  getWorkspaceRoot: (owner: number) => string | null;
   platform?: string;
   env?: Record<string, string | undefined>;
   appVersion?: string;
@@ -253,10 +254,10 @@ export interface TerminalServiceOptions {
   /** Windows: kill a process tree, outliving this process (default: detached `taskkill /T /F`). */
   treeKill?: (pid: number) => void;
   /** "Follow Claude's / Opencode's edits" (terminal-follow.ts, terminal-opencode.ts): `dir` = `<app data>/claude-follow`;
-   *  `foldCase` / `inside` are the open workspace's case rule and real-path rule; `numstat` = git's line counts for
-   *  the open folder through the backend's trust gate (`BackendService.git('numstat')`; this service never starts
-   *  git itself). Unset = both features are off. */
-  follow?: { dir: string; foldCase: () => boolean; inside: (rel: string) => Promise<boolean>; numstat?: () => Promise<unknown> };
+   *  `foldCase` / `inside` are the case rule and real-path rule of the folder open in window `owner`; `numstat` = git's
+   *  line counts for that folder through the backend's trust gate (`BackendService.git('numstat')`; this service never
+   *  starts git itself). Unset = both features are off. */
+  follow?: { dir: string; foldCase: (owner: number) => boolean; inside: (rel: string, owner: number) => Promise<boolean>; numstat?: (owner: number) => Promise<unknown> };
 }
 
 export class TerminalService {
@@ -273,8 +274,11 @@ export class TerminalService {
   private ptyMod: PtyModuleLike | null = null;
   private nextId = 1;
   private disposed = false;
+  /** One of each for every window: the stale-folder sweep must see every live session. They name the terminal; see viaOwner. */
   private followSvc: ClaudeFollow | null = null;
   private opencodeSvc: OpencodeTracker | null = null;
+  /** Terminal id → owner while a spawn is still starting (its follow session opens before the terminal is listed). */
+  private readonly starting = new Map<number, number>();
   private readonly opencodeP = new Map<string, Promise<OpencodeInfo>>(); // by WSL distro ('' = native), like claudeP
 
   constructor(o: TerminalServiceOptions) {
@@ -324,11 +328,12 @@ export class TerminalService {
    * Shells on this machine (+ whether Claude Code is there when `withClaude`: that lookup may start a WSL
    * distro, so nothing on the open path waits for it). `prefer` = the renderer's default-shell setting:
    * when that (or the automatic default) is a WSL distro, Claude is looked up inside it.
+   * `owner`: the asking window (its folder picks the default: a WSL folder → that distro); omitted = no folder.
    */
-  async listShells(refresh = false, prefer?: unknown, withClaude = false): Promise<ShellList> {
+  async listShells(refresh = false, prefer?: unknown, withClaude = false, owner?: number): Promise<ShellList> {
     const shells = await this.detected(refresh);
     const win = this.platform === 'win32';
-    const defaultId = pickDefaultShell(shells, { platform: this.platform, root: this.o.getWorkspaceRoot() });
+    const defaultId = pickDefaultShell(shells, { platform: this.platform, root: owner === undefined ? null : this.o.getWorkspaceRoot(owner) });
     const preferred = shells.find((s) => s.id === prefer) ?? shells.find((s) => s.id === defaultId);
     // Both agents live where the default shell is; the two lookups (each may start the distro's login shell) overlap.
     const wslShell = win && preferred?.kind === 'wsl' ? preferred : null;
@@ -380,11 +385,12 @@ export class TerminalService {
   async spawn(owner: number, raw: unknown): Promise<TerminalSpawnResult> {
     if (this.disposed) throw fail('EIO', 'Shutting down');
     const req = parseSpawnRequest(raw, this.limits);
-    const root = this.o.getWorkspaceRoot();
+    const root = this.o.getWorkspaceRoot(owner);
     if (!root) throw fail('NO_WORKSPACE', 'Open a folder to use the terminal');
     this.reserve(owner); // counts against the caps while we await detection / the folder check
+    let id = -1;
     try {
-      const list = await this.listShells(false, req.shellId ?? req.prefer, !!req.preset);
+      const list = await this.listShells(false, req.shellId ?? req.prefer, !!req.preset, owner);
       const shellId = req.shellId ?? (req.prefer && list.shells.some((s) => s.id === req.prefer) ? req.prefer : list.defaultId);
       let shell = list.shells.find((s) => s.id === shellId);
       if (!shell && !(req.preset && !req.shellId)) throw fail('EINVAL', shellId ? `Unknown shell: ${shellId}` : 'No shell found on this computer');
@@ -393,16 +399,17 @@ export class TerminalService {
       const opencode = req.preset === 'opencode' ? list.opencode : null;
       if (opencode && !opencode.available) throw fail('ENOENT', opencode.hint ?? 'Opencode is not installed');
       const cwd = await resolveTerminalCwd(root, req.cwd, { platform: this.platform, fs: this.o.fs });
-      // The folder may have changed while we awaited: never start a shell in the previous one.
-      if (this.o.getWorkspaceRoot() !== root) throw fail('NO_WORKSPACE', 'The folder changed');
+      // This window's folder may have changed while we awaited: never start a shell in the previous one.
+      if (this.o.getWorkspaceRoot(owner) !== root) throw fail('NO_WORKSPACE', 'The folder changed');
       if (this.disposed) throw fail('EIO', 'Shutting down');
       const env = this.o.env ?? process.env;
-      const id = this.nextId++;
+      id = this.nextId++;
+      this.starting.set(id, owner);
       let plan;
       let notice: string | undefined;
       if (claude) {
-        const follow = req.follow ? await this.openFollow(id, root, claude, list.shells, env) : null;
-        if (follow && (this.o.getWorkspaceRoot() !== root || this.disposed)) {
+        const follow = req.follow ? await this.openFollow(id, owner, root, claude, list.shells, env) : null;
+        if (follow && (this.o.getWorkspaceRoot(owner) !== root || this.disposed)) {
           this.followSvc?.close(id);
           throw fail('NO_WORKSPACE', 'The folder changed');
         }
@@ -420,9 +427,9 @@ export class TerminalService {
         // failure there means plain opencode, with a notice naming the part that failed.
         const inWsl = opencode.via === 'wsl';
         let why: WslFollowFail | undefined;
-        const server = req.follow ? await this.openOpencode(id, root, opencode, env, inWsl ? shell?.path : undefined, (x) => (why = x)) : null;
+        const server = req.follow ? await this.openOpencode(id, owner, root, opencode, env, inWsl ? shell?.path : undefined, (x) => (why = x)) : null;
         if (inWsl && req.follow && !server) notice = wslFollowNotice(why);
-        if (server && (this.o.getWorkspaceRoot() !== root || this.disposed)) {
+        if (server && (this.o.getWorkspaceRoot(owner) !== root || this.disposed)) {
           this.opencodeSvc?.close(id);
           throw fail('NO_WORKSPACE', 'The folder changed');
         }
@@ -458,6 +465,7 @@ export class TerminalService {
       );
       return { id: t.id, pid: pty.pid, shell: shell!, cwd: cwd.rel, windowsBuild: this.windowsBuild(), ...(notice ? { notice } : {}) };
     } finally {
+      this.starting.delete(id);
       this.release(owner);
     }
   }
@@ -467,25 +475,26 @@ export class TerminalService {
    * runs the POSIX hook: always inside WSL / on Unix; on Windows only with Git Bash (Claude Code falls
    * back to PowerShell without it). Inside WSL the session folder must be on a drive (WSLENV /p maps it).
    */
-  private async openFollow(id: number, root: string, claude: ClaudeInfo, shells: ShellInfo[], env: Record<string, string | undefined>) {
+  private async openFollow(id: number, owner: number, root: string, claude: ClaudeInfo, shells: ShellInfo[], env: Record<string, string | undefined>) {
     const f = this.o.follow;
     if (!f) return null;
     const wsl = claude.via === 'wsl' ? claude.distro : undefined;
     if (wsl ? !/^[a-z]:[\\/]/i.test(f.dir) : this.platform === 'win32' && !shells.some((s) => s.kind === 'gitbash') && !envGet(env, 'CLAUDE_CODE_GIT_BASH_PATH', true)) return null;
     // cmd.exe cannot take % or a quote in the settings path (cmdQuote would refuse the whole start).
     if (this.platform === 'win32' && /["%\r\n]/.test(f.dir)) return null;
+    const numstat = f.numstat;
     this.followSvc ??= new ClaudeFollow({
       dir: f.dir,
-      inside: f.inside,
-      numstat: f.numstat,
+      inside: (rel, termId) => this.viaOwner(termId, false, (o) => f.inside(rel, o)),
+      numstat: numstat && ((termId) => this.viaOwner<unknown>(termId, null, (o) => numstat(o))),
       emit: (termId, e) => this.emitFor(termId, CH.follow, e),
       emitChanges: (termId, e) => this.emitFor(termId, CH.changes, e),
     });
-    return this.followSvc.open(id, { root, realRoot: wsl ? null : await realRootOf(root, this.o.fs ?? fsp), platform: this.platform, foldCase: f.foldCase(), wslDistro: wsl });
+    return this.followSvc.open(id, { root, realRoot: wsl ? null : await realRootOf(root, this.o.fs ?? fsp), platform: this.platform, foldCase: f.foldCase(owner), wslDistro: wsl });
   }
 
   /** The private opencode server for terminal `id` + tracking of it, or null (opencode then starts without the change list). */
-  private async openOpencode(id: number, root: string, info: OpencodeInfo, env: Record<string, string | undefined>, wslExe: string | undefined, onFail: (why: WslFollowFail) => void) {
+  private async openOpencode(id: number, owner: number, root: string, info: OpencodeInfo, env: Record<string, string | undefined>, wslExe: string | undefined, onFail: (why: WslFollowFail) => void) {
     const f = this.o.follow;
     if (!f || !info.path) return null;
     // Inside WSL: started in the distro through wsl.exe (a Linux path is not a program main can start).
@@ -496,20 +505,26 @@ export class TerminalService {
       return null;
     }
     this.opencodeSvc ??= new OpencodeTracker({
-      inside: f.inside,
+      inside: (rel, termId) => this.viaOwner(termId, false, (o) => f.inside(rel, o)),
       spawnServer: this.o.opencodeSpawn,
       treeKill: (pid) => this.treeKill(pid),
       emitFollow: (termId, e) => this.emitFor(termId, CH.follow, e),
       emitChanges: (termId, e) => this.emitFor(termId, CH.changes, e),
     });
     // opencode names files by its own working folder, which the OS reports without links: both names of the folder count.
-    return this.opencodeSvc.open(id, { bin: info.path, root, realRoot: wsl ? null : await realRootOf(root, this.o.fs ?? fsp), platform: this.platform, foldCase: f.foldCase(), env, wsl }, onFail);
+    return this.opencodeSvc.open(id, { bin: info.path, root, realRoot: wsl ? null : await realRootOf(root, this.o.fs ?? fsp), platform: this.platform, foldCase: f.foldCase(owner), env, wsl }, onFail);
   }
 
-  /** Only for a live terminal of the folder that is still open. */
+  /** A follow callback for terminal `termId`: its window's folder rules; a terminal that is gone gets `none` (nothing is checked). */
+  private viaOwner<T>(termId: number, none: T, fn: (owner: number) => Promise<T>): Promise<T> {
+    const owner = this.terms.get(termId)?.owner ?? this.starting.get(termId);
+    return owner === undefined ? Promise.resolve(none) : fn(owner);
+  }
+
+  /** Only for a live terminal of the folder its window still has open. */
   private emitFor(termId: number, channel: typeof CH.follow | typeof CH.changes, e: TerminalFollowEvent | TerminalChangesEvent) {
     const t = this.terms.get(termId);
-    if (t && !t.exited && t.root === this.o.getWorkspaceRoot()) this.emit(t.owner, channel, e);
+    if (t && !t.exited && t.root === this.o.getWorkspaceRoot(t.owner)) this.emit(t.owner, channel, e);
   }
 
   write(owner: number, id: unknown, data: unknown): boolean {
@@ -560,9 +575,9 @@ export class TerminalService {
     for (const t of [...this.terms.values()]) if (t.owner === owner) this.terminate(t, false);
   }
 
-  /** Another folder was opened: shells started in the previous one go. */
-  setWorkspace(root: string | null): void {
-    for (const t of [...this.terms.values()]) if (t.root !== root) this.terminate(t, false);
+  /** Another folder was opened: shells started in the previous one go — of window `owner` only; omitted = every window's. */
+  setWorkspace(root: string | null, owner?: number): void {
+    for (const t of [...this.terms.values()]) if (t.root !== root && (owner === undefined || t.owner === owner)) this.terminate(t, false);
   }
 
   /** App quit: kill everything now (the tree kill on Windows outlives us). */
@@ -812,7 +827,7 @@ export function registerTerminalIpc(ipc: IpcMainLike, svc: TerminalService, o: {
   });
   const denied: TerminalReply<never> = { ok: false, error: { code: 'EACCES', message: 'Untrusted sender' } };
 
-  ipc.handle(CH.shells, (e, refresh, prefer, withClaude) => (o.isTrusted(e) ? reply(() => svc.listShells(refresh === true, typeof prefer === 'string' && SHELL_ID.test(prefer) ? prefer : undefined, withClaude === true)) : denied));
+  ipc.handle(CH.shells, (e, refresh, prefer, withClaude) => (o.isTrusted(e) ? reply(() => svc.listShells(refresh === true, typeof prefer === 'string' && SHELL_ID.test(prefer) ? prefer : undefined, withClaude === true, e.sender.id)) : denied));
   ipc.handle(CH.spawn, (e, req) => {
     if (!o.isTrusted(e)) return denied;
     track(e.sender);

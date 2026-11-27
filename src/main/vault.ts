@@ -54,6 +54,11 @@ class VaultError extends Error {
   }
 }
 
+/**
+ * One instance = one store for the whole app (every window): the file, its in-memory copy, the questions on
+ * screen and this session's refusals. Which folder asks is per call (`scope`, the calling window's); without
+ * one the constructor's scope applies.
+ */
 export class VaultService {
   private data: VaultFile | null = null;
   private loading: Promise<VaultFile> | null = null;
@@ -74,21 +79,21 @@ export class VaultService {
    * once (the answer "allow" is kept in the vault file, "deny" for this session). Folder-scoped keys never
    * get here (check() already tied them to the open folder).
    */
-  private async allowShared(key: string, action: 'read' | 'change'): Promise<void> {
-    if (!this.scope || vaultKeyFolder(key) !== null) return;
+  private async allowShared(key: string, action: 'read' | 'change', sc: VaultScope | undefined): Promise<void> {
+    if (!sc || vaultKeyFolder(key) !== null) return;
     const d = await this.load();
     if (!Object.hasOwn(d.entries, key)) return; // nothing saved under it: nothing to protect (set() records the owner)
-    const root = this.scope.root();
+    const root = sc.root();
     const refuse = new VaultError('EACCES', 'This folder is not allowed to use that secret');
     if (root === null) throw refuse;
-    const me = vaultRootScope(root, this.scope.os ?? process.platform);
+    const me = vaultRootScope(root, sc.os ?? process.platform);
     const owner = d.owners && Object.hasOwn(d.owners, key) ? d.owners[key] : null;
     if (owner === me || (d.grants && Object.hasOwn(d.grants, me) && d.grants[me].includes(key))) return;
     const id = `${me}\u0000${key}`;
-    if (this.denied.has(id) || !this.scope.confirmSharedKey) throw refuse;
+    if (this.denied.has(id) || !sc.confirmSharedKey) throw refuse;
     let q = this.asking.get(id);
     if (!q) {
-      q = this.scope.confirmSharedKey({ key, root, owner, action }).then((ok) => ok === true, () => false).finally(() => this.asking.delete(id));
+      q = sc.confirmSharedKey({ key, root, owner, action }).then((ok) => ok === true, () => false).finally(() => this.asking.delete(id));
       this.asking.set(id, q);
     }
     if (!(await q)) {
@@ -103,14 +108,14 @@ export class VaultService {
     }
   }
 
-  private inScope(key: string): boolean {
-    return !this.scope || vaultKeyInScope(key, this.scope.root(), this.scope.os ?? process.platform);
+  private inScope(key: string, sc: VaultScope | undefined): boolean {
+    return !sc || vaultKeyInScope(key, sc.root(), sc.os ?? process.platform);
   }
 
   /** A well-formed key of another folder: refused the same way for get / set / remove. */
-  private check(key: unknown): asserts key is string {
+  private check(key: unknown, sc: VaultScope | undefined): asserts key is string {
     if (!isVaultKey(key)) throw new VaultError('EINVAL', 'Invalid key');
-    if (!this.inScope(key)) throw new VaultError('EACCES', 'This secret belongs to another folder');
+    if (!this.inScope(key, sc)) throw new VaultError('EACCES', 'This secret belongs to another folder');
   }
 
   status(): VaultStatus {
@@ -148,19 +153,22 @@ export class VaultService {
     if (!this.status().available) throw new VaultError('ENOTSUP', 'Secure storage is not available on this system');
   }
 
-  async has(keys: unknown): Promise<string[]> {
+  /** `scope` (every key method): the calling window's folder; omitted = the constructor's. */
+  async has(keys: unknown, scope?: VaultScope): Promise<string[]> {
+    const sc = scope ?? this.scope;
     if (!Array.isArray(keys) || keys.length > VAULT_LIMITS.maxBatch) throw new VaultError('EINVAL', 'Invalid key list');
     const d = await this.load();
     // Keys of other folders read as "not set": no way to probe what exists elsewhere.
-    return keys.filter((k): k is string => isVaultKey(k) && this.inScope(k) && Object.hasOwn(d.entries, k));
+    return keys.filter((k): k is string => isVaultKey(k) && this.inScope(k, sc) && Object.hasOwn(d.entries, k));
   }
 
-  async get(key: unknown): Promise<string | null> {
-    this.check(key);
+  async get(key: unknown, scope?: VaultScope): Promise<string | null> {
+    const sc = scope ?? this.scope;
+    this.check(key, sc);
     this.ensure();
     const d = await this.load();
     if (!Object.hasOwn(d.entries, key)) return null;
-    await this.allowShared(key, 'read');
+    await this.allowShared(key, 'read', sc);
     const c = d.entries[key];
     try {
       return this.crypto.decrypt(Buffer.from(c, 'base64'));
@@ -170,28 +178,30 @@ export class VaultService {
     }
   }
 
-  async set(key: unknown, value: unknown): Promise<void> {
+  async set(key: unknown, value: unknown, scope?: VaultScope): Promise<void> {
+    const sc = scope ?? this.scope;
     if (!isVaultKey(key) || !isVaultValue(value)) throw new VaultError('EINVAL', 'Invalid key or value');
-    this.check(key);
+    this.check(key, sc);
     this.ensure();
     const d = await this.load();
     const isNew = !Object.hasOwn(d.entries, key);
     if (isNew && Object.keys(d.entries).length >= VAULT_LIMITS.maxEntries) throw new VaultError('ENOSPC', 'The vault is full');
-    if (!isNew) await this.allowShared(key, 'change');
-    else if (this.scope && vaultKeyFolder(key) === null) {
+    if (!isNew) await this.allowShared(key, 'change', sc);
+    else if (sc && vaultKeyFolder(key) === null) {
       // A new shared key belongs to the folder that saves it.
-      const root = this.scope.root();
-      if (root !== null) (d.owners ??= {})[key] = vaultRootScope(root, this.scope.os ?? process.platform);
+      const root = sc.root();
+      if (root !== null) (d.owners ??= {})[key] = vaultRootScope(root, sc.os ?? process.platform);
     }
     d.entries[key] = this.crypto.encrypt(value).toString('base64');
     await this.save();
   }
 
-  async remove(key: unknown): Promise<void> {
-    this.check(key);
+  async remove(key: unknown, scope?: VaultScope): Promise<void> {
+    const sc = scope ?? this.scope;
+    this.check(key, sc);
     const d = await this.load();
     if (!Object.hasOwn(d.entries, key)) return;
-    await this.allowShared(key, 'change');
+    await this.allowShared(key, 'change', sc);
     delete d.entries[key];
     if (d.owners && Object.hasOwn(d.owners, key)) delete d.owners[key];
     for (const list of Object.values(d.grants ?? {})) if (list.includes(key)) list.splice(list.indexOf(key), 1);
@@ -231,12 +241,27 @@ const reply = async <T>(fn: () => Promise<T> | T): Promise<VaultReply<T>> => {
   }
 };
 
-export function registerVaultIpc(ipc: IpcLike, svc: VaultService, o: { isTrusted: (e: unknown) => boolean }): void {
+/**
+ * vault:* handlers. `scopeOf` (several windows): the calling window's folder for every key call; null = not a
+ * window of ours → EACCES. A window without a folder gives a scope whose root() is null (shared keys only).
+ * Without `scopeOf` the service's own scope applies (one window).
+ */
+export function registerVaultIpc(ipc: IpcLike, svc: VaultService, o: { isTrusted: (e: unknown) => boolean; scopeOf?: (e: unknown) => VaultScope | null }): void {
   const denied: VaultReply<never> = { ok: false, error: { code: 'EACCES', message: 'Untrusted sender' } };
   const guard = (fn: (...a: unknown[]) => Promise<unknown> | unknown) => (e: unknown, ...a: unknown[]) => (o.isTrusted(e) ? reply(() => fn(...a)) : denied);
+  /** Key calls: with the caller's scope (resolved per call: the window may have opened another folder since). */
+  const scoped = (fn: (sc: VaultScope | undefined, ...a: unknown[]) => Promise<unknown>) => (e: unknown, ...a: unknown[]) =>
+    o.isTrusted(e)
+      ? reply(() => {
+          if (!o.scopeOf) return fn(undefined, ...a);
+          const sc = o.scopeOf(e);
+          if (!sc) throw new VaultError('EACCES', 'Unknown window');
+          return fn(sc, ...a);
+        })
+      : denied;
   ipc.handle(CH.status, guard(() => svc.status()));
-  ipc.handle(CH.has, guard((keys) => svc.has(keys)));
-  ipc.handle(CH.get, guard((key) => svc.get(key)));
-  ipc.handle(CH.set, guard((key, value) => svc.set(key, value)));
-  ipc.handle(CH.remove, guard((key) => svc.remove(key)));
+  ipc.handle(CH.has, scoped((sc, keys) => svc.has(keys, sc)));
+  ipc.handle(CH.get, scoped((sc, key) => svc.get(key, sc)));
+  ipc.handle(CH.set, scoped((sc, key, value) => svc.set(key, value, sc)));
+  ipc.handle(CH.remove, scoped((sc, key) => svc.remove(key, sc)));
 }
