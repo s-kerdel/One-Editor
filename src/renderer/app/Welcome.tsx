@@ -24,6 +24,10 @@ const SHORTCUTS: Array<[string, string]> = [
 ];
 const shortcuts = () => (app.backend.newWindow ? SHORTCUTS : SHORTCUTS.filter(([k]) => k !== 'Mod-Shift-n'));
 
+/** Shift+click: in a new window (desktop with several windows); plain: this window. */
+const SHIFT_HINT = 'Shift+click: open in a new window';
+const openFolderButton = (e: MouseEvent) => (e.shiftKey && app.backend.openFolderWindow ? void import('./shell-commands').then((m) => m.openFolderInteractive({ newWindow: true })) : void runCommand('workspace.open'));
+
 function folderName(p: string) {
   const parts = p.split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] || p;
@@ -84,7 +88,7 @@ export function Welcome() {
                   <Icon name="search" size={16} /> Quick open
                 </button>
               )}
-              <button class="se-btn" onClick={() => void runCommand('workspace.open')}>
+              <button class="se-btn" title={app.backend.openFolderWindow ? SHIFT_HINT : undefined} onClick={openFolderButton}>
                 <Icon name="folderOpen" size={16} /> Open another folder
               </button>
             </>
@@ -104,7 +108,11 @@ export function Welcome() {
               <ul class="se-recent">
                 {recent.map((r) => (
                   <li>
-                    <button class="se-recent-item" title={r} onClick={() => void openWorkspace(r).catch((err) => app.toast(String(err.message || err), 'error'))}>
+                    <button
+                      class="se-recent-item"
+                      title={app.backend.openFolderWindow ? `${r}\n${SHIFT_HINT}` : r}
+                      onClick={(e) => void openWorkspace(r, { newWindow: e.shiftKey }).catch((err) => app.toast(String(err.message || err), 'error'))}
+                    >
                       <Icon name="folder" size={15} />
                       <span class="se-recent-name">{folderName(r)}</span>
                       <span class="se-recent-path">{shortPath(r)}</span>

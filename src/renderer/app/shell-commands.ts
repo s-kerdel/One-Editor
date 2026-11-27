@@ -16,14 +16,15 @@ const hasActive = () => !!app.activePath.value;
 /** An open file of the folder (not an outside one: no rename / delete / tree there). */
 const hasActiveInFolder = () => !!app.activePath.value && !isExtPath(app.activePath.value);
 
-export async function openFolderInteractive() {
+/** `newWindow`: Shift on "Open folder…" (the folder switcher, the start screen). */
+export async function openFolderInteractive(o: { newWindow?: boolean } = {}) {
   let p = await app.backend.pickFolder().catch(() => null);
   if (!p && app.backend.kind === 'web') {
     p = await ui.promptDialog('Open folder', ui.recentFolders.value[0] ?? '', app.backend.os === 'win32' ? 'C:\\Users\\me\\notes' : '/home/me/notes', 'Open');
   }
   if (!p) return;
   try {
-    await openWorkspace(p);
+    await openWorkspace(p, o);
   } catch (err) {
     app.toast(`Cannot open folder: ${(err as Error).message}`, 'error');
   }
@@ -56,7 +57,7 @@ export function registerShellCommands() {
     { id: 'file.copyPath', title: 'File: Copy path', when: hasActive, run: () => void copyText(absolutePath(app.activePath.value!)) },
     { id: 'file.copyRelativePath', title: 'File: Copy relative path', when: hasActive, run: () => void copyText(app.activePath.value!, 'Relative path') },
     { id: 'file.openFile', title: 'File: Open file…', keywords: ['open', 'outside'], when: () => app.backend.kind === 'electron', run: () => void openFileInteractive() },
-    { id: 'workspace.open', title: 'Open folder…', keywords: ['workspace', 'project'], run: openFolderInteractive },
+    { id: 'workspace.open', title: 'Open folder…', keywords: ['workspace', 'project'], run: () => openFolderInteractive() },
     { id: 'files.collapseAll', title: 'Files: Collapse all folders', run: collapseAll },
     {
       id: 'files.toggleGitColors',

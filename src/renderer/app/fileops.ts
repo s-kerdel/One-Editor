@@ -139,4 +139,4 @@ export function revealInTree(path: string) {
 }
 
 /** Opens absolute paths handed to the app (CLI args, second instance, drag & drop). Implemented in the lazy Popups chunk. */
-export const openAbsolutePaths = (paths: string[]): Promise<void> => popups().then((m) => m.openAbsolutePathsNow(paths));
+export const openAbsolutePaths = (paths: string[], o?: { newWindow?: boolean }): Promise<void> => popups().then((m) => m.openAbsolutePathsNow(paths, o));

@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // Multiple windows, renderer side: file URLs carry the window's key, every in-app folder open asks main
-// first (only 'here' opens in place), and "Window: New window" (Mod-Shift-n) exists only with main's support.
+// first (plain = 'here' mode: switch this window; Shift = 'new' mode; only the answer 'here' opens in place),
+// and "Window: New window" (Mod-Shift-n) exists only with main's support.
 // No key (a main without windows support, browser mode) = everything as before.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render } from 'preact';
@@ -11,6 +12,8 @@ import { openWorkspace } from '../../../src/renderer/app/doc-save';
 import { getCommand } from '../../../src/renderer/app/commands';
 import { installShell } from '../../../src/renderer/app/shell';
 import { Welcome } from '../../../src/renderer/app/Welcome';
+import { ContextMenuHost, openWorkspaceMenu } from '../../../src/renderer/app/Popups';
+import * as ui from '../../../src/renderer/app/ui';
 import { appKeyWinsInTerminal } from '../../../src/renderer/terminal/keys';
 import type { BackendApi } from '../../../src/shared/api';
 
@@ -44,7 +47,9 @@ describe('the preload bridge', () => {
     await api.newWindow!();
     expect(b.newWindow).toHaveBeenCalledOnce();
     expect(await api.openFolderWindow!('/home/u/c')).toBe('new');
-    expect(b.openFolderWindow).toHaveBeenCalledWith('/home/u/c');
+    expect(b.openFolderWindow).toHaveBeenCalledWith('/home/u/c', undefined); // the preload makes it 'here'
+    await api.openFolderWindow!('/home/u/c', 'new');
+    expect(b.openFolderWindow).toHaveBeenLastCalledWith('/home/u/c', 'new');
   });
 
   it('without a key (a main without windows support): none of them, so the app stays one window', async () => {
@@ -69,12 +74,19 @@ describe('openWorkspace asks main where the folder opens', () => {
     };
   });
 
-  it("'here' (an empty window): opens in place", async () => {
+  it("plain: asks in 'here' mode; the answer 'here' switches this window in place", async () => {
     setBackend({ kind: 'electron', ...backend, openFolderWindow: vi.fn(async () => 'here' as const) });
     await openWorkspace('/home/u/b');
-    expect(app.backend.openFolderWindow).toHaveBeenCalledWith('/home/u/b');
+    expect(app.backend.openFolderWindow).toHaveBeenCalledWith('/home/u/b', 'here');
     expect(backend.openWorkspace).toHaveBeenCalledWith('/home/u/b');
     expect(app.workspace.value).toEqual(WS);
+  });
+
+  it("Shift (newWindow): asks in 'new' mode", async () => {
+    setBackend({ kind: 'electron', ...backend, openFolderWindow: vi.fn(async () => 'new' as const) });
+    await openWorkspace('/home/u/b', { newWindow: true });
+    expect(app.backend.openFolderWindow).toHaveBeenCalledWith('/home/u/b', 'new');
+    expect(backend.openWorkspace).not.toHaveBeenCalled();
   });
 
   it.each(['focused', 'new'] as const)("'%s': another window shows it, this one keeps its folder", async (answer) => {
@@ -95,6 +107,55 @@ describe('openWorkspace asks main where the folder opens', () => {
     await openWorkspace('/home/u/b');
     expect(backend.openWorkspace).toHaveBeenCalledWith('/home/u/b');
     expect(app.workspace.value).toEqual(WS);
+  });
+});
+
+describe('folder switcher: plain switches this window, Shift (click or Enter) opens a new one', () => {
+  it('the recent entries pass Shift on to main and say so in their tooltip', async () => {
+    const openFolderWindow = vi.fn(async () => 'focused' as const); // nothing else runs here
+    setBackend({ kind: 'electron', os: 'linux', openFolderWindow });
+    app.workspace.value = { root: '/home/u/a', name: 'a' } as any;
+    ui.recentFolders.value = ['/home/u/a', '/home/u/b'];
+    const anchor = document.body.appendChild(document.createElement('button'));
+    const host = document.body.appendChild(document.createElement('div'));
+    act(() => render(<ContextMenuHost />, host));
+    const entry = () => [...host.querySelectorAll<HTMLButtonElement>('.se-menu-item')].find((b) => b.querySelector('.se-menu-label')?.textContent === 'b')!;
+    const show = () => act(() => openWorkspaceMenu(anchor));
+
+    show();
+    expect(entry().title).toBe('Shift+click: open in a new window');
+    act(() => void entry().dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true })));
+    await vi.waitFor(() => expect(openFolderWindow).toHaveBeenLastCalledWith('/home/u/b', 'new'));
+
+    show();
+    act(() => void entry().dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await vi.waitFor(() => expect(openFolderWindow).toHaveBeenLastCalledWith('/home/u/b', 'here'));
+
+    // Keyboard: ↓ ↓ (Open folder…, then the entry) and Shift+Enter.
+    show();
+    const menu = host.querySelector<HTMLElement>('.se-menu')!;
+    for (const key of ['ArrowDown', 'ArrowDown']) act(() => void menu.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })));
+    act(() => void menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true })));
+    await vi.waitFor(() => expect(openFolderWindow).toHaveBeenCalledTimes(3));
+    expect(openFolderWindow).toHaveBeenLastCalledWith('/home/u/b', 'new');
+    act(() => render(null, host));
+    host.remove();
+    anchor.remove();
+  });
+
+  it('browser mode (no windows): no tooltip, a plain in-place switch', () => {
+    setBackend({ kind: 'web', os: 'linux' });
+    app.workspace.value = { root: '/home/u/a', name: 'a' } as any;
+    ui.recentFolders.value = ['/home/u/b'];
+    const anchor = document.body.appendChild(document.createElement('button'));
+    const host = document.body.appendChild(document.createElement('div'));
+    act(() => render(<ContextMenuHost />, host));
+    act(() => openWorkspaceMenu(anchor));
+    const entry = [...host.querySelectorAll<HTMLButtonElement>('.se-menu-item')].find((b) => b.querySelector('.se-menu-label')?.textContent === 'b')!;
+    expect(entry.title).toBe('');
+    act(() => render(null, host));
+    host.remove();
+    anchor.remove();
   });
 });
 

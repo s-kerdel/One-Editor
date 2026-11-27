@@ -303,9 +303,10 @@ export interface BackendApi {
   readonly wsKey?: string;
   /** Multiple windows (desktop): open a new window with the start screen. */
   newWindow?(): Promise<void>;
-  /** Multiple windows (desktop): main decides where a folder opens — 'here' (this window is empty: open it in
-   *  place), 'focused' (another window has it: brought to front) or 'new' (opened in a new window). */
-  openFolderWindow?(abs: string): Promise<'here' | 'focused' | 'new'>;
+  /** Multiple windows (desktop): main decides where a folder opens. `mode` 'here' (default: switch this window) or
+   *  'new' (Shift: a new window). Answer: 'here' (open it in place now), 'focused' (another window has it: brought to
+   *  front, nothing else changes) or 'new' (opened in a new window; this one keeps its folder). */
+  openFolderWindow?(abs: string, mode?: 'here' | 'new'): Promise<'here' | 'focused' | 'new'>;
   /** How Chromium uses the GPU in this window ("Developer: Show GPU status"); null if unavailable. */
   gpuStatus?(): Promise<GpuStatus | null>;
   /** Git status + source control: one entry point, every operation validated by the backend (shared/git.ts). */

@@ -190,7 +190,10 @@ export interface MenuItem {
   danger?: boolean;
   disabled?: boolean;
   separator?: boolean;
-  run?: () => unknown;
+  /** Tooltip (e.g. what Shift does). */
+  title?: string;
+  /** `shift`: the click / Enter that chose it held Shift (absent when run from code). */
+  run?: (o?: { shift?: boolean }) => unknown;
 }
 
 export const contextMenu = signal<{ x: number; y: number; items: MenuItem[] } | null>(null);

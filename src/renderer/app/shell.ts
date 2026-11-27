@@ -83,7 +83,7 @@ function installDrop() {
       app.toast(app.backend.kind === 'web' ? 'Drag & drop opening works in the desktop app. In the browser use “Open folder”.' : 'Nothing to open', 'info', 5000);
       return;
     }
-    void openAbsolutePaths(paths);
+    void openAbsolutePaths(paths, { newWindow: e.shiftKey }); // a folder dropped with Shift: a new window
   });
 }
 

@@ -212,7 +212,7 @@ export function noteEdited(path: string, content: string) {
 // ---- external changes -----------------------------------------------------------------------
 // ---- workspace ------------------------------------------------------------------------------
 /** Opening another folder (a user action, never the launch): the code is in ./doc-save. */
-export const openWorkspace = (absPath: string): Promise<void> => actions.load().then((m) => m.openWorkspace(absPath));
+export const openWorkspace = (absPath: string, o?: { newWindow?: boolean }): Promise<void> => actions.load().then((m) => m.openWorkspace(absPath, o));
 /** doc-save's openWorkspace: the next restoreSession() restores the new folder's session. */
 export const markSessionUnrestored = () => void (sessionRestored = false);
 

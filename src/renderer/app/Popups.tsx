@@ -232,8 +232,9 @@ function parentOfAbs(abs: string) {
   return p || '/';
 }
 
-/** Opens absolute paths handed to the app (CLI args, second instance, drag & drop). */
-export async function openAbsolutePathsNow(paths: string[]) {
+/** Opens absolute paths handed to the app (CLI args, second instance, drag & drop). `newWindow`: a folder among them
+ *  opens in a new window (dropped with Shift). */
+export async function openAbsolutePathsNow(paths: string[], o: { newWindow?: boolean } = {}) {
   for (const abs of paths) {
     let r = await app.backend.resolvePath(abs).catch(() => null);
     if (!r) {
@@ -241,7 +242,7 @@ export async function openAbsolutePathsNow(paths: string[]) {
       continue;
     }
     if (r.kind === 'dir') {
-      if (r.rel !== '') await openWorkspace(r.abs);
+      if (r.rel !== '') await openWorkspace(r.abs, o);
       continue;
     }
     if (r.rel === null) {
@@ -338,10 +339,12 @@ function pdfItems(path: string): ui.MenuItem[] {
   return [{ separator: true }, { label: 'Export to PDF…', icon: 'exportPdf', run }];
 }
 
-/** Switch the workspace to another folder on disk (absolute path). */
-function openAsProject(abs: string) {
-  return openWorkspace(abs).catch((err) => app.toast(String(err?.message || err), 'error'));
+/** Switch the workspace to another folder on disk (absolute path); Shift: in a new window. */
+function openAsProject(abs: string, o?: { shift?: boolean }) {
+  return openWorkspace(abs, { newWindow: o?.shift }).catch((err) => app.toast(String(err?.message || err), 'error'));
 }
+/** Menu tooltip where Shift opens a folder in a new window (desktop with several windows only). */
+const shiftHint = () => (app.backend.openFolderWindow ? 'Shift+click: open in a new window' : undefined);
 
 /** Parent of the workspace root, or null at a filesystem / drive root (C:\, /, \\server\share). */
 function parentOfRoot(): string | null {
@@ -400,7 +403,7 @@ export function rowMenu(node: TreeNode | null, sel: string[] = []): ui.MenuItem[
   const folder = node ? (isDir ? node.path : dirname(node.path)) : '';
   const items: ui.MenuItem[] = [];
   if (node && !isDir) items.push({ label: 'Open', icon: 'file', run: () => app.openFile(node.path) });
-  if (node && isDir) items.push({ label: 'Open as project', icon: 'folderOpen', run: () => openAsProject(absolutePath(node.path)) });
+  if (node && isDir) items.push({ label: 'Open as project', icon: 'folderOpen', title: shiftHint(), run: (o) => openAsProject(absolutePath(node.path), o) });
   if (node) items.push(bookmarkItem([node.path]), { separator: true });
   items.push({ label: 'New note', icon: 'filePlus', keys: 'Ctrl+N', run: () => newNote(folder) }, { label: 'New file …', icon: 'filePlus', run: () => openNewFilePicker(folder) }, { label: 'New folder', icon: 'folderPlus', run: () => startCreate('dir', folder) });
   if (node) {
@@ -419,7 +422,7 @@ export function rowMenu(node: TreeNode | null, sel: string[] = []): ui.MenuItem[
   } else {
     items.push({ separator: true }, { label: 'Collapse all', icon: 'collapse', run: collapseAll }, { label: 'Refresh', icon: 'refresh', run: () => refreshTree() });
     const up = parentOfRoot();
-    if (up) items.push({ separator: true }, { label: 'Open parent folder as project', icon: 'arrowUp', run: () => openAsProject(up) });
+    if (up) items.push({ separator: true }, { label: 'Open parent folder as project', icon: 'arrowUp', title: shiftHint(), run: (o) => openAsProject(up, o) });
   }
   return items;
 }
@@ -462,13 +465,15 @@ export function openWorkspaceMenu(anchor: HTMLElement, placement: 'below' | 'rig
   const items: ui.MenuItem[] = [
     ...extra,
     ...(extra.length ? [{ separator: true } as ui.MenuItem] : []),
-    { label: 'Open folder…', icon: 'folderOpen', run: () => runCommand('workspace.open') },
+    // Plain: this window switches; Shift+click / Shift+Enter: a new window.
+    { label: 'Open folder…', icon: 'folderOpen', title: shiftHint(), run: (o) => (o?.shift ? import('./shell-commands').then((m) => m.openFolderInteractive({ newWindow: true })) : runCommand('workspace.open')) },
     ...(recent.length ? [{ separator: true } as ui.MenuItem] : []),
-    ...recent.map((r) => ({
+    ...recent.map((r): ui.MenuItem => ({
       label: r.split(/[\\/]/).filter(Boolean).pop() || r,
       icon: 'history',
       keys: parentHint(r),
-      run: () => openWorkspace(r).catch((err) => app.toast(String(err?.message || err), 'error')),
+      title: shiftHint(),
+      run: (o) => openWorkspace(r, { newWindow: o?.shift }).catch((err) => app.toast(String(err?.message || err), 'error')),
     })),
   ];
   const r = anchor.getBoundingClientRect();
@@ -575,10 +580,10 @@ export function ContextMenuHost() {
   }, [m]);
   if (!m) return null;
   const actionable = m.items.map((it, i) => (!it.separator && !it.disabled ? i : -1)).filter((i) => i >= 0);
-  const run = (i: number) => {
+  const run = (i: number, shift = false) => {
     const it = m.items[i];
     ui.contextMenu.value = null;
-    if (it?.run) void it.run();
+    if (it?.run) void it.run({ shift });
   };
   return (
     <div
@@ -593,7 +598,7 @@ export function ContextMenuHost() {
         if (e.key === 'Escape') ui.contextMenu.value = null;
         else if (e.key === 'ArrowDown') setSel(actionable[(at + 1) % actionable.length]);
         else if (e.key === 'ArrowUp') setSel(actionable[(at - 1 + actionable.length) % actionable.length]);
-        else if (e.key === 'Enter' && sel >= 0) run(sel);
+        else if (e.key === 'Enter' && sel >= 0) run(sel, e.shiftKey);
         else return;
         e.preventDefault();
       }}
@@ -607,8 +612,9 @@ export function ContextMenuHost() {
             class={`se-menu-item${it.danger ? ' danger' : ''}${i === sel ? ' selected' : ''}`}
             role="menuitem"
             disabled={it.disabled}
+            title={it.title}
             onMouseEnter={() => setSel(i)}
-            onClick={() => run(i)}
+            onClick={(e) => run(i, e.shiftKey)}
           >
             <span class="se-menu-icon">{it.icon && <Icon name={it.icon} size={14} />}</span>
             <span class="se-menu-label">{it.label}</span>

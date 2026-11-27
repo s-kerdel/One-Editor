@@ -28,7 +28,7 @@ type Bridge = {
   gpuStatus?(): Promise<unknown>;
   wsKey?: string;
   newWindow?(): Promise<unknown>;
-  openFolderWindow?(abs: string): Promise<unknown>;
+  openFolderWindow?(abs: string, mode?: 'here' | 'new'): Promise<unknown>;
 };
 
 /** Shared with ./web. */
@@ -71,7 +71,7 @@ function electronBackend(bridge: Bridge): BackendApi {
         ? {
             wsKey: bridge.wsKey,
             newWindow: bridge.newWindow && (async () => void (await bridge.newWindow!())),
-            openFolderWindow: bridge.openFolderWindow && ((abs: string) => bridge.openFolderWindow!(abs) as Promise<'here' | 'focused' | 'new'>),
+            openFolderWindow: bridge.openFolderWindow && ((abs: string, mode?: 'here' | 'new') => bridge.openFolderWindow!(abs, mode) as Promise<'here' | 'focused' | 'new'>),
           }
         : {}),
     },

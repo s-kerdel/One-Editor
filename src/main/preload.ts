@@ -55,8 +55,9 @@ contextBridge.exposeInMainWorld('secEditBridge', {
   relaunch: () => ipcRenderer.invoke('app:relaunch'),
   gpuStatus: () => ipcRenderer.invoke('app:gpuStatus'),
   // Multiple windows: main opens one with the start screen / decides where a folder opens ('here' | 'focused' | 'new').
+  // mode: 'here' (switch this window) or 'new' (Shift: a new window); main validates it again.
   newWindow: () => ipcRenderer.invoke('app:newWindow'),
-  openFolderWindow: (abs: string) => ipcRenderer.invoke('app:openFolderWindow', String(abs)),
+  openFolderWindow: (abs: string, mode?: string) => ipcRenderer.invoke('app:openFolderWindow', String(abs), mode === 'new' ? 'new' : 'here'),
   // Integrated terminal (term:* channels, validated in main/terminal.ts).
   terminal: terminalBridge(ipcRenderer),
   // Secrets vault for {{variables}} (vault:* channels, validated in main/vault.ts).

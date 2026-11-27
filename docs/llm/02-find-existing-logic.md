@@ -142,7 +142,7 @@ No hit after these = **no precedent. STOP AND ASK.**
 | I need to... | Reuse | File |
 |---|---|---|
 | open a new window from the UI | `app.backend.newWindow?.()` (command `window.new`) | `src/renderer/app/shell.ts`, `BackendApi` in `src/shared/api.ts` |
-| open a folder from the UI (main picks the window) | `openWorkspace(abs)` (asks `openFolderWindow` first) | `src/renderer/app/documents.ts` (impl: `doc-save.ts`) |
+| open a folder from the UI (main picks the window) | `openWorkspace(abs, { newWindow? })` (asks `openFolderWindow` first; Shift = `newWindow`) | `src/renderer/app/documents.ts` (impl: `doc-save.ts`) |
 | decide which window a launched path goes to | `planLaunch()` | `src/main/windows.ts` |
 | run window routing one step at a time | `serial()`, `route()`, `routeLaunch()` | `src/main/main.ts` |
 | find a window by sender / folder / focus | `trustedCtx(e)`, `registry.byRoot()`, `registry.lastFocused()`, `windowWith()` | `src/main/main.ts`, `WindowRegistry` in `src/main/windows.ts` |

@@ -91,7 +91,7 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 - **One main process, many windows** (`src/main/main.ts`); browser mode stays one window. Main owns which window a path goes to.
 - **Registry** (`WindowRegistry`, `src/main/windows.ts`, no electron import): by id (= `webContents.id`), by folder (`byRoot`, `samePath` with the backend's case rule), by focus (`noteFocus` / `lastFocused`); `roots()` = open folders, each once.
-- **Same folder never twice:** the open-elsewhere check (`windowWith`) and launch routing compare with `folderMatch()` (`src/main/windows.ts`): same spelling under the window's case rule, or the same real path (each window caches its real root). An open in flight counts too: a window's `claim` (launch open, `app:openFolderWindow` → `'here'`, `rpc:openWorkspace`) and prepared-but-unregistered windows (`pending`) are checked inside the same `serial()` queue as routing.
+- **Same folder never twice:** the open-elsewhere check (`windowWith`) and launch routing compare with `folderMatch()` (`src/main/windows.ts`): same spelling under the window's case rule, or the same real path (each window caches its real root). An open in flight counts too: a window's `claim` (launch open, `app:openFolderWindow` → `'here'`, `rpc:openWorkspace`) and prepared-but-unregistered windows (`pending`) are checked inside the same `serial()` queue as routing. A `'here'` claim is `asked` (the renderer may still cancel on "Save changes?", it expires after `CLAIM_MS` = 30 s): in-app requests see it, launch routing does not (a launch then opens its own window and the late `rpc:openWorkspace` gets `EBUSY`).
 - **Per window** (`WindowCtx` in `main.ts`, built by `prepareWindow()`): `BrowserWindow`, `WindowBackend` (its folder), `OpenGate`, `ZenFullScreen`, `VaultScope`, close flow (`closing` / `closeApproved`), `indexToken`, `wsKey`, frame.
 - **Every `ipcMain` handler finds its window by sender:** `trustedCtx(e)` = `registry.get(e.sender.id)`; null = refused. Terminals are owned by `webContents.id` (`getWorkspaceRoot(owner)`, `setWorkspace(root, owner)`, `killOwner` on close).
 - **App level, one each:** `appState` (a `BackendService` without a folder: settings, recent folders), MCP, web server, vault store, update check.
@@ -111,13 +111,14 @@ grep -n "keyword" docs/llm/09-reference*.md
 
 ### IPC: `app:newWindow`, `app:openFolderWindow`
 
-- Preload `newWindow()` / `openFolderWindow(abs)` → `BackendApi.newWindow?` / `openFolderWindow?` (`src/shared/api.ts`). The renderer exposes them only when the preload has a `wsKey` (`platform/index.ts`); else one window, folders open in place.
+- Preload `newWindow()` / `openFolderWindow(abs, mode?)` → `BackendApi.newWindow?` / `openFolderWindow?` (`src/shared/api.ts`). The renderer exposes them only when the preload has a `wsKey` (`platform/index.ts`); else one window, folders open in place.
 - **`app:newWindow`** → a start-screen window next to the caller.
-- **`app:openFolderWindow(abs)`**: the caller's gate must allow it (`EACCES`), then one answer:
-  - `'focused'`: another window has that folder: brought to front;
-  - `'here'`: this window is empty or has that folder: the renderer opens it in place (`rpc:openWorkspace`);
-  - `'new'`: opened in a new window (`ENOENT` if it is not a folder).
-- `openWorkspace()` in `app/doc-save.ts` asks first; only `'here'` runs the in-place flow. Every in-app folder open goes through it.
+- **`app:openFolderWindow(abs, mode)`**: `mode` = `'here'` (plain click: switch this window; also anything not `'new'`) or `'new'` (Shift). The caller's gate must allow `abs` (`EACCES`), then one answer:
+  - `'focused'`: another window has that folder (or is opening it): brought to front. Every mode;
+  - `'new'`: mode `'new'` and this window has another folder: opened in a new window (`ENOENT` if it is not a folder);
+  - `'here'`: everything else (mode `'here'`, an empty window, this window's own folder): the renderer opens it in place (unsaved-changes check, then `rpc:openWorkspace`); main claims the folder for this window meanwhile.
+- `openWorkspace(abs, { newWindow? })` in `app/doc-save.ts` asks first; only `'here'` runs the in-place flow. Every in-app folder open goes through it.
+- **Where Shift comes from:** `ui.MenuItem.run({ shift })` (the menu host passes `shiftKey` of the click / Enter; `MenuItem.title` = the tooltip "Shift+click: open in a new window", desktop only): folder switcher ("Open folder…", recent folders), tree menu ("Open as project", "Open parent folder as project"). Start screen: recent folders and "Open another folder" (`e.shiftKey`). A drop: `openAbsolutePaths(paths, { newWindow: e.shiftKey })`. The palette has no recent-folder list and its "Open folder…" command always switches in place.
 - `rpc:openWorkspace` itself refuses a folder another window has open (`EBUSY`, that window comes to front).
 
 ### Per-window secrets (preload argv)

@@ -216,10 +216,11 @@ Both: `Ctrl+Shift+B` hides / shows the sidebar. In Shelf, the sidebar button at 
 | **New window** | `Ctrl+Shift+N` (macOS `Cmd+Shift+N`), or palette → "Window: New window". It opens with the start screen |
 | **Start One again** without a folder (Windows: **`Shift`+click** its taskbar button · Start menu · command line) | A new window with the start screen |
 | **Open a folder** from outside (Explorer, Finder, command line) | Already open in a window → **that window comes to the front**. Else → a new window |
-| **Open a folder in One** (Open folder…, a recent folder, Open as project, a drop) | Empty window (start screen) → it opens **here**. The window has a folder → a **new window**, or the window that already has it |
+| **Open a folder in One** (the folder switcher, Open folder…, a recent folder, Open as project, a drop) | **This window switches** to it (unsaved changes are saved or asked about first) |
+| Same, with **`Shift`** (`Shift`+click, `Shift`+`Enter` in a menu, a drop with `Shift` held) | A **new window**. An empty window (start screen) still opens it here. The menus' tooltip says so |
 | **Open a file** from outside | A tab in the window whose folder holds it. Else a tab in the window you used last (as a file from outside the folder). No window yet → a new window with a recent folder that holds the file, else the file's own folder |
 
-- **A folder is never open twice.** One brings its window to the front instead.
+- **A folder is never open twice.** Whatever you click (with or without `Shift`), One brings the window that has it to the front instead.
 - **Shared by all windows:** settings and theme, the **MCP server** (on / off, status) and the **web server** status. A change shows in every window at once.
 - **The web server serves the folder of the window that started it.** Every window shows the same status (Settings → Browser mode: "Serving <folder>") and can stop it. Starting it for another folder is refused until you stop it.
 - **Per window:** its folder, tabs and terminals. Secrets of `{{variables}}` follow the window's folder, as before.

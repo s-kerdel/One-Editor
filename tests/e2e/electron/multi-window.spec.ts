@@ -64,10 +64,10 @@ async function runCommand(page: Page, text: string, id: string) {
   await page.keyboard.press('Enter');
 }
 
-/** Folder switcher (shelf head) → a recent folder by name. */
-async function openRecent(page: Page, name: string) {
+/** Folder switcher (shelf head) → a recent folder by name; `shift`: Shift+click (a new window). */
+async function openRecent(page: Page, name: string, o: { shift?: boolean } = {}) {
   await page.locator('[aria-label="Switch folder"]').click();
-  await page.locator('.se-menu-item', { hasText: name }).click();
+  await page.locator('.se-menu-item', { hasText: name }).click({ modifiers: o.shift ? ['Shift'] : [] });
 }
 
 test('second launches: a folder gets its window (new, or the one that has it), a file its folder’s window, no path a start screen', async ({ el }) => {
@@ -95,11 +95,12 @@ test('second launches: a folder gets its window (new, or the one that has it), a
   await expect(empty.locator('[data-testid="welcome"]')).toBeVisible();
 });
 
-test('Ctrl+Shift+N opens a start screen that lists it; a folder opens here when empty, else in a new window or the window that has it', async ({ el }) => {
+test('Ctrl+Shift+N opens a start screen that lists it; a folder switches this window, Shift+click opens a new one; a folder open elsewhere only brings that window up', async ({ el }) => {
   const b = await folder(el.tmp, 'beta');
   const c = await folder(el.tmp, 'gamma');
+  const d = await folder(el.tmp, 'delta');
   await fsp.mkdir(el.userData, { recursive: true });
-  await fsp.writeFile(path.join(el.userData, 'recent.json'), JSON.stringify([b, c]));
+  await fsp.writeFile(path.join(el.userData, 'recent.json'), JSON.stringify([b, c, d]));
   const { app, page } = await el.launch([el.ws]);
 
   const opened = app.waitForEvent('window');
@@ -114,23 +115,35 @@ test('Ctrl+Shift+N opens a start screen that lists it; a folder opens here when 
   expect(await roots(app)).toEqual(['', el.ws].sort());
 
   // Empty window: a recent folder opens in place.
-  await fresh.locator(`.se-recent-item[title="${c}"]`).click();
+  await fresh.locator('.se-recent-item', { hasText: 'gamma' }).click();
   await expect.poll(() => rootOf(fresh)).toBe(c);
   expect(await windowCount(app)).toBe(2);
 
-  // A window with a folder: another folder gets a new window; this one keeps its folder.
-  await openRecent(fresh, 'beta');
+  // A window with a folder, Shift+click: a new window; this one keeps its folder.
+  await expect(async () => {
+    await fresh.locator('[aria-label="Switch folder"]').click();
+    expect(await fresh.locator('.se-menu-item', { hasText: 'beta' }).getAttribute('title')).toBe('Shift+click: open in a new window');
+  }).toPass();
+  await fresh.keyboard.press('Escape');
+  await openRecent(fresh, 'beta', { shift: true });
   await expect.poll(() => roots(app)).toEqual([el.ws, b, c].sort());
   expect(await rootOf(fresh)).toBe(c);
 
-  // A folder another window has open: that window is brought up, nothing new opens, nothing moves.
+  // Plain click: this window switches to the folder (no new window).
+  await openRecent(fresh, 'delta');
+  await expect.poll(() => rootOf(fresh)).toBe(d);
+  expect(await windowCount(app)).toBe(3);
+  expect(await roots(app)).toEqual([el.ws, b, d].sort());
+
+  // A folder another window has open: that window is brought up, plain or Shift; nothing new opens, nothing moves.
   const pb = await pageOf(app, b);
   await openRecent(pb, 'workspace');
+  await openRecent(pb, 'workspace', { shift: true });
   // …and the page cannot open it in place either.
   const direct = await pb.evaluate((p) => (window as any).__secEdit.backend.openWorkspace(p).then(() => 'opened', (e: { code?: string }) => e.code), el.ws);
   expect(direct).toBe('EBUSY');
   expect(await windowCount(app)).toBe(3);
-  expect(await roots(app)).toEqual([el.ws, b, c].sort());
+  expect(await roots(app)).toEqual([el.ws, b, d].sort());
 });
 
 test('a folder being opened, or another spelling of an open one, belongs to that window: never two windows for it', async ({ el }) => {
@@ -158,23 +171,24 @@ test('a folder being opened, or another spelling of an open one, belongs to that
   expect(await open(w3, x)).toBe('EBUSY');
   expect(await open(w2, x)).toBe(x);
 
-  // An empty window about to open Y: a launch of Y goes to it, not to a new window.
+  // A window told 'here' for Y but not opening it yet (it may still cancel on "Save changes?"): a launch of Y opens its
+  // own window, and that window's late open then finds Y taken. Never two windows for Y.
   expect(await ask(w3, y)).toBe('here');
   await secondLaunch(el.userData, [y]);
-  expect(await open(w3, y)).toBe(y); // decided in turn: after the launch was routed
-  expect(await windowCount(app)).toBe(3);
+  expect(await open(w3, y)).toBe('EBUSY'); // decided in turn: after the launch was routed
+  expect(await windowCount(app)).toBe(4);
+  const wy = await pageOf(app, y);
 
   // A link to the folder W1 has open is that folder (the gate judges real paths, so does routing).
-  const w4 = await emptyWindow();
   await app.evaluate((_e, p) => (globalThis as any).__secEditVouch(p), link);
-  expect(await ask(w4, link)).toBe('focused');
-  expect(await open(w4, link)).toBe('EBUSY');
+  expect(await ask(w3, link)).toBe('focused');
+  expect(await open(w3, link)).toBe('EBUSY');
   await secondLaunch(el.userData, [link]);
-  expect(await ask(w4, link)).toBe('focused'); // in turn: after the launch was routed
+  expect(await ask(w3, link)).toBe('focused'); // in turn: after the launch was routed
   expect(await windowCount(app)).toBe(4);
   // What each window's backend has open (the raw RPC above leaves the renderer's own state alone).
   const opened = async (p: Page) => (await p.evaluate(() => (window as any).__secEdit.backend.getWorkspace()))?.root ?? '';
-  expect([await opened(w1), await opened(w2), await opened(w3), await opened(w4)]).toEqual([el.ws, x, y, '']);
+  expect([await opened(w1), await opened(w2), await opened(w3), await opened(wy)]).toEqual([el.ws, x, '', y]);
 });
 
 test('shared across windows: web server and MCP status, settings; each window serves its own folder; closing one stops its server', async ({ el }) => {
@@ -183,7 +197,7 @@ test('shared across windows: web server and MCP status, settings; each window se
   await fsp.mkdir(el.userData, { recursive: true });
   await fsp.writeFile(path.join(el.userData, 'recent.json'), JSON.stringify([b]));
   const { app, page: pa } = await el.launch([el.ws], { env: { SEC_EDIT_TEST_MCP_CONFIRM: 'allow' } });
-  await openRecent(pa, 'beta');
+  await openRecent(pa, 'beta', { shift: true });
   const pb = await pageOf(app, b);
 
   // Images: each window from its own folder, through its own key.

@@ -71,7 +71,8 @@ const DEV_URL = !app.isPackaged ? process.env.VITE_DEV_SERVER_URL || undefined :
 const BG = { shelf: { dark: '#131519', light: '#f0f0ed' }, classic: { dark: '#1b1d22', light: '#ffffff' } };
 const windowBg = (s: Settings) => BG[s.sidebarStyle === 'classic' ? 'classic' : 'shelf'][nativeTheme.shouldUseDarkColors ? 'dark' : 'light'];
 const FOLDER_REFUSED = 'This folder was not chosen in the app: use “Open folder”, drop it on the window, or pick a recent one';
-/** How long an empty window's 'here' counts its folder as taken when its own open (rpc:openWorkspace) never follows. */
+/** How long a 'here' answer counts its folder as the window's when its own open (rpc:openWorkspace) never follows
+ *  (Cancel on "Save changes?"). */
 const CLAIM_MS = 30_000;
 
 // Single instance: a second launch hands its paths to the running app (feels instant).
@@ -126,9 +127,12 @@ interface WindowCtx {
   /**
    * A folder being opened here (main's launch open; the renderer's own after 'here', and while its rpc open runs):
    * it counts as this window's until the open has settled, so a second request for it elsewhere finds this window.
-   * `real` = its real path once known. Set and checked inside serial() (or before it runs: the first launch).
+   * `real` = its real path once known. `asked`: only answered 'here' so far (the renderer may still cancel on "Save
+   * changes?"): other in-app requests see it, launch routing does not (a cancelled switch never swallows a launch;
+   * the rpc open's own check still keeps the folder to one window). Set and checked inside serial() (or before it
+   * runs: the first launch).
    */
-  claim: { folder: string; real: string | null } | null;
+  claim: { folder: string; real: string | null; asked?: boolean } | null;
   /** Real path of the open folder (a link's / mapped drive's target) and the backend root it belongs to (settleRoot()). */
   realRoot: string | null;
   realFor: string | null;
@@ -226,8 +230,8 @@ function main() {
     return contexts().find((c) => c !== me && (has(c, c.claim?.folder) || has(c, c.backend.root, c.backend.foldsCase)));
   }
   /** `c` is opening `folder` (WindowCtx.claim). Returns the release: a no-op once a newer claim replaced this one. */
-  function claim(c: WindowCtx, folder: string, real: string | null): () => void {
-    const mine = { folder, real };
+  function claim(c: WindowCtx, folder: string, real: string | null, asked = false): () => void {
+    const mine = { folder, real, asked };
     c.claim = mine;
     return () => void (c.claim === mine && (c.claim = null));
   }
@@ -589,10 +593,10 @@ function main() {
       realRoot: null,
       realFor: null,
       get root() {
-        return ctx.claim?.folder ?? backend.root;
+        return ctx.claim && !ctx.claim.asked ? ctx.claim.folder : backend.root;
       },
       get foldsCase() {
-        return ctx.claim === null && backend.root !== null ? backend.foldsCase : undefined;
+        return (!ctx.claim || ctx.claim.asked) && backend.root !== null ? backend.foldsCase : undefined;
       },
       closing: 'idle',
       closeApproved: false,
@@ -685,8 +689,10 @@ function main() {
     });
   }
   // In-app "Open folder…", a recent folder, "Open as project", a folder drop: main decides where it opens.
-  // 'here' = this window is empty (or has that folder): the renderer opens it in place (rpc:openWorkspace).
-  ipcMain.handle('app:openFolderWindow', async (e, abs: unknown) => {
+  // mode 'here' (plain): switch this window; 'new' (Shift): a new window — unless this window is empty or has that
+  // folder. Always: a folder another window has open (or is opening) only brings that window up ('focused').
+  // 'here' = the renderer opens it in place (its unsaved-changes check, then rpc:openWorkspace).
+  ipcMain.handle('app:openFolderWindow', async (e, abs: unknown, mode: unknown) => {
     const ctx = trustedCtx(e);
     if (!ctx) throw new BackendFailure('EACCES', 'Untrusted sender');
     await ctx.initialOpen;
@@ -700,16 +706,16 @@ function main() {
         return 'focused';
       }
       const own = ctx.backend.root;
-      if (own === null) {
-        // Empty: the renderer opens it here next (rpc:openWorkspace). Until then it counts as this window's, so the
-        // same folder asked for in another window (or launched) comes here instead of opening twice.
-        setTimeout(claim(ctx, folder, real), CLAIM_MS).unref();
-        return 'here';
+      const same = own !== null && matcher(new Map([[folder, real]])).samePath(own, folder, ctx.backend.foldsCase);
+      if (mode === 'new' && own !== null && !same) {
+        if (!(await fsp.stat(folder).then((st) => st.isDirectory(), () => false))) throw new BackendFailure('ENOENT', `Not a folder: ${folder}`);
+        await createWindow({ folder, files: [], real }, ctx); // vouched in the new window's gate
+        return 'new';
       }
-      if (matcher(new Map([[folder, real]])).samePath(own, folder, ctx.backend.foldsCase)) return 'here';
-      if (!(await fsp.stat(folder).then((st) => st.isDirectory(), () => false))) throw new BackendFailure('ENOENT', `Not a folder: ${folder}`);
-      await createWindow({ folder, files: [], real }, ctx); // vouched in the new window's gate
-      return 'new';
+      // In place: the renderer opens it next. Until then it counts as this window's for other in-app requests, so the
+      // same folder asked for in another window comes here instead of opening twice.
+      if (!same) setTimeout(claim(ctx, folder, real, true), CLAIM_MS).unref();
+      return 'here';
     });
   });
   ipcMain.handle('app:newWindow', async (e) => {
